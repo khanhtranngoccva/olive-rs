@@ -1,0 +1,49 @@
+[workspace]
+# Olive is a fully-fallible re-port of Rust's `std`/`alloc`. Every operation that
+# can fail — above all, any heap allocation — returns a `Result` instead of
+# panicking, so OOM-resilient code can be written without sprinkling
+# `catch_unwind` everywhere.
+#
+# The stack is three crates, mirroring the standard library's own layering:
+#   - `olive_core`   : no_std. Foundational traits + errors (AllocError,
+#                      TryReserveError) and the panic machinery. No dependencies.
+#   - `olive_alloc`  : no_std + alloc. A full mirror of the `alloc` crate
+#                      (Vec, String, BTreeMap/Set, Rc/Arc, Cow, ...) rewritten
+#                      to allocate fallibly. Depends on olive_core.
+#   - `olive_std`    : std. A mirror of the `std`-only surface (hash collections,
+#                      FFI types, sync primitives). Depends on both.
+#
+# Dependencies are declared once in `[workspace.dependencies]` and inherited by
+# members with `dep.workspace = true`, so versions never drift across the stack.
+members = [
+    "crates/olive-core",
+    "crates/olive-alloc",
+    "crates/olive-std",
+    "xtask",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "HL3"
+authors = ["Olive contributors"]
+repository = "https://example.invalid/olive-rs"
+
+# Path dependencies, shared so every member references the same on-disk crates.
+[workspace.dependencies]
+olive_core = { path = "crates/olive-core" }
+olive_alloc = { path = "crates/olive-alloc" }
+olive_std = { path = "crates/olive-std" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unused_qualifications = "warn"
+
+# Clippy lints are set per-crate via #![...] attributes in each lib.rs, because
+# mixing lint groups with individual overrides in [workspace.lints.clippy] hits
+# a cargo limitation ("lint group has the same priority"). See olive_core/src/lib.rs.
+
+[profile.dev]
+opt-level = 2
