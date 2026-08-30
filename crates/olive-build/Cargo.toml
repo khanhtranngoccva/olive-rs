@@ -1,0 +1,16 @@
+[package]
+name = "olive-build"
+description = "Build-time channel detection for the Olive workspace: emits cfg flags for nightly/bootstrap and guards Miri compatibility."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# This crate is consumed exclusively as a build-dependency. It must be
+# dependency-free so it compiles instantly under any toolchain.
+[dependencies]
+
+[lints]
+workspace = true

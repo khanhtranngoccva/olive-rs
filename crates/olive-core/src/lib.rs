@@ -1,4 +1,4 @@
-//! # `olive_core`
+//! # `olive-core`
 //!
 //! The foundation of the **Olive** stack: a fully-fallible re-port of Rust's
 //! `core`. Every operation that can fail — above all, any heap allocation — is
@@ -9,19 +9,19 @@
 //! entire stable surface of `core` (glob-re-exported below) and layers on the
 //! pieces everything else in the stack builds on:
 //!
-//! * [`allocator`] — the ported allocator API: [`Layout`], [`AllocError`], the
+//! * [`alloc`] — the ported allocator API: [`Layout`], [`AllocError`], the
 //!   [`Allocator`] trait, the default [`Global`] allocator, and the free-standing
 //!   raw-pointer functions. The canonical seam every Olive collection allocates
 //!   through.
 //! * [`alloc_errors`] — [`TryReserveError`](alloc_errors::TryReserveError), the
 //!   collection-level capacity-reservation error (and a re-export of
-//!   [`AllocError`](allocator::AllocError)).
+//!   [`AllocError`](alloc::AllocError)).
 //! * [`try_traits`] — the foundational fallible traits, each in its own module:
 //!   [`TryClone`](try_traits::try_clone), [`TryToOwned`](try_traits::try_to_owned),
 //!   [`TryFromIterator`](try_traits::try_from_iterator), [`TryCollect`](try_traits::try_collect),
 //!   [`TryExtend`](try_traits::try_extend) / [`TryExtendFromSlice`](try_traits::try_extend).
-//! * [`recovery`] — [`Resume`] / [`Stall`] for resuming a failed fallible
-//!   iteration without losing data.
+//! * [`recovery`] — [`Resume`](recovery::Resume) / [`Stall`](recovery::Stall) for resuming a
+//!   failed fallible iteration without losing data.
 //!
 //! # Mirroring `core`
 //!
@@ -34,8 +34,8 @@
 //! # Naming convention
 //!
 //! A method that can fail is prefixed `try_` (e.g. `try_reserve`,
-//! `try_extend`). Infallible operations keep their plain names. Trait methods
-//! inherit the name they override; free functions and inherent methods that are
+//! `try_extend`). Infallible operations keep their plain names (however, they are generally avoided).
+//! Trait methods inherit the name they override; free functions and inherent methods that are
 //! fallible carry the `try_` prefix.
 //!
 //! # ``no_std`` compatibility
@@ -46,6 +46,12 @@
 //! `resume_unwind`) lives in `olive_std`, which sits above this crate.
 
 #![no_std]
+// Unstable-feature gates, enabled only when the build script has determined that
+// `#![feature(...)]` is permitted (nightly or bootstrap — see `olive-build`).
+
+// Used by `ptr::PointerExt::cast_with_metadata`, which needs `set_ptr_value` for
+// its Miri-clean `with_metadata_of` path.
+#![cfg_attr(unstable_features, feature(set_ptr_value))]
 // Clippy configuration: pedantic as a baseline, with arithmetic side effects
 // denied (library code must use checked/wrapping/saturating ops explicitly).
 // Scoped to non-test builds so test helpers aren't held to the same standard.
@@ -55,20 +61,45 @@
     deny(clippy::arithmetic_side_effects)
 )]
 
-/// Allocation errors: [`AllocError`] and [`TryReserveError`].
-pub mod alloc_errors;
+// FIXME: add deny lint for unsafe functions and invocations without SAFETY header
+
+// Miri guard: some features cannot be proven sound under Miri without unstable features:
+// - the stable `with_addr` relocation path in `ptr::PointerExt` is
+//   provenance-unsound under Miri's strict model.
+//
+// The guard is additionally gated on `olive_real_build`, a cfg emitted by our
+// build script. rust-analyzer enables `cfg(miri)` by default during analysis but
+// does NOT run build scripts, so `olive_real_build` is absent in the IDE and the
+// error never fires there. Under a real `cargo miri` invocation the build script
+// runs, so the guard is live and catches the unsupported configuration.
+//
+// This generally does not fire unless the user is using some dark magic (e.g. setting a
+// custom stable `RUSTC` while running cargo +nightly miri)
+#[cfg(all(miri, not(unstable_features), olive_real_build))]
+compile_error!(
+    "olive-core cannot be compiled under Miri without unstable features enabled. Re-run with nightly, or set RUSTC_BOOTSTRAP=1."
+);
+
 /// The ported allocator API: [`Layout`], [`AllocError`], [`Allocator`],
 /// [`Global`], and the free-standing raw-pointer functions.
 ///
 /// [`Layout`]:
 pub mod alloc;
+/// Allocation errors: [`AllocError`] and [`TryReserveError`].
+pub mod alloc_errors;
 /// Iterator recovery primitives: [`Resume`] and the [`Stall`] trait.
 pub mod recovery;
 /// Foundational fallible traits.
 pub mod try_traits;
 
+/// Memory manipulation APIs.
+pub mod mem;
 #[doc(hidden)]
 pub mod prelude;
+/// Pointer extension APIs layered on top of [`core::ptr`], including the
+/// [`PointerExt`](ptr::PointerExt) trait for relocating a fat pointer's data
+/// address while preserving its metadata.
+pub mod ptr;
 
 // ── Mirror the entire stable `core` surface ───────────────────────────────────
 // Glob-re-export every item in `core` so `olive_core` is a drop-in superset of
@@ -81,6 +112,6 @@ pub mod prelude;
 pub use core::*;
 
 pub use try_traits::{
-    TryClone, TryCloneError, TryCollect, TryCollectInto, TryExtend, TryExtendFromSlice,
-    TryFromIterator, TryToOwned, TryToOwnedError,
+    TryClone, TryCloneError, TryCloneToUninit, TryCollect, TryCollectInto, TryExtend,
+    TryExtendFromSlice, TryFromIterator, TryToOwned, TryToOwnedError,
 };

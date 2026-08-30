@@ -1,7 +1,9 @@
 //! [`TryClone`]: a fallible analogue of [`core::clone::Clone`].
 
-use crate::alloc_errors::{AllocError, TryReserveError};
+use crate::alloc::AllocError;
+use crate::alloc_errors::TryReserveError;
 use core::fmt;
+use core::ptr;
 
 /// Error returned when a fallible clone operation fails.
 #[derive(Clone, PartialEq, Eq)]
@@ -150,6 +152,169 @@ impl<T: TryClone, E: TryClone> TryClone for Result<T, E> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TryCloneToUninit — cloning a (possibly unsized) value into uninitialized memory
+// ---------------------------------------------------------------------------
+
+/// A fallible generalization of [`core::clone::Clone`] to dynamically-sized
+/// types stored in arbitrary containers.
+///
+/// Unlike std's [`CloneToUninit`](https://doc.rust-lang.org/std/clone/trait.CloneToUninit.html),
+/// which panics when a clone fails, [`TryCloneToUninit`] routes every fallible
+/// step through [`TryClone`]: a clone that runs out of memory returns
+/// [`Err`] instead of unwinding, leaving `dest` in a state the caller can
+/// safely discard.
+///
+/// This is the backer behind `Box::try_clone_from_ref[_in]` and friends: the
+/// caller allocates a fresh block, then invokes [`Self::try_clone_to_uninit`]
+/// to populate it.
+///
+/// # Safety
+/// Implementations must ensure that when `clone_to_uninit(dest)` perform,
+/// it always leaves *dest fully initialized as a valid value of type Self or fully uninitialized.
+pub unsafe trait TryCloneToUninit {
+    /// Perform a fallible copy-assignment from `self` to `dest`.
+    ///
+    /// This is analogous to `ptr::write(dest.cast(), self.clone())`, except that
+    /// `Self` may be a dynamically-sized type (`!Sized`) and the operation may
+    /// fail.
+    ///
+    /// Before this function is called, `dest` may point to uninitialized memory.
+    /// After it returns `Ok(())`, `dest` points to initialized memory; it will
+    /// be sound to create a `&Self` reference from the pointer with the
+    /// [pointer metadata](core::ptr::metadata) from `self`.
+    ///
+    /// # Safety
+    ///
+    /// Behavior is undefined if any of the following conditions are violated:
+    ///
+    /// * `dest` must be [valid](core::ptr#safety) for writes for
+    ///   `size_of_val(self)` bytes.
+    /// * `dest` must be properly aligned to `align_of_val(self)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError`] if a capacity reservation or allocation fails
+    /// while cloning. On error, `dest` must be treated as uninitialized memory:
+    /// it must not be read or dropped, because even if it was previously valid,
+    /// it may have been partially overwritten. The caller is responsible for
+    /// deallocating the block pointed to by `dest` if applicable.
+    unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError>;
+}
+
+unsafe impl TryCloneToUninit for str {
+    #[inline]
+    unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError> {
+        // `str` is just a `[u8]` with a UTF-8 invariant; a plain byte copy
+        // suffices. The source bytes are guaranteed valid UTF-8 (they came from
+        // a `&str`), so the destination inherits the same invariant.
+        // SAFETY: caller guarantees `dest` is valid for `self.len()` bytes and
+        // aligned to 1; `self.as_ptr()` points at `self.len()` readable bytes.
+        unsafe {
+            ptr::copy_nonoverlapping(self.as_ptr(), dest, self.len());
+        }
+        Ok(())
+    }
+}
+
+unsafe impl TryCloneToUninit for core::ffi::CStr {
+    #[inline]
+    unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError> {
+        // A `CStr` is a `[c_char]` terminated by a NUL byte; its metadata (the
+        // length) includes that terminator. Copying the whole NUL-terminated
+        // byte range preserves both the payload and the invariant. The copy is
+        // a plain byte move with no per-element allocation, so it cannot fail.
+        // SAFETY: caller guarantees `dest` is valid for
+        // `to_bytes_with_nul().len()` bytes; the source exposes exactly that
+        // many readable bytes.
+        unsafe {
+            let bytes = self.to_bytes_with_nul();
+            ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
+        }
+        Ok(())
+    }
+}
+
+unsafe impl<T: TryClone> TryCloneToUninit for T {
+    #[inline]
+    unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError> {
+        let cloned = self.try_clone()?;
+        // SAFETY: caller guarantees `dest` is valid for `size_of::<T>()` bytes
+        // and aligned to `align_of::<T>()`; writing `cloned` initializes it fully.
+        unsafe {
+            ptr::write(dest.cast::<T>(), cloned);
+        }
+        Ok(())
+    }
+}
+
+/// RAII guard that drops the first `written` elements of a destination buffer
+/// if the enclosing clone operation exits early (via `?` or a returned error)
+/// before completing. On success the caller [`core::mem::forget`]s the guard,
+/// handing ownership of the fully-initialized data to the destination buffer
+/// instead of letting it be dropped.
+struct PartialInitGuard<'a, T> {
+    base: *mut T,
+    written: usize,
+    _lifetime: &'a (),
+}
+
+impl<T> PartialInitGuard<'_, T> {
+    /// Record that one more element has been initialized at `base + written`.
+    #[inline]
+    fn advance(&mut self) {
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "it is impossible to write more than u64::MAX elements"
+        )]
+        {
+            self.written += 1;
+        }
+    }
+}
+
+impl<T> Drop for PartialInitGuard<'_, T> {
+    fn drop(&mut self) {
+        if self.written > 0 {
+            // SAFETY: the first `written` slots were each initialized by a prior
+            // `ptr::write` before `advance()` was called, and the caller
+            // guaranteed the whole region is valid for `written` elements.
+            unsafe {
+                let prefix = ptr::slice_from_raw_parts_mut(self.base, self.written);
+                ptr::drop_in_place(prefix);
+            }
+        }
+    }
+}
+
+unsafe impl<T: TryClone> TryCloneToUninit for [T] {
+    #[inline]
+    unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError> {
+        let len = self.len();
+        let dest_elems = dest.cast::<T>();
+        // Guard rolls back any partially-written prefix on early exit.
+        let mut guard = PartialInitGuard {
+            base: dest_elems,
+            written: 0,
+            _lifetime: &(),
+        };
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..len {
+            let elem = self[i].try_clone()?;
+            // SAFETY: index `i` is within the caller-guaranteed-valid block and
+            // has not yet been initialized.
+            unsafe {
+                ptr::write(dest_elems.add(i), elem);
+            }
+            guard.advance();
+        }
+        // Every element is now initialized; forget the guard so it does not
+        // drop the freshly-written data. Ownership belongs to the destination.
+        core::mem::forget(guard);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -202,5 +367,86 @@ mod tests {
         assert_eq!(format!("{e}"), "clone failed: demo");
         let r = TryCloneError::Reserve(TryReserveError::new_capacity_overflow());
         assert!(format!("{r}").starts_with("clone failed"));
+    }
+
+    // --- TryCloneToUninit -------------------------------------------------
+
+    #[test]
+    fn try_clone_to_uninit_sized() {
+        let src: i32 = 42;
+        let mut dest = core::mem::MaybeUninit::<i32>::uninit();
+        // SAFETY: `dest` is a valid, aligned slot for one `i32`.
+        unsafe { src.try_clone_to_uninit(dest.as_mut_ptr().cast::<u8>()) }.unwrap();
+        assert_eq!(unsafe { dest.assume_init() }, 42);
+    }
+
+    #[test]
+    fn try_clone_to_uninit_str() {
+        let src: &str = "hello";
+        let mut buf = [0u8; 5];
+        // SAFETY: `buf` holds 5 writable bytes, matching `src.len()`.
+        unsafe { src.try_clone_to_uninit(buf.as_mut_ptr()) }.unwrap();
+        assert_eq!(core::str::from_utf8(&buf).unwrap(), "hello");
+    }
+
+    #[test]
+    fn try_clone_to_uninit_slice() {
+        let src: &[i32] = &[1, 2, 3];
+        let mut buf = [0i32; 3];
+        // SAFETY: `buf` holds 3 writable, aligned `i32` slots.
+        unsafe { src.try_clone_to_uninit(buf.as_mut_ptr().cast::<u8>()) }.unwrap();
+        assert_eq!(buf, [1, 2, 3]);
+    }
+
+    #[test]
+    fn try_clone_to_uninit_slice_empty() {
+        let src: &[i32] = &[];
+        let mut buf = [0i32; 0];
+        // SAFETY: zero-length write is trivially valid.
+        unsafe { src.try_clone_to_uninit(buf.as_mut_ptr().cast::<u8>()) }.unwrap();
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn try_clone_to_uninit_cstr_preserves_nul() {
+        let src = c"hi";
+        // Buffer must hold the payload plus the terminating NUL.
+        let mut buf = [0u8; 3];
+        // SAFETY: `buf` holds 3 writable bytes, matching the CStr's length.
+        unsafe { src.try_clone_to_uninit(buf.as_mut_ptr()) }.unwrap();
+        assert_eq!(&buf[..], b"hi\0");
+        // Round-trip through a reconstructed fat pointer to confirm validity.
+        let rebuilt = unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(&buf) };
+        assert_eq!(rebuilt, src);
+    }
+
+    #[test]
+    fn try_clone_to_uninit_drops_prefix_on_failure() {
+        // A type whose clone succeeds for the first N calls then fails, and
+        // counts how many instances were dropped.
+        static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        struct Flaky(u8);
+        impl Drop for Flaky {
+            fn drop(&mut self) {
+                DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        impl TryClone for Flaky {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                if self.0 >= 2 {
+                    Err(TryCloneError::Other("flaky"))
+                } else {
+                    Ok(Flaky(self.0.wrapping_add(1)))
+                }
+            }
+        }
+        DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
+        let src = [Flaky(0), Flaky(1), Flaky(2)];
+        let mut buf = [const { core::mem::MaybeUninit::<Flaky>::uninit() }; 3];
+        // The third element's clone fails; the two already-written elements
+        // must be dropped exactly once (no leak, no double-free).
+        let res = unsafe { src[..].try_clone_to_uninit(buf.as_mut_ptr().cast::<u8>()) };
+        assert!(res.is_err());
+        assert_eq!(DROPPED.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

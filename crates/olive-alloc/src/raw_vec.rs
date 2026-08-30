@@ -27,6 +27,7 @@ use core::ptr::{self, NonNull};
 
 use crate::alloc::{Allocator, Global, Layout};
 use crate::boxed::Box;
+use olive_core::alloc::LayoutExt;
 use olive_core::alloc_errors::{TryReserveError, TryReserveErrorKind};
 
 // Convenience alias mirroring std's `use TryReserveErrorKind::*;`.
@@ -41,9 +42,7 @@ enum AllocInit {
 }
 
 /// Wraps the stored capacity so that we never store a meaningless huge value for
-/// ZSTs. For a ZST the effective capacity is reported as `usize::MAX`; storing
-/// `0` keeps the representation small and avoids ever dealing with a dangling
-/// allocation sized to hold "infinite" elements.
+/// ZSTs. For a ZST the effective capacity is reported as `usize::MAX`, but "0" is stored.
 #[repr(transparent)]
 struct Cap(usize);
 
@@ -65,8 +64,8 @@ impl Cap {
 /// the corner cases involved. This type is excellent for building your own data
 /// structures like `Vec` and `VecDeque`. In particular:
 ///
-/// * Produces a dangling `NonNull` on zero-sized types.
-/// * Produces a dangling `NonNull` on zero-length allocations.
+/// * Produces a well-aligned dangling `NonNull` on zero-sized types.
+/// * Produces a well-aligned dangling `NonNull` on zero-length allocations.
 /// * Avoids freeing a dangling `NonNull`.
 /// * Catches all overflows in capacity computations (promotes them to
 ///   `CapacityOverflow` errors).
@@ -134,7 +133,6 @@ impl<T> RawVec<T, Global> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
-    #[must_use]
     #[inline]
     pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_in(capacity, Global, elem_layout::<T>())?;
@@ -150,7 +148,6 @@ impl<T> RawVec<T, Global> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
-    #[must_use]
     #[inline]
     pub fn try_with_capacity_zeroed(capacity: usize) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_zeroed_in(capacity, Global, elem_layout::<T>())?;
@@ -228,7 +225,7 @@ impl<T, A: Allocator> RawVec<T, A> {
         })
     }
 
-    /// Converts the entire buffer into `Box<[T]>` with the specified `len`.
+    /// Converts the entire buffer into `Box<[MaybeUninit<T>]>` with the specified `len`.
     ///
     /// Note that this will correctly reconstitute any `cap` changes
     /// that may have been performed. (See description of type for details.)
@@ -299,9 +296,9 @@ impl<T, A: Allocator> RawVec<T, A> {
         }
     }
 
-    /// Gets a raw pointer to the start of the allocation. Note that this is
-    /// a [`NonNull::dangling`] if `capacity == 0` or `T` is zero-sized. In the
-    /// former case, you must be careful.
+    /// Gets a raw pointer to the start of the allocation. Note that this is a
+    /// well-aligned [`NonNull::dangling`] if `capacity == 0` or `T` is zero-sized.
+    /// In the former case, you must be careful.
     #[inline]
     pub const fn ptr(&self) -> *mut T {
         self.inner.ptr()
@@ -647,9 +644,7 @@ impl<A: Allocator> RawVecInner<A> {
         // for the ZST case since current_memory() will have returned None.
         if cap == 0 {
             unsafe { self.alloc.deallocate(ptr, layout) };
-            // Reset to a dangling pointer so the buffer is not freed again on
-            // drop. `NonNull::dangling()` is stable and non-null.
-            self.ptr = NonNull::dangling();
+            self.ptr = layout.dangling_pointer();
             self.cap = Cap::ZERO;
         } else {
             let new_ptr = unsafe {

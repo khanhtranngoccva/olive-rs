@@ -1,5 +1,5 @@
 [package]
-name = "olive_core"
+name = "olive-core"
 description = "Fallible re-port of Rust's `core`: foundational traits, allocation errors, and panic machinery."
 version.workspace = true
 edition.workspace = true
@@ -8,10 +8,13 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# olive_core is the foundation of the stack: it must be dependency-free and
+# olive-core is the foundation of the stack: it must be dependency-free and
 # strictly no_std so it can sit at the bottom of any build graph (including
 # no_std, no-alloc embedded targets). It never references `std`.
 [dependencies]
+
+[build-dependencies]
+olive-build = { workspace = true }
 
 [lints]
 workspace = true

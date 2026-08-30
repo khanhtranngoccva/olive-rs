@@ -11,7 +11,7 @@
 //! `use core::panic::*;`.
 
 pub use crate::recovery::{ResumableSource, Resume, Stall};
-pub use crate::try_traits::try_clone::{TryClone, TryCloneError};
+pub use crate::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
 pub use crate::try_traits::try_collect::{TryCollect, TryCollectInto};
 pub use crate::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 pub use crate::try_traits::try_from_iterator::TryFromIterator;

@@ -16,6 +16,7 @@
 # Dependencies are declared once in `[workspace.dependencies]` and inherited by
 # members with `dep.workspace = true`, so versions never drift across the stack.
 members = [
+    "crates/olive-build",
     "crates/olive-core",
     "crates/olive-alloc",
     "crates/olive-std",
@@ -33,9 +34,11 @@ repository = "https://example.invalid/olive-rs"
 
 # Path dependencies, shared so every member references the same on-disk crates.
 [workspace.dependencies]
-olive_core = { path = "crates/olive-core" }
-olive_alloc = { path = "crates/olive-alloc" }
-olive_std = { path = "crates/olive-std" }
+olive-build = { path = "crates/olive-build" }
+olive-core = { path = "crates/olive-core" }
+olive-alloc = { path = "crates/olive-alloc" }
+olive-std = { path = "crates/olive-std" }
+cfg-if = "1.0.4"
 
 [workspace.lints.rust]
 missing_docs = "warn"

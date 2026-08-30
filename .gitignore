@@ -1,1 +1,3 @@
 /target
+# Library crates should ignore Cargo.lock.
+Cargo.lock

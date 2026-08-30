@@ -41,7 +41,7 @@ fn base_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
 
 #[test]
 fn olive_global_routes_through_custom_global_allocator() {
-    use olive_alloc::{Allocator, Global, Layout};
+    use olive_alloc::alloc::{Allocator, Global, Layout};
 
     let baseline = ALLOC_COUNT.load(Ordering::SeqCst);
 

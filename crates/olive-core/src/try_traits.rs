@@ -34,7 +34,7 @@ pub mod try_extend;
 pub mod try_from_iterator;
 pub mod try_to_owned;
 
-pub use try_clone::{TryClone, TryCloneError};
+pub use try_clone::{TryClone, TryCloneError, TryCloneToUninit};
 pub use try_collect::{TryCollect, TryCollectInto};
 pub use try_extend::{TryExtend, TryExtendFromSlice};
 pub use try_from_iterator::TryFromIterator;

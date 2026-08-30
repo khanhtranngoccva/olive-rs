@@ -1,5 +1,5 @@
 [package]
-name = "olive_alloc"
+name = "olive-alloc"
 description = "Fallible re-port of Rust's `alloc`: Vec, String, BTreeMap/Set, Rc/Arc, Cow, and friends, all allocating fallibly."
 version.workspace = true
 edition.workspace = true
@@ -12,7 +12,10 @@ repository.workspace = true
 # Inherited from [workspace.dependencies]. The only runtime dependency is the
 # foundation crate; everything else is built from scratch (we deliberately do NOT
 # depend on the standard library's `alloc` crate — we control our own code).
-olive_core = { workspace = true }
+olive-core = { workspace = true }
+
+[build-dependencies]
+olive-build = { workspace = true }
 
 [lints]
 workspace = true

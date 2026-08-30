@@ -1,5 +1,5 @@
 [package]
-name = "olive_std"
+name = "olive-std"
 description = "Fallible re-port of Rust's `std`-only surface: hash collections, FFI types, and sync primitives."
 version.workspace = true
 edition.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 
 [dependencies]
 # Inherited from [workspace.dependencies].
-olive_core = { workspace = true }
-olive_alloc = { workspace = true }
+olive-core = { workspace = true }
+olive-alloc = { workspace = true }
 
 [lints]
 workspace = true

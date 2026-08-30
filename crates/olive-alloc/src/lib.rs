@@ -1,4 +1,4 @@
-//! # olive_alloc
+//! # olive-alloc
 //!
 //! A fully-fallible re-port of Rust's `alloc` crate. Every heap-owning type —
 //! `Vec`, `String`, `BTreeMap`/`BTreeSet`, `Rc`/`Arc`, `Cow`, `Box` — is rewritten

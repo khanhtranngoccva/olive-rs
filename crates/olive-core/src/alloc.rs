@@ -440,12 +440,65 @@ unsafe impl<A: Allocator + ?Sized> Allocator for &mut A {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// StaticAllocator
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Marks that an allocator and its supertypes will never invalidate currently allocated
+/// memory unless explicitly deallocated via a call to a deallocating method, even if
+/// dropped or if the allocator's lifetime expires.
+///
+/// This is a necessity in conjunction with [`Pin`](core::pin::Pin), as only allocators that
+/// promise memory is never reused without a destructor running may be used to back a pinned
+/// pointer.
+///
+/// # Safety
+///
+/// Implementors must ensure that memory cannot be freed except via a call to
+/// [`Allocator::deallocate`], and that subtype coercion preserves this invariant.
+///
+/// These requirements trivially apply to allocators that always maintain global state, such
+/// as the standard library's `System` or `Global`. However, due to subtype coercion, it is
+/// *not* sound to implement for an arbitrary `Allocator + 'static` due to
+/// [edge-case interactions](https://github.com/rust-lang/rust/issues/157089) with `Pin::clone`.
+/// Namely an impl of `StaticAllocator for MyAllocator + 'long` would guarantee that an impl of
+/// `StaticAllocator for MyAllocator + 'short` is sound to write.
+///
+/// The following must thus be guaranteed:
+/// - the `Drop` impl of the allocator does not invalidate any allocations;
+/// - the allocator does not expose a safe API surface that allows invalidating
+///   its allocations;
+/// - the allocator's lifetime expiring does not invalidate any allocations;
+/// - the above also hold for all equivalent allocators (see [`Allocator`] docs).
+pub unsafe trait StaticAllocator: Allocator {}
+
+// If an allocator is `StaticAllocator` all equivalent allocators must also uphold
+// its semantics, and references are equivalent to the allocator they reference.
+unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
+
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///
-/// `NonNull::<[T]>::as_non_null_ptr` is not yet stable, so we recover the base
+/// `NonNull::<T>::as_non_null_ptr` is not yet stable, so we recover the base
 /// pointer through a raw-pointer cast.
 const fn base_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
     slice.cast()
+}
+
+pub trait LayoutExt {
+    /// Creates a NonNull that is dangling, but well-aligned for this Layout.
+    /// Note that the address of the returned pointer may potentially be that of a valid pointer,
+    /// which means this must not be used as a “not yet initialized” sentinel value.
+    ///
+    /// Types that lazily allocate must track initialization by some other means.
+    /// 
+    /// This is the MSRV-compatible equivalent of `Layout::dangling_ptr`.
+    fn dangling_pointer(&self) -> NonNull<u8>;
+}
+
+impl LayoutExt for Layout {
+    fn dangling_pointer(&self) -> NonNull<u8> {
+        unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(self.align())) }
+    }
 }
 
 #[cfg(test)]

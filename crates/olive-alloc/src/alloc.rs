@@ -7,6 +7,8 @@ use core::ptr;
 pub use core::ptr::NonNull;
 pub use olive_core::alloc::AllocError;
 pub use olive_core::alloc::Allocator;
+use olive_core::alloc::LayoutExt;
+pub use olive_core::alloc::StaticAllocator;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Global + free functions
@@ -26,8 +28,12 @@ impl Global {
     #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     fn alloc_impl_runtime(layout: Layout, zeroed: bool) -> Result<NonNull<[u8]>, AllocError> {
         match layout.size() {
-            0 => Ok(hydrate(dangling(layout), 0)),
+            0 => Ok(hydrate(layout.dangling_pointer(), 0)),
             // SAFETY: `layout` is non-zero in size,
+            #[allow(
+                unused_qualifications,
+                reason = "we are the alloc module and need a discriminator"
+            )]
             size => unsafe {
                 let raw_ptr = if zeroed {
                     stock_alloc::alloc::alloc_zeroed(layout)
@@ -52,7 +58,13 @@ impl Global {
             //   allocation than requested.
             // * Other conditions must be upheld by the caller, as per `Allocator::deallocate()`'s
             //   safety documentation.
-            unsafe { stock_alloc::alloc::dealloc(ptr.as_ptr(), layout) }
+            #[allow(
+                unused_qualifications,
+                reason = "we are the alloc module and need a discriminator"
+            )]
+            unsafe {
+                stock_alloc::alloc::dealloc(ptr.as_ptr(), layout)
+            }
         }
     }
 
@@ -82,10 +94,17 @@ impl Global {
                 // `realloc` probably checks for `new_size >= old_layout.size()` or something similar.
                 core::hint::assert_unchecked(new_size >= old_layout.size());
 
+                #[allow(
+                    unused_qualifications,
+                    reason = "we are the alloc module and need a discriminator"
+                )]
                 let raw_ptr = stock_alloc::alloc::realloc(ptr.as_ptr(), old_layout, new_size);
                 let ptr = NonNull::new(raw_ptr).ok_or(AllocError)?;
+                // SAFETY: new_size >= old_size
                 if zeroed {
-                    raw_ptr.add(old_size).write_bytes(0, new_size - old_size);
+                    raw_ptr
+                        .add(old_size)
+                        .write_bytes(0, new_size.wrapping_sub(old_size));
                 }
                 Ok(hydrate(ptr, new_size))
             },
@@ -123,14 +142,17 @@ impl Global {
             // SAFETY: conditions must be upheld by the caller
             0 => unsafe {
                 self.deallocate(ptr, old_layout);
-                Ok(hydrate(dangling(new_layout), 0))
+                Ok(hydrate(new_layout.dangling_pointer(), 0))
             },
 
             // SAFETY: `new_size` is non-zero. Other conditions must be upheld by the caller
             new_size if old_layout.align() == new_layout.align() => unsafe {
                 // `realloc` probably checks for `new_size <= old_layout.size()` or something similar.
                 core::hint::assert_unchecked(new_size <= old_layout.size());
-
+                #[allow(
+                    unused_qualifications,
+                    reason = "we are the alloc module and need a discriminator"
+                )]
                 let raw_ptr = stock_alloc::alloc::realloc(ptr.as_ptr(), old_layout, new_size);
                 let ptr = NonNull::new(raw_ptr).ok_or(AllocError)?;
                 Ok(hydrate(ptr, new_size))
@@ -249,6 +271,12 @@ unsafe impl Allocator for Global {
     }
 }
 
+// SAFETY: `Global` is a ZST that maintains no per-instance state and forwards every
+// operation to the process-wide global allocator. Dropping it (a no-op) or letting its
+// lifetime expire cannot invalidate any allocation; the only way memory is reclaimed is an
+// explicit `deallocate`. This matches std's own `unsafe impl StaticAllocator for Global`.
+unsafe impl StaticAllocator for Global {}
+
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///
 /// `NonNull::<[T]>::as_non_null_ptr` is not yet stable, so we recover the base
@@ -264,14 +292,6 @@ const fn hydrate(raw: NonNull<u8>, len: usize) -> NonNull<[u8]> {
     let slice = ptr::slice_from_raw_parts_mut(raw.as_ptr(), len);
     // SAFETY: raw is NonNull.
     unsafe { NonNull::new_unchecked(slice) }
-}
-
-/// Creates a NonNull that is dangling, but well-aligned for this Layout.
-/// Note that the address of the returned pointer may potentially be that of a valid pointer,
-/// which means this must not be used as a “not yet initialized” sentinel value.
-/// Types that lazily allocate must track initialization by some other means.
-const fn dangling(layout: Layout) -> NonNull<u8> {
-    return unsafe { NonNull::new_unchecked(ptr::without_provenance_mut(layout.align())) };
 }
 
 /// Re-exports of the stock alloc crate.
