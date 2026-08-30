@@ -670,7 +670,7 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Box<T, A> {
     #[inline]
     pub fn try_clone_from_ref_in(src: &T, alloc: A) -> Result<Self, TryCloneError> {
         struct DeallocDropGuard<'a, A: Allocator>(Layout, &'a A, NonNull<u8>);
-        impl<'a, A: Allocator> Drop for DeallocDropGuard<'a, A> {
+        impl<A: Allocator> Drop for DeallocDropGuard<'_, A> {
             fn drop(&mut self) {
                 let &mut DeallocDropGuard(layout, alloc, ptr) = self;
                 // Safety: `ptr` was allocated by `*alloc` with layout `layout`
@@ -695,7 +695,7 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Box<T, A> {
             <T as TryCloneToUninit>::try_clone_to_uninit(src, ptr)?;
         }
         // Defuse the deallocate guard
-        core::mem::forget(guard);
+        mem::forget(guard);
         // Safety: We just initialized `*ptr` as a clone of `src`. Relocate the
         // freshly allocated mutable base `ptr` onto `src`'s metadata (length /
         // vtable), yielding a valid `*mut T` fat pointer to the clone.

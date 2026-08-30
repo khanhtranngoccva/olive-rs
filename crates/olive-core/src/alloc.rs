@@ -484,13 +484,14 @@ const fn base_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
     slice.cast()
 }
 
+/// Extension methods for [`Layout`] to provide compatibility.
 pub trait LayoutExt {
-    /// Creates a NonNull that is dangling, but well-aligned for this Layout.
+    /// Creates a [`NonNull`] that is dangling, but well-aligned for this Layout.
     /// Note that the address of the returned pointer may potentially be that of a valid pointer,
     /// which means this must not be used as a “not yet initialized” sentinel value.
     ///
     /// Types that lazily allocate must track initialization by some other means.
-    /// 
+    ///
     /// This is the MSRV-compatible equivalent of `Layout::dangling_ptr`.
     fn dangling_pointer(&self) -> NonNull<u8>;
 }
