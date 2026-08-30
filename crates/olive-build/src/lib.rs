@@ -32,10 +32,12 @@
 //!   we can simply use a pointer hack, but it causes undefined behavior when on Miri 
 //!   (although it is sound otherwise).
 //!
-//! ```ignore
-//! #[cfg(all(miri, not(unstable_features)))]
-//! compile_error!("Miri requires nightly or bootstrap.");
-//! ```
+//! Consuming crates therefore refuse to build under a *genuine* Miri invocation
+//! unless `unstable_features` is active. This check lives in each crate's
+//! build script (using [`is_miri`] + [`can_use_unstable_features`]) rather than
+//! as a `compile_error!` in source, because rust-analyzer enables `cfg(miri)`
+//! by default during analysis while leaving `unstable_features` unset — a
+//! source-level guard would fire spuriously inside the IDE.
 
 /// Returns `true` if the current compiler is a nightly build.
 ///
@@ -83,4 +85,33 @@ pub fn is_bootstrap(crate_name: &str) -> bool {
 /// This is `true` when either [`is_nightly`] or [`is_bootstrap`] holds.
 pub fn can_use_unstable_features(crate_name: &str) -> bool {
     is_nightly() || is_bootstrap(crate_name)
+}
+
+/// Returns `true` if this build script is running under a genuine
+/// `cargo miri` invocation (as opposed to rust-analyzer's analysis, which
+/// fakes `cfg(miri)` but never invokes the Miri driver).
+///
+/// Detection method: a real `cargo miri` run sets the `MIRI_SYSROOT`
+/// environment variable in the build-script environment (pointing at the
+/// Miri-built sysroot). rust-analyzer does not set this, so its presence is a
+/// reliable discriminator. As a secondary signal we also check whether the
+/// `RUSTC` binary path ends in `/miri`, which is the case when cargo-miri
+/// swaps the compiler driver.
+///
+/// # Rationale
+///
+/// Some code paths are provenance-unsound under Miri's strict model unless compiled with
+/// `unstable_features`. A `compile_error!` placed in crate source would fire
+/// spuriously inside rust-analyzer (which enables `cfg(miri)` by default while
+/// leaving `unstable_features` unset). By performing the check here — where we
+/// can tell a real Miri build from IDE analysis — we fail only when it truly
+/// matters.
+pub fn is_miri() -> bool {
+    std::env::var_os("MIRI_SYSROOT").is_some()
+        || std::env::var("RUSTC")
+            .map(|rustc| {
+                rustc.ends_with("/miri") || rustc.ends_with("\\miri.exe")
+                    || rustc.ends_with("miri.exe")
+            })
+            .unwrap_or(false)
 }

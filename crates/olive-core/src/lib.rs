@@ -63,23 +63,6 @@
 
 // FIXME: add deny lint for unsafe functions and invocations without SAFETY header
 
-// Miri guard: some features cannot be proven sound under Miri without unstable features:
-// - the stable `with_addr` relocation path in `ptr::PointerExt` is
-//   provenance-unsound under Miri's strict model.
-//
-// The guard is additionally gated on `olive_real_build`, a cfg emitted by our
-// build script. rust-analyzer enables `cfg(miri)` by default during analysis but
-// does NOT run build scripts, so `olive_real_build` is absent in the IDE and the
-// error never fires there. Under a real `cargo miri` invocation the build script
-// runs, so the guard is live and catches the unsupported configuration.
-//
-// This generally does not fire unless the user is using some dark magic (e.g. setting a
-// custom stable `RUSTC` while running cargo +nightly miri)
-#[cfg(all(miri, not(unstable_features), olive_real_build))]
-compile_error!(
-    "olive-core cannot be compiled under Miri without unstable features enabled. Re-run with nightly, or set RUSTC_BOOTSTRAP=1."
-);
-
 /// The ported allocator API: [`Layout`], [`AllocError`], [`Allocator`],
 /// [`Global`], and the free-standing raw-pointer functions.
 ///

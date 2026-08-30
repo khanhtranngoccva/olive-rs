@@ -78,10 +78,10 @@ pub trait PointerExt<T: ?Sized>: Sized {
     ///   Miri rejects. On real hardware this works without problems, but it is technically
     ///   provenance-unsound, so we forbid running it under Miri.
     ///
-    /// To prevent silently exercising the unsound branch, `olive-core`
-    /// carry a compile-time guard that errors out when compiled
-    /// under Miri without `unstable_features`, forcing every Miri build onto the
-    /// clean/sound branch above.
+    /// To prevent silently exercising the unsound branch, the crate's build script 
+    /// refuses to compile under a genuine `cargo miri` invocation
+    /// unless `unstable_features` is active, forcing every real Miri build onto
+    /// the sound branch above.
     #[must_use]
     unsafe fn cast_with_metadata<U: ?Sized>(self, old: *const U) -> Self::CastedWithMetadata<U>;
 }

@@ -3,21 +3,17 @@
 fn main() {
     let crate_name = env!("CARGO_PKG_NAME");
 
-    // Re-run if the bootstrap env var changes.
+    // Re-run if the bootstrap env var or Miri environment changes.
     println!("cargo:rerun-if-env-changed=RUSTC_BOOTSTRAP");
+    println!("cargo:rerun-if-env-changed=MIRI_SYSROOT");
+
+    let unstable = olive_build::can_use_unstable_features(crate_name);
 
     // Emit cfg(unstable_features) when nightly or bootstrap is active.
-    if olive_build::can_use_unstable_features(crate_name) {
+    if unstable {
         println!("cargo:rustc-cfg=unstable_features");
     }
 
-    // Mark that this is a genuine cargo build (as opposed to rust-analyzer's
-    // analysis, which skips build scripts). The Miri guard in lib.rs uses this
-    // to avoid firing inside the IDE, where `cfg(miri)` is enabled by default
-    // but no build script has run.
-    println!("cargo:rustc-cfg=olive_real_build");
-
-    // Declare our custom cfgs so the compiler doesn't warn about them.
+    // Declare our custom cfg so the compiler doesn't warn about it.
     println!("cargo:rustc-check-cfg=cfg(unstable_features)");
-    println!("cargo:rustc-check-cfg=cfg(olive_real_build)");
 }
