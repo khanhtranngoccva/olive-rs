@@ -43,7 +43,7 @@
 ///
 /// Detection method: runs `rustc --version` and checks whether the output
 /// contains the substring `"nightly"` or `"-dev"`. This is the same heuristic
-/// used by `autocfg` and most build scripts in the ecosystem.
+/// used by most build scripts in the ecosystem.
 pub fn is_nightly() -> bool {
     let Ok(output) = std::process::Command::new("rustc")
         .arg("--version")
@@ -82,8 +82,16 @@ pub fn is_bootstrap(crate_name: &str) -> bool {
 /// Returns `true` if unstable features (`#![feature(...)]`) are permitted
 /// under the current build configuration.
 ///
-/// This is `true` when either [`is_nightly`] or [`is_bootstrap`] holds.
+/// Normally this is `true` when either [`is_nightly`] or [`is_bootstrap`]
+/// holds. However, `RUSTC_BOOTSTRAP=-1` is a hard override: it tells rustc to
+/// reject `#![feature]` *even on nightly* (producing E0554), so it must
+/// disable unstable features regardless of channel. That check takes priority
+/// over both signals.
 pub fn can_use_unstable_features(crate_name: &str) -> bool {
+    // A `-1` bootstrap value forces stable semantics, overriding nightly.
+    if std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("-1") {
+        return false;
+    }
     is_nightly() || is_bootstrap(crate_name)
 }
 
