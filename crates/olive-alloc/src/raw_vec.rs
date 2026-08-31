@@ -181,6 +181,7 @@ const fn elem_layout<T>() -> Layout {
 impl<T, A: Allocator> RawVec<T, A> {
     /// Minimum non-zero capacity for this element size, matching std's growth
     /// heuristic.
+    #[allow(unused)]
     pub(crate) const MIN_NON_ZERO_CAP: usize = min_non_zero_cap(size_of::<T>());
 
     /// Like [`Self::new`], but parameterized over the choice of allocator for the
@@ -216,6 +217,7 @@ impl<T, A: Allocator> RawVec<T, A> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
+    #[allow(unused)]
     #[inline]
     pub fn try_with_capacity_zeroed_in(capacity: usize, alloc: A) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_zeroed_in(capacity, alloc, elem_layout::<T>())?;
@@ -597,7 +599,13 @@ impl<A: Allocator> RawVecInner<A> {
 
     #[inline]
     fn needs_to_grow(&self, len: usize, additional: usize, elem_layout: Layout) -> bool {
-        additional > self.capacity(elem_layout.size()).wrapping_sub(len)
+        // Correct even if `len > capacity` (degenerate/probe inputs): compute
+        // the free space as a saturating difference so we never silently wrap
+        // into a false "no growth needed". When `len <= capacity` this is
+        // identical to the classic `capacity - len` formulation.
+        let cap = self.capacity(elem_layout.size());
+        let free = cap.saturating_sub(len);
+        additional > free
     }
 
     #[inline]
@@ -766,8 +774,7 @@ impl<A: Allocator> RawVecInner<A> {
         let new_layout = layout_array(cap, elem_layout)?;
 
         let memory = if let Some((ptr, old_layout)) = unsafe { self.current_memory(elem_layout) } {
-            // FIXME(const-hack): switch to `debug_assert_eq`
-            debug_assert!(old_layout.align() == new_layout.align());
+            debug_assert_eq!(old_layout.align(), new_layout.align());
             unsafe {
                 // The allocator checks for alignment equality
                 hint::assert_unchecked(old_layout.align() == new_layout.align());

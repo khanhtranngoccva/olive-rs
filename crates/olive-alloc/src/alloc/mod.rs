@@ -296,3 +296,9 @@ const fn hydrate(raw: NonNull<u8>, len: usize) -> NonNull<[u8]> {
 
 /// Re-exports of the stock alloc crate.
 pub use stock_alloc::alloc::{alloc, alloc_zeroed, dealloc, realloc};
+
+#[cfg(test)]
+mod test_allocators;
+
+#[cfg(test)]
+pub(crate) use test_allocators::CountingAllocator;

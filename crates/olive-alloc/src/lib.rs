@@ -25,4 +25,5 @@
 
 pub mod alloc;
 pub mod boxed;
+pub mod vec;
 mod raw_vec;
