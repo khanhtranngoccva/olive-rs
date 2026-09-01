@@ -10,11 +10,10 @@
 //! prelude. Callers who want those under an explicit import can use
 //! `use core::panic::*;`.
 
-pub use crate::alloc::AllocatorTryClone;
-pub use crate::recovery::{ResumableSource, Resume, LossySizeHint, Stall};
-pub use crate::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
+pub use crate::recovery::{ResumableSource, Stall};
+pub use crate::try_traits::try_clone::{TryClone, TryCloneToUninit};
 pub use crate::try_traits::try_collect::{TryCollect, TryCollectInto};
 pub use crate::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 pub use crate::try_traits::try_from_iterator::TryFromIterator;
-pub use crate::try_traits::try_to_owned::{TryToOwned, TryToOwnedError};
+pub use crate::try_traits::try_to_owned::TryToOwned;
 pub use core::prelude::*;
