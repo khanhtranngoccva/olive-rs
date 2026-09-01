@@ -196,6 +196,55 @@ fn test_box_slice_try_clone() {
 }
 
 #[test]
+fn test_box_new_uninit_slice_write_and_read() {
+    // Allocate uninitialized, fill via `write`, then reinterpret as `[T]`.
+    let mut bs: Box<[MaybeUninit<u64>]> = Box::try_new_uninit_slice(4).unwrap();
+    assert_eq!(bs.len(), 4);
+    for (slot, val) in bs.iter_mut().zip([10u64, 20, 30, 40]) {
+        slot.write(val);
+    }
+    let init: Box<[u64]> = unsafe { bs.assume_init() };
+    assert_eq!(*init, [10, 20, 30, 40]);
+}
+
+#[test]
+fn test_box_new_zeroed_slice_is_zeroed() {
+    // Zero-filled buffer reinterpreted straight to `[u8]` must read all zeros.
+    let zs: Box<[MaybeUninit<u8>]> = Box::try_new_zeroed_slice(16).unwrap();
+    assert_eq!(zs.len(), 16);
+    let init: Box<[u8]> = unsafe { zs.assume_init() };
+    assert!(init.iter().all(|&b| b == 0));
+}
+
+#[test]
+fn test_box_new_uninit_slice_empty() {
+    // A zero-length allocation is a valid empty box; no elements to touch.
+    let bs: Box<[MaybeUninit<i32>]> = Box::try_new_uninit_slice(0).unwrap();
+    assert_eq!(bs.len(), 0);
+}
+
+#[test]
+fn test_box_new_zeroed_slice_zst() {
+    // ZST slices have no backing bytes; the length is still honored and the
+    // box drops without touching the heap.
+    let bs: Box<[MaybeUninit<()>]> = Box::try_new_zeroed_slice(5).unwrap();
+    assert_eq!(bs.len(), 5);
+}
+
+#[test]
+fn test_box_new_uninit_slice_in_custom_allocator() {
+    // Route through a counting allocator to prove the `_in` seam works and the
+    // allocation is actually charged to it.
+    let alloc = CountingAllocator::new();
+    let bs: Box<[MaybeUninit<u32>], &CountingAllocator> =
+        Box::try_new_uninit_slice_in(8, &alloc).unwrap();
+    assert_eq!(bs.len(), 8);
+    drop(bs);
+    assert_eq!(alloc.allocations(), 1, "expected one allocation");
+    assert_eq!(alloc.deallocations(), 1, "expected one deallocation on drop");
+}
+
+#[test]
 fn test_box_str_try_from_ref() {
     let bs: Box<str> = Box::try_clone_from_ref("hello world").unwrap();
     assert_eq!(&*bs, "hello world");

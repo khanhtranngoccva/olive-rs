@@ -101,10 +101,24 @@ coherence + surface-area tax later.
   half-finished `test_box_cstr_try_clone` to build its `Box<CStr>` via
   `try_clone_from_ref` (the old body called an undefined
   `from_c_bytes_unchecked`).
+- Cleared the last three FIXMEs in the tree:
+  - `Box<[T], A>::try_new_uninit_slice_in` / `try_new_zeroed_slice_in` and their
+    `Global` shims (`try_new_uninit_slice` / `try_new_zeroed_slice`) now exist.
+    They return `Box<[MaybeUninit<T>], A>` — the slice analogue of
+    `try_new_uninit` / `try_new_zeroed` — implemented by routing through
+    `RawVec::try_with_capacity(_zeroed)_in` + `into_box(n)` so overflow, ZST,
+    layout, and deallocation all reuse the existing buffer machinery instead of
+    being hand-rolled. The `TryReserveError` is mapped down to `AllocError` to
+    stay consistent with the single-element constructors.
+  - `RawVec::try_with_capacity_zeroed_in` gained real test coverage (zeroed
+    content via a counting probe allocator proving `allocate_zeroed` was used,
+    empty-capacity no-alloc, OOM kind, and capacity-overflow detection). Its
+    `#[cfg_attr(not(test), expect(unused))]` attribute was removed because the
+    new slice constructor now consumes it in non-test code.
 
-Full suite green; `cargo clippy --all-targets` clean (one pre-existing
-dead-code warning on `RawVec::try_with_capacity(_zeroed)`, exercised only by
-raw_vec's own tests).
+Full suite green; `cargo clippy --all-targets` fully clean (the prior
+`RawVec::try_with_capacity(_zeroed)` dead-code warning is gone too, since the
+slice constructors are real consumers). No `FIXME`s remain anywhere in the tree.
 
 ## Decision: `AllocatorTryClone` marker for same-store allocator cloning (2026-09-01)
 

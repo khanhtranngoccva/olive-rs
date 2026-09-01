@@ -155,6 +155,7 @@ impl<T> RawVec<T, Global> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
+    #[cfg_attr(not(test), expect(unused))]
     #[inline]
     pub fn try_with_capacity(capacity: usize) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_in(capacity, Global, elem_layout::<T>())?;
@@ -170,6 +171,7 @@ impl<T> RawVec<T, Global> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
+    #[cfg_attr(not(test), expect(unused))]
     #[inline]
     pub fn try_with_capacity_zeroed(capacity: usize) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_zeroed_in(capacity, Global, elem_layout::<T>())?;
@@ -203,7 +205,7 @@ const fn elem_layout<T>() -> Layout {
 impl<T, A: Allocator> RawVec<T, A> {
     /// Minimum non-zero capacity for this element size, matching std's growth
     /// heuristic.
-    #[allow(unused)]
+    #[expect(unused)]
     pub(crate) const MIN_NON_ZERO_CAP: usize = min_non_zero_cap(size_of::<T>());
 
     /// Like [`Self::new`], but parameterized over the choice of allocator for the
@@ -239,7 +241,6 @@ impl<T, A: Allocator> RawVec<T, A> {
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// allocation fails.
-    #[allow(unused)]
     #[inline]
     pub fn try_with_capacity_zeroed_in(capacity: usize, alloc: A) -> Result<Self, TryReserveError> {
         let inner = RawVecInner::try_with_capacity_zeroed_in(capacity, alloc, elem_layout::<T>())?;
@@ -283,7 +284,7 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// # Safety
     ///
     /// The `ptr` must be non-null, allocated (via the given allocator `alloc`) if T is non zero-sized
-    /// or dangling if T is zero-sized, must be well aligned for T, and with the `capacity` that is 
+    /// or dangling if T is zero-sized, must be well aligned for T, and with the `capacity` that is
     /// between the previous requested capacity and the actual capacity (including both ends).
     /// The `capacity` cannot exceed `isize::MAX` for sized types. For ZSTs `capacity` is ignored.
     /// If the `ptr` and `capacity` come from a `RawVec` created via `alloc`, then this is guaranteed.
@@ -503,7 +504,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// - `elem_layout`'s size must be a multiple of its alignment
     #[inline]
     unsafe fn try_grow_one(&mut self, elem_layout: Layout) -> Result<(), TryReserveError> {
-        // SAFETY: Precondition passed to caller. 
+        // SAFETY: Precondition passed to caller.
         // additionally `self.cap.0` is meaningless if elem_layout encodes ZST
         unsafe { self.grow_amortized(self.cap.0, 1, elem_layout) }
     }
@@ -882,6 +883,101 @@ mod tests {
                 assert_eq!(v.ptr().add(i).read(), 0);
             }
         }
+    }
+
+    /// An allocator that records how many times it was asked to zero-initialize,
+    /// forwarding actual memory management to [`Global`]. Lets us prove
+    /// `try_with_capacity_zeroed_in` routes through `allocate_zeroed` rather than
+    /// plain `allocate`.
+    struct ZeroProbe {
+        zeroed_calls: core::sync::atomic::AtomicUsize,
+    }
+    impl ZeroProbe {
+        fn new() -> Self {
+            Self {
+                zeroed_calls: core::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn zeroed_calls(&self) -> usize {
+            self.zeroed_calls.load(core::sync::atomic::Ordering::Acquire)
+        }
+    }
+    unsafe impl Allocator for ZeroProbe {
+        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            Global.allocate(layout)
+        }
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+            // SAFETY: forwarded from a valid drop site honoring `Global`'s contract.
+            unsafe { Global.deallocate(ptr, layout) }
+        }
+        fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            if layout.size() != 0 {
+                self.zeroed_calls.fetch_add(1, core::sync::atomic::Ordering::Release);
+            }
+            Global.allocate_zeroed(layout)
+        }
+    }
+
+    #[test]
+    fn try_with_capacity_zeroed_in_zeros_memory() {
+        // Pass a *reference* to the probe so the buffer stores a
+        // `&ZeroProbe`; we keep the original handle to read the counter after.
+        let probe = ZeroProbe::new();
+        let v = RawVec::<u8, _>::try_with_capacity_zeroed_in(32, &probe)
+            .expect("zeroed alloc ok");
+        assert_eq!(probe.zeroed_calls(), 1, "should have called allocate_zeroed once");
+        unsafe {
+            for i in 0..32 {
+                assert_eq!(v.ptr().add(i).read(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn try_with_capacity_zeroed_in_empty_no_alloc() {
+        // A zero-capacity request must not touch the allocator at all.
+        let probe = ZeroProbe::new();
+        let v = RawVec::<i32, _>::try_with_capacity_zeroed_in(0, &probe)
+            .expect("empty zeroed alloc ok");
+        assert_eq!(v.capacity(), 0);
+        assert_eq!(probe.zeroed_calls(), 0, "no allocation expected for cap 0");
+    }
+
+    #[test]
+    fn try_with_capacity_zeroed_in_oom_returns_alloc_kind() {
+        // Prove an allocation failure surfaces as an AllocError-kind
+        // `TryReserveError` (distinct from CapacityOverflow), mirroring the
+        // sibling `try_with_capacity_in` OOM test.
+        #[derive(Default)]
+        struct FailAlloc;
+        unsafe impl Allocator for FailAlloc {
+            fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                Err(AllocError)
+            }
+            fn allocate_zeroed(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+                Err(AllocError)
+            }
+            unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+        }
+
+        let err = match RawVec::<i32, FailAlloc>::try_with_capacity_zeroed_in(8, FailAlloc) {
+            Err(e) => e,
+            Ok(_) => panic!("expected allocation failure"),
+        };
+        assert!(err.is_alloc());
+        assert!(!err.is_capacity_overflow());
+    }
+
+    #[test]
+    fn try_with_capacity_zeroed_in_overflow_detected() {
+        // A capacity whose byte size overflows must be reported as a capacity
+        // overflow, not an allocation error. (`RawVec` is not `Debug`, so we
+        // match rather than use `expect_err`.)
+        let err = match RawVec::<u8, Global>::try_with_capacity_zeroed_in(usize::MAX, Global) {
+            Err(e) => e,
+            Ok(_) => panic!("expected capacity overflow"),
+        };
+        assert!(err.is_capacity_overflow());
     }
 
     #[test]
