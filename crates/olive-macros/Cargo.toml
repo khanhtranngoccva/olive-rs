@@ -1,0 +1,23 @@
+[package]
+name = "olive-macros"
+description = "Procedural macros for the Olive fallible standard library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# `proc-macro` crates compile to a host-side dylib consumed by rustc; they are
+# never linked into downstream no_std targets, so their dependencies (syn,
+# quote, proc-macro2) do not violate olive-core's dependency-free guarantee.
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[lints]
+workspace = true

@@ -19,9 +19,7 @@ use core::pin::Pin;
 use core::ptr::{self, NonNull};
 
 use crate::alloc::{AllocError, Allocator, Global, Layout, StaticAllocator};
-use crate::raw_vec::RawVec;
 use olive_core::alloc::LayoutExt;
-use olive_core::alloc_errors::TryReserveError;
 use olive_core::ptr::PointerExt;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
 
@@ -30,6 +28,7 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUnini
 // ---------------------------------------------------------------------------
 
 pub(crate) mod convert;
+pub(crate) mod traits;
 
 // ---------------------------------------------------------------------------
 // Box declaration
@@ -55,7 +54,7 @@ pub struct Box<T: ?Sized, A: Allocator = Global> {
 // Global construction block (sized T)
 // ---------------------------------------------------------------------------
 
-impl<T> Box<T> {
+impl<T> Box<T, Global> {
     /// Allocates memory on the heap and places `x` into it.
     ///
     /// # Errors
@@ -319,7 +318,7 @@ impl<T, A: Allocator> Box<T, A> {
 }
 
 // ---------------------------------------------------------------------------
-// Box<MaybeUninit<T>, A> — initialization helpers
+// Uninit initialization helpers
 // ---------------------------------------------------------------------------
 
 impl<T, A: Allocator> Box<MaybeUninit<T>, A> {
@@ -340,6 +339,22 @@ impl<T, A: Allocator> Box<MaybeUninit<T>, A> {
     pub unsafe fn assume_init(self) -> Box<T, A> {
         // SAFETY: `Box<T>` and `Box<MaybeUninit<T>>` have the same layout.
         unsafe { olive_core::mem::transmute_unchecked::<Self, Box<T, A>>(self) }
+    }
+}
+
+impl<T, A: Allocator> Box<[MaybeUninit<T>], A> {
+    /// Asserts that all elements of the boxed slice have been initialized and
+    /// returns an owning `Box<[T], A>`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that every element in the slice has been fully
+    /// initialized.
+    #[inline]
+    pub unsafe fn assume_init(self) -> Box<[T], A> {
+        // SAFETY: `[MaybeUninit<T>]` and `[T]` are layout-compatible; only the
+        // semantic initialization state differs.
+        unsafe { olive_core::mem::transmute_unchecked::<Self, Box<[T], A>>(self) }
     }
 }
 
@@ -511,34 +526,6 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
         unsafe { (NonNull::new_unchecked(ptr), alloc) }
     }
 
-    /// Gets a mutable raw pointer to the underlying data.
-    #[must_use]
-    #[inline]
-    pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.inner.as_ptr()
-    }
-
-    /// Gets a shared raw pointer to the underlying data.
-    #[must_use]
-    #[inline]
-    pub fn as_ptr(&self) -> *const T {
-        self.inner.as_ptr()
-    }
-
-    /// Gets a `NonNull<T>` pointing to the underlying data.
-    #[must_use]
-    #[inline]
-    pub fn as_non_null(&self) -> NonNull<T> {
-        self.inner
-    }
-
-    /// Gets a shared reference to the allocator backing this `Box`.
-    #[must_use]
-    #[inline]
-    pub fn allocator(&self) -> &A {
-        &self.alloc
-    }
-
     /// Consumes and leaks the `Box`, returning a mutable reference,
     /// `&'a mut T`.
     ///
@@ -603,23 +590,51 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
 }
 
 // ---------------------------------------------------------------------------
+// Query block
+// ---------------------------------------------------------------------------
+
+impl<T: ?Sized, A: Allocator> Box<T, A> {
+    /// Gets a mutable raw pointer to the underlying data.
+    #[must_use]
+    #[inline]
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.inner.as_ptr()
+    }
+
+    /// Gets a shared raw pointer to the underlying data.
+    #[must_use]
+    #[inline]
+    pub fn as_ptr(&self) -> *const T {
+        self.inner.as_ptr()
+    }
+
+    /// Gets a `NonNull<T>` pointing to the underlying data.
+    #[must_use]
+    #[inline]
+    pub fn as_non_null(&self) -> NonNull<T> {
+        self.inner
+    }
+
+    /// Gets a shared reference to the allocator backing this `Box`.
+    #[must_use]
+    #[inline]
+    pub fn allocator(&self) -> &A {
+        &self.alloc
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Drop
 // ---------------------------------------------------------------------------
 
 /// Owns the raw pointer, layout, and allocator of a [`Box`] being dropped, and
 /// frees them in its own `Drop`.
 ///
-/// Dropping the contained value (`ptr::drop_in_place`) can panic. Without this
-/// guard, a panic would unwind past the deallocation line and leak the block.
+/// Dropping the contained value [ptr::drop_in_place](`ptr::drop_in_place`) can panic.
+/// Without this guard, a panic would unwind past the deallocation line and leak the block.
 /// Arming the guard *before* dropping the pointee guarantees the free runs both
 /// on the happy path (guard falls out of scope normally) and on unwind (guard's
 /// `Drop` runs during stack teardown). There is exactly one free site.
-///
-/// It touches only the pointer/layout/allocator — never the pointee itself — so
-/// it is safe to use while dropping a `Pin<Box<T>>`: the pin invariant forbids
-/// *moving* the pointee, and neither dropping it in place nor freeing its block
-/// relocates it. This mirrors std's observable behavior, where a pinned box is
-/// freed on a panicking pointee drop exactly like a plain one.
 struct BoxDeallocGuard<'a, T: ?Sized, A: Allocator> {
     ptr: NonNull<u8>,
     layout: Option<Layout>,
@@ -739,308 +754,36 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Box<T, A> {
     }
 }
 
-impl<T, A: Allocator> Box<[MaybeUninit<T>], A> {
-    /// Asserts that all elements of the boxed slice have been initialized and
-    /// returns an owning `Box<[T], A>`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that every element in the slice has been fully
-    /// initialized.
-    #[inline]
-    pub unsafe fn assume_init(self) -> Box<[T], A> {
-        // SAFETY: `[MaybeUninit<T>]` and `[T]` are layout-compatible; only the
-        // logical initialization state differs. Preserving the fat pointer's
-        // length via `into_raw_with_allocator` keeps the slice length intact.
-        let (raw, alloc) = Box::into_raw_with_allocator(self);
-        unsafe { Box::from_raw_in(raw as *mut [T], alloc) }
-    }
-}
-
 impl<T, A: Allocator> Box<[T], A> {
-    /// Creates a new empty boxed slice using the given allocator.
+    /// Clones a slice into a new boxed slice using the given allocator.
     ///
     /// # Errors
     ///
-    /// Returns [`AllocError`] if the allocation fails.
-    // FIXME: remove, this method does not exist (slices do not have any concept of capacity)
+    /// Returns [`TryCloneError`] if the allocation fails, or propagates the
+    /// first element-level [`TryCloneError`] encountered.
     #[inline]
-    pub fn try_new_empty_in(alloc: A) -> Result<Self, AllocError> {
-        Self::try_with_capacity_in(0, alloc)
-    }
-
-    /// Creates a new boxed slice with the given capacity using the given
-    /// allocator.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    // FIXME: remove, this method does not exist (slices do not have any concept of capacity)
-    #[inline]
-    pub fn try_with_capacity_in(capacity: usize, alloc: A) -> Result<Self, AllocError> {
-        let buf = RawVec::<T, A>::try_with_capacity_in(capacity, alloc)
-            .map_err(reserve_err_to_alloc_err)?;
-        // SAFETY: freshly allocated buffer with exactly `capacity` elements.
-        let boxed_uninit: Box<[MaybeUninit<T>], A> = unsafe { buf.into_box(capacity) };
-        let (raw, alloc_out) = Box::into_non_null_with_allocator(boxed_uninit);
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, capacity)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc_out) })
-    }
-
-    /// Creates a new boxed slice from a `&[T]` using the given allocator.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    // FIXME: remove this
-    #[inline]
-    pub fn try_from_slice_in(slice: &[T], alloc: A) -> Result<Self, AllocError>
-    where
-        T: Clone,
-    {
-        let len = slice.len();
-        let buf =
-            RawVec::<T, A>::try_with_capacity_in(len, alloc).map_err(reserve_err_to_alloc_err)?;
-
-        unsafe {
-            let dst = buf.ptr();
-            let src = slice.as_ptr();
-            for i in 0..len {
-                ptr::write(dst.add(i), (*src.add(i)).clone());
-            }
-        }
-
-        // SAFETY: all `len` elements are now initialized.
-        let boxed_uninit: Box<[MaybeUninit<T>], A> = unsafe { buf.into_box(len) };
-        let (raw, alloc_out) = Box::into_non_null_with_allocator(boxed_uninit);
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, len)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc_out) })
-    }
-
-    /// Fallibly clones a slice into a new boxed slice using the given allocator.
-    ///
-    /// Uses [`TryClone`] on each element rather than [`Clone`], so types that
-    /// only implement the fallible trait can be boxed this way.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails, or propagates the first
-    /// element-level [`TryCloneError`] encountered.
-    // FIXME: use method 
-    pub fn try_from_slice_try_clone_in(slice: &[T], alloc: A) -> Result<Self, TryCloneError>
+    pub fn try_from_slice_in(slice: &[T], alloc: A) -> Result<Self, TryCloneError>
     where
         T: TryClone,
     {
-        let len = slice.len();
-        let buf =
-            RawVec::<T, A>::try_with_capacity_in(len, alloc).map_err(TryCloneError::Reserve)?;
-
-        unsafe {
-            let dst = buf.ptr();
-            let src = slice.as_ptr();
-            for i in 0..len {
-                let cloned = (*src.add(i)).try_clone()?;
-                ptr::write(dst.add(i), cloned);
-            }
-        }
-
-        // SAFETY: all `len` elements are now initialized.
-        let boxed_uninit: Box<[MaybeUninit<T>], A> = unsafe { buf.into_box(len) };
-        let (raw, alloc_out) = Box::into_non_null_with_allocator(boxed_uninit);
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, len)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc_out) })
+        Self::try_clone_from_ref_in(slice, alloc)
     }
 }
 
 impl<T> Box<[T], Global> {
-    /// Creates a new empty boxed slice.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_new_empty() -> Result<Self, AllocError> {
-        Self::try_with_capacity(0)
-    }
-
-    /// Creates a new boxed slice with the given capacity (uninitialized).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError> {
-        let buf = RawVec::<T>::try_with_capacity(capacity).map_err(reserve_err_to_alloc_err)?;
-        // SAFETY: The buffer was just allocated with exactly `capacity`
-        // elements. `into_box` wraps it as `Box<[MaybeUninit<T>]>`; we then
-        // reinterpret the same memory as `Box<[T]>` since the layout is
-        // identical. Contents remain uninitialized, matching std's behavior.
-        let boxed_uninit: Box<[MaybeUninit<T>], Global> = unsafe { buf.into_box(capacity) };
-        // Extract the raw fat pointer and allocator (consumes the box without
-        // deallocating), then rebuild a `Box<[T]>` over the same allocation.
-        let (raw, alloc) = Box::into_non_null_with_allocator(boxed_uninit);
-        // SAFETY: the allocation holds `capacity` slots of size `T`;
-        // reinterpreting `[MaybeUninit<T>]` as `[T]` is sound (same layout).
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, capacity)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc) })
-    }
-
-    /// Creates a new boxed slice filled with zeros (for `Copy` types).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_new_zeroed(len: usize) -> Result<Self, AllocError>
-    where
-        T: Copy,
-    {
-        let buf = RawVec::<T>::try_with_capacity_zeroed(len).map_err(reserve_err_to_alloc_err)?;
-        // SAFETY: buffer is zero-initialized; for `Copy` types this is a
-        // valid (if unusual) value pattern.
-        let boxed_uninit: Box<[MaybeUninit<T>], Global> = unsafe { buf.into_box(len) };
-        let (raw, alloc) = Box::into_non_null_with_allocator(boxed_uninit);
-        // SAFETY: all slots are zero-initialized and thus valid for `T`.
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, len)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc) })
-    }
-
     /// Creates a new boxed slice from a `&[T]`, cloning the elements.
     ///
     /// # Errors
     ///
-    /// Returns [`AllocError`] if the allocation fails.
+    /// Returns [`TryCloneError`] if the allocation fails, or propagates the
+    /// first element-level [`TryCloneError`] encountered.
     #[inline]
-    pub fn try_from_slice(slice: &[T]) -> Result<Self, AllocError>
+    pub fn try_from_slice(slice: &[T]) -> Result<Self, TryCloneError>
     where
-        T: Clone,
+        T: TryClone,
     {
-        let len = slice.len();
-        let buf = RawVec::<T>::try_with_capacity(len).map_err(reserve_err_to_alloc_err)?;
-
-        unsafe {
-            let dst = buf.ptr();
-            let src = slice.as_ptr();
-            for i in 0..len {
-                ptr::write(dst.add(i), (*src.add(i)).clone());
-            }
-        }
-
-        // SAFETY: all `len` elements are now initialized.
-        let boxed_uninit: Box<[MaybeUninit<T>], Global> = unsafe { buf.into_box(len) };
-        let (raw, alloc) = Box::into_non_null_with_allocator(boxed_uninit);
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, len)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc) })
+        Self::try_from_slice_in(slice, Global)
     }
-
-    /// Creates a new boxed slice from a `[T; N]` array, moving the elements.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_from_array<const N: usize>(array: [T; N]) -> Result<Self, AllocError> {
-        let buf = RawVec::<T>::try_with_capacity(N).map_err(reserve_err_to_alloc_err)?;
-
-        unsafe {
-            let dst = buf.ptr();
-            for i in 0..N {
-                ptr::write(dst.add(i), ptr::read(array.as_ptr().add(i)));
-            }
-        }
-
-        // SAFETY: all `N` elements are now initialized.
-        let boxed_uninit: Box<[MaybeUninit<T>], Global> = unsafe { buf.into_box(N) };
-        let (raw, alloc) = Box::into_non_null_with_allocator(boxed_uninit);
-        let t_slice = {
-            let base = raw.as_ptr().cast::<T>();
-            ptr::slice_from_raw_parts_mut(base, N)
-        };
-        Ok(unsafe { Box::from_raw_in(t_slice, alloc) })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// str-specific constructors: Box<str, A>
-// ---------------------------------------------------------------------------
-
-impl Box<str, Global> {
-    /// Creates a new `Box<str>` from a `&str`, copying the bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_from_str(s: &str) -> Result<Self, AllocError> {
-        let bytes = s.as_bytes();
-        let boxed_bytes: Box<[u8]> = Box::try_from_slice(bytes)?;
-        // SAFETY: `s` is valid UTF-8, so the copied bytes are too.
-        Ok(unsafe { from_boxed_utf8_unchecked(boxed_bytes) })
-    }
-}
-
-impl<A: Allocator> Box<str, A> {
-    /// Creates a new `Box<str>` from a `&str` using the given allocator.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if the allocation fails.
-    #[inline]
-    pub fn try_from_str_in(s: &str, alloc: A) -> Result<Self, AllocError> {
-        let bytes = s.as_bytes();
-        let boxed_bytes: Box<[u8], A> = Box::try_from_slice_in(bytes, alloc)?;
-        // SAFETY: `s` is valid UTF-8.
-        Ok(unsafe { from_boxed_utf8_unchecked(boxed_bytes) })
-    }
-}
-
-/// Converts a `Box<[u8], A>` into a `Box<str, A>` without checking UTF-8 validity.
-///
-/// # Safety
-///
-/// The byte slice must be valid UTF-8.
-pub unsafe fn from_boxed_utf8_unchecked<A: Allocator>(b: Box<[u8], A>) -> Box<str, A> {
-    // SAFETY: caller guarantees the bytes are valid UTF-8. We extract the raw
-    // fat pointer and allocator directly from the box's fields to avoid the
-    // `Sized` requirement on `into_non_null_with_allocator`.
-    unsafe {
-        let inner = ptr::read(&b.inner);
-        let alloc = ptr::read(&b.alloc);
-        mem::forget(b);
-
-        // The `NonNull<[u8]>` is a fat pointer with (ptr, len) metadata.
-        // Coerce it to `NonNull<str>` which also has (ptr, len) metadata.
-        // This is sound because `str` and `[u8]` have identical layout.
-        let str_nn: NonNull<str> = mem::transmute(inner);
-        Box::from_raw_in(str_nn.as_ptr(), alloc)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers: error conversion and OOM handling
-// ---------------------------------------------------------------------------
-
-/// Converts a `TryReserveError` from `RawVec` into an `AllocError`.
-pub(crate) fn reserve_err_to_alloc_err(_e: TryReserveError) -> AllocError {
-    AllocError
 }
 
 #[cfg(test)]

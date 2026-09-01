@@ -60,8 +60,15 @@
     warn(clippy::pedantic),
     deny(clippy::arithmetic_side_effects)
 )]
+// Require every `unsafe fn` / `unsafe impl` to carry a `# Safety` doc section.
+#![deny(clippy::missing_safety_doc)]
 
-// FIXME: add deny lint for unsafe functions and invocations without SAFETY header
+// Refer to this crate by its own name so absolute `::olive_core::…` paths resolve
+// uniformly everywhere. Downstream members already reach us as `olive_core` via
+// their dependency edge; this alias makes the *same* spelling work for code
+// generated inside `olive-core` itself (e.g. the tuple `TryClone` impls emitted
+// by `olive-macros`), where the crate would otherwise only be reachable as `crate`.
+extern crate self as olive_core;
 
 /// The ported allocator API: [`Layout`], [`AllocError`], [`Allocator`],
 /// [`Global`], and the free-standing raw-pointer functions.

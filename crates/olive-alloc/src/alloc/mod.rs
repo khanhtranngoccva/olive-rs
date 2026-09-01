@@ -7,8 +7,10 @@ use core::ptr;
 pub use core::ptr::NonNull;
 pub use olive_core::alloc::AllocError;
 pub use olive_core::alloc::Allocator;
+pub use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc::LayoutExt;
 pub use olive_core::alloc::StaticAllocator;
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Global + free functions
@@ -276,6 +278,24 @@ unsafe impl Allocator for Global {
 // lifetime expire cannot invalidate any allocation; the only way memory is reclaimed is an
 // explicit `deallocate`. This matches std's own `unsafe impl StaticAllocator for Global`.
 unsafe impl StaticAllocator for Global {}
+
+// `Global` is a stateless ZST: cloning it cannot fail, so its `TryClone` is
+// infallible. This lets allocator-generic fallible ops (e.g. `Box::try_clone`)
+// clone the backing allocator through the same `TryClone` seam as any other
+// value, without assuming every allocator is `Copy`.
+impl TryClone for Global {
+    #[inline]
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(*self)
+    }
+}
+
+// SAFETY: `Global` is a stateless ZST forwarding every operation to the
+// process-wide global allocator. Cloning it yields another handle to the very
+// same backing store, so memory allocated through one handle is freely
+// deallocatable through the other; moving or dropping a clone invalidates
+// nothing. Equivalence therefore holds trivially.
+unsafe impl AllocatorTryClone for Global {}
 
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///

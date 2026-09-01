@@ -40,6 +40,7 @@ use core::ptr::NonNull;
 
 // Borrow the stable layout API from `core` instead of reimplementing it.
 pub use crate::alloc_errors::AllocError;
+use crate::try_traits::try_clone::TryClone;
 pub use core::alloc::Layout;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -475,6 +476,41 @@ pub unsafe trait StaticAllocator: Allocator {}
 // If an allocator is `StaticAllocator` all equivalent allocators must also uphold
 // its semantics, and references are equivalent to the allocator they reference.
 unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AllocatorTryClone
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Marks a type's [`TryClone`] implementation as sound with regard to
+/// [`Allocator`] equivalence.
+///
+/// This is Olive's fallible analogue of std's unstable
+/// [`AllocatorClone`](https://doc.rust-lang.org/beta/std/alloc/trait.AllocatorClone.html),
+/// which is a marker over `Clone`. Because Olive routes every fallible op through
+/// [`TryClone`], the marker here sits on `TryClone` instead: cloning an allocator
+/// may itself allocate (e.g. an arena that pools blocks on the heap), so the
+/// operation is fallible rather than infallible.
+///
+/// Implementors must ensure that, upon calling [`TryClone::try_clone`], the two
+/// resulting handles are *equivalent*: memory allocated through one may be freed
+/// through the other. Concretely, a `Box<T, A>` cloned via
+/// [`TryClone`] relies on this guarantee — the clone must land on the *same*
+/// backing store as the original, not on a freshly minted independent allocator.
+/// Further, mutable accesses such as moving or dropping the allocator must not
+/// invalidate its currently allocated blocks at least so long as clones exist.
+///
+/// Additionally, the bound that allocators do not unwind when (de)allocating
+/// applies here too: cloning an allocator must not unwind either.
+///
+/// It must also be the case that types which are `AllocatorTryClone` are either
+/// explicitly not copyable (such as by containing a `!Copy` field) or that
+/// copying them also respects allocator equivalence as if it had been a clone.
+///
+/// # Safety
+///
+/// Implementors must uphold the equivalence and non-invalidation guarantees
+/// described above for their [`TryClone::try_clone`] implementation.
+pub unsafe trait AllocatorTryClone: Allocator + TryClone {}
 
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///

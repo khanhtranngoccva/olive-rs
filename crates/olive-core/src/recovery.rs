@@ -97,7 +97,87 @@ pub trait ResumableSource {
     type Inner: Iterator<Item = Self::Item>;
 
     /// Decompose into an optional leading element and the inner iterator.
-    fn safe_into_iter(self) -> (Option<Self::Item>, Self::Inner);
+    fn decompose(self) -> (Option<Self::Item>, Self::Inner)
+    where
+        Self: Sized;
+
+    /// Decompose into an optional leading element, the inner iterator, and a
+    /// lossy size hint for the whole source.
+    ///
+    /// This is [`Self::decompose`] plus a [`LossySizeHint`] derived from the
+    /// inner iterator's [`size_hint`](Iterator::size_hint), adjusted upward by
+    /// one when a stranded head is present. Callers that only want the parts
+    /// should use [`Self::decompose`] directly.
+    fn decompose_with_size_hint(
+        self,
+    ) -> (Option<Self::Item>, Self::Inner, LossySizeHint)
+    where
+        Self: Sized,
+    {
+        let (head, tail) = self.decompose();
+        // Read the hint off `tail` before moving it out of the result tuple.
+        let hint = LossySizeHint::from_tail_hints(tail.size_hint(), head.is_some());
+        (head, tail, hint)
+    }
+}
+
+/// A lossy (overflow-safe) pair of size hints for a [`ResumableSource`].
+///
+/// Built from an inner iterator's [`size_hint`](Iterator::size_hint), bumped by
+/// one when the source carries a stranded head. Because a buggy or malicious
+/// iterator may report absurd bounds (e.g. `usize::MAX`), combining them with
+/// the head uses saturating/checked arithmetic rather than plain addition:
+///
+/// - the **lower** bound is saturated at `usize::MAX`;
+/// - the **upper** bound becomes `None` (unknown) if it would overflow.
+///
+/// Consumers typically only need [`estimated_total`](Self::estimated_total) to
+/// pick a reserve target; the raw bounds are exposed for those that want finer
+/// control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LossySizeHint {
+    lower: usize,
+    upper: Option<usize>,
+}
+
+impl LossySizeHint {
+    /// Build a lossy hint from an inner iterator's `(lower, upper)` size hint,
+    /// accounting for whether a stranded head contributes one extra element.
+    #[inline]
+    pub(crate) fn from_tail_hints(hint: (usize, Option<usize>), has_head: bool) -> Self {
+        let head_count = usize::from(has_head);
+        let (lower, upper) = hint;
+        Self {
+            lower: lower.saturating_add(head_count),
+            upper: upper.and_then(|u| u.checked_add(head_count)),
+        }
+    }
+
+    /// The guaranteed minimum number of elements (saturated on overflow).
+    #[must_use]
+    #[inline]
+    pub const fn lower(&self) -> usize {
+        self.lower
+    }
+
+    /// The guaranteed maximum number of elements, or `None` if unknown
+    /// (including the case where it overflowed).
+    #[must_use]
+    #[inline]
+    pub const fn upper(&self) -> Option<usize> {
+        self.upper
+    }
+
+    /// A single best-effort total to use as a reserve target: the upper bound
+    /// when known, otherwise the (saturated) lower bound.
+    #[must_use]
+    #[inline]
+    pub const fn estimated_total(&self) -> usize {
+        match self.upper {
+            Some(u) => u,
+            None => self.lower,
+        }
+    }
 }
 
 impl<I: IntoIterator> ResumableSource for I {
@@ -105,7 +185,7 @@ impl<I: IntoIterator> ResumableSource for I {
     type Inner = I::IntoIter;
 
     #[inline]
-    fn safe_into_iter(self) -> (Option<Self::Item>, Self::Inner) {
+    fn decompose(self) -> (Option<Self::Item>, Self::Inner) {
         (None, self.into_iter())
     }
 }
@@ -150,6 +230,7 @@ where
     I: Iterator,
 {
     /// Create a [`Resume`] with a stranded element and the remainder.
+    #[inline]
     pub const fn new(head: I::Item, remainder: I) -> Self {
         Self {
             head: Some(head),
@@ -157,7 +238,14 @@ where
         }
     }
 
+    /// Create a [`Resume`] with an optional stranded element and the remainder.
+    #[inline]
+    pub const fn compose(head: Option<I::Item>, remainder: I) -> Self {
+        Self { head, remainder }
+    }
+
     /// Create a [`Resume`] with no stranded element — only the remainder.
+    #[inline]
     pub const fn from_remainder(remainder: I) -> Self {
         Self {
             head: None,
@@ -216,7 +304,7 @@ where
     type Inner = I;
 
     #[inline]
-    fn safe_into_iter(self) -> (Option<Self::Item>, Self::Inner) {
+    fn decompose(self) -> (Option<Self::Item>, Self::Inner) {
         (self.head, self.remainder)
     }
 }
@@ -262,7 +350,7 @@ mod tests {
     #[test]
     fn safe_into_iter_yields_head_then_remainder() {
         let r = Resume::new(0, 1..4);
-        let (head, mut iter) = r.safe_into_iter();
+        let (head, mut iter) = r.decompose();
         assert_eq!(head, Some(0));
         assert_eq!(iter.next(), Some(1));
         assert_eq!(iter.next(), Some(2));
@@ -292,10 +380,10 @@ mod tests {
         type Base = Range<i32>;
 
         let r1: Resume<Base> = Resume::new(0, 1..4);
-        let (_head, inner): (_, Base) = r1.safe_into_iter();
+        let (_head, inner): (_, Base) = r1.decompose();
 
         let r2: Resume<Base> = Resume::from_remainder(inner);
-        let (_head2, mut inner2): (_, Base) = r2.safe_into_iter();
+        let (_head2, mut inner2): (_, Base) = r2.decompose();
 
         // Still Base, never Resume<Resume<Base>>.
         assert_eq!(inner2.next(), Some(1));
@@ -304,7 +392,7 @@ mod tests {
     #[test]
     fn blanket_source_for_range() {
         let range = 10..13;
-        let (head, inner): (Option<i32>, _) = range.safe_into_iter();
+        let (head, inner): (Option<i32>, _) = range.decompose();
         assert!(head.is_none());
         let v: Vec<i32> = inner.collect();
         assert_eq!(v, vec![10, 11, 12]);

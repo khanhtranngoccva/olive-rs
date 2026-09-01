@@ -17,6 +17,7 @@
 # members with `dep.workspace = true`, so versions never drift across the stack.
 members = [
     "crates/olive-build",
+    "crates/olive-macros",
     "crates/olive-core",
     "crates/olive-alloc",
     "crates/olive-std",
@@ -35,10 +36,18 @@ repository = "https://example.invalid/olive-rs"
 # Path dependencies, shared so every member references the same on-disk crates.
 [workspace.dependencies]
 olive-build = { path = "crates/olive-build" }
+olive-macros = { path = "crates/olive-macros" }
 olive-core = { path = "crates/olive-core" }
 olive-alloc = { path = "crates/olive-alloc" }
 olive-std = { path = "crates/olive-std" }
 cfg-if = "1.0.4"
+
+# Procedural-macro toolchain. Pinned once so olive-macros (and any future macro
+# crate) share identical versions; these are host-side only and never linked
+# into no_std downstream targets.
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 
 [workspace.lints.rust]
 missing_docs = "warn"

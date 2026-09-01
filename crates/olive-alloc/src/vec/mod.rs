@@ -16,19 +16,13 @@
 //! Element cloning uses the fallible [`TryClone`] trait throughout, so a `Vec<T>`
 //! can hold values whose own construction can fail (nested collections, boxes,
 //! …) without ever aborting.
-//!
-//! # Arithmetic safety
-//!
-//! All index and length arithmetic in this module operates on values bounded by
-//! `self.len` and `self.capacity()`, both of which are `usize` fields maintained
-//! under strict invariants (`len <= capacity`). Overflow would require
-//! `capacity > usize::MAX`, which is impossible because the allocator rejects
-//! such layouts. We therefore suppress `clippy::arithmetic_side_effects` at the
-//! module level rather than scattering 30+ individual allows or converting
-//! every `+= 1` into a checked operation that would panic anyway.
 
-#![allow(clippy::arithmetic_side_effects)]
-
+// This module performs a great deal of index arithmetic on `len`/`capacity`, so
+// `clippy::arithmetic_side_effects` (denied crate-wide on non-test builds) is
+// suppressed *per site* rather than at the module level. Each allow carries a
+// `reason = "asserted …"` documenting the invariant that makes the operation
+// overflow-free; a blanket `#![allow]` would hide real bugs, so new arithmetic
+// must be annotated individually to compile.
 use core::cmp;
 use core::fmt;
 use core::mem::ManuallyDrop;
@@ -52,10 +46,10 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 /// Error returned by fallible vector operations that may both reserve capacity
 /// and clone elements.
 ///
-/// Covers `try_from_elem`, `try_from_slice`, `try_resize`, and
-/// `try_extend_from_slice_with_rollback` — any operation whose failure modes are
-/// limited to a capacity reservation ([`TryReserveError`]) or an element clone
-/// failure ([`TryCloneError`]).
+/// Covers `try_from_elem`, `try_from_slice`, `try_resize`,
+/// `try_extend_from_slice_with_rollback`, and so on — any operation whose failure
+/// modes are limited to a capacity reservation ([`TryReserveError`]) or an element
+/// clone failure ([`TryCloneError`]).
 #[derive(Clone, PartialEq, Eq)]
 pub enum TryVecWithCloneError {
     /// A capacity reservation on the vector failed (overflow or OOM).
@@ -155,7 +149,7 @@ impl fmt::Display for TryVecRemoveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "index ({}) is out of bounds len ({})",
+            "index {} is out of bounds, vector length is {} (index must be smaller than length)",
             self.index, self.len
         )
     }
@@ -173,11 +167,32 @@ pub struct TryPushWithinCapacityError {
 
 impl fmt::Display for TryPushWithinCapacityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "no spare capacity: vec is full at len {}", self.len)
+        write!(f, "no spare capacity: vec is full at length {}", self.len)
     }
 }
 
 impl core::error::Error for TryPushWithinCapacityError {}
+
+/// Error returned by [`Vec::try_swap`] when an index is out of bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrySwapError {
+    /// The offending index (whichever was checked first).
+    pub index: usize,
+    /// The vector's length at the time of the call.
+    pub len: usize,
+}
+
+impl fmt::Display for TrySwapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "index {} is out of bounds, vector length is {} (indices must be smaller than length)",
+            self.index, self.len
+        )
+    }
+}
+
+impl core::error::Error for TrySwapError {}
 
 /// Error returned by [`Vec::try_from_fn`] when constructing a vector from a
 /// fallible closure.
@@ -342,18 +357,14 @@ impl<T> Vec<T, Global> {
     {
         let mut vec = Self::new();
         if n > 0 {
-            vec.raw
-                .try_reserve_exact(0, n)
+            vec.try_reserve_exact(n)
                 .map_err(TryVecWithClosureError::Reserve)?;
         }
         for _ in 0..n {
             match f() {
                 Ok(item) => {
-                    // Capacity was reserved above, so this cannot fail.
-                    unsafe {
-                        vec.raw.ptr().add(vec.len).write(item);
-                    }
-                    vec.len += 1;
+                    // SAFETY: Capacity was reserved above, so this cannot fail.
+                    unsafe { vec.force_push(item) };
                 }
                 Err(e) => return Err(TryVecWithClosureError::Closure(e)),
             }
@@ -377,8 +388,7 @@ impl<T> Vec<T, Global> {
     /// - `length` needs to be less than or equal to `capacity`.
     /// - The first `length` values must be properly initialized values of type T.
     /// - `capacity` needs to be the capacity that the pointer was allocated with, if the pointer is required to be allocated.
-    /// - The allocated size in bytes must be no larger than `isize::MAX`. See the safety documentation of [`pointer::offset`](core::pointer::offset).
-    // FIXME: pointer::offset is unlinked
+    /// - The allocated size in bytes must be no larger than `isize::MAX`. See the safety documentation of `ptr.offset()`.
     #[inline]
     pub unsafe fn from_raw_parts(ptr: *mut T, length: usize, capacity: usize) -> Self {
         debug_assert!(
@@ -412,10 +422,10 @@ impl<T> Vec<T, Global> {
     /// [`from_raw_parts`]: Self::from_raw_parts
     #[must_use = "losing the pointer will leak memory"]
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
-        let this = ManuallyDrop::new(self);
+        let mut this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
-        (this.raw.ptr(), this.len, this.raw.capacity())
+        (this.as_mut_ptr(), this.len(), this.capacity())
     }
 
     /// Decomposes a `Vec<T>` into its constituent parts: a non-null pointer, a
@@ -434,7 +444,7 @@ impl<T> Vec<T, Global> {
         let this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
-        (this.raw.non_null(), this.len, this.raw.capacity())
+        (this.raw.non_null(), this.len(), this.capacity())
     }
 }
 
@@ -498,9 +508,41 @@ impl<T, A: Allocator> Vec<T, A> {
         // SAFETY: we write to `dest`, which is initialized and within bounds.
         Ok(unsafe {
             dest.write(value);
-            self.len += 1;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted self.len < self.capacity, self.capacity <= usize::MAX"
+            )]
+            {
+                self.len += 1;
+            }
             &mut *dest
         })
+    }
+
+    /// Appends `value` to the back of the vector without checking or growing
+    /// capacity. This is the fast path used internally by bulk operations that
+    /// have already secured capacity up front via [`Self::try_reserve`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that `self.len < self.capacity()`, i.e. there
+    /// is at least one spare slot in the buffer. Writing past the end of the
+    /// allocation is undefined behavior.
+    #[inline]
+    pub(crate) unsafe fn force_push(&mut self, value: T) {
+        debug_assert!(
+            self.len < self.capacity(),
+            "force_push requires spare capacity"
+        );
+        // SAFETY: caller guarantees a spare slot, so this is in-bounds.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted self.len < self.capacity, self.capacity <= usize::MAX"
+        )]
+        unsafe {
+            self.raw.ptr().add(self.len).write(value);
+            self.len += 1;
+        }
     }
 
     /// Inserts an element at position `index`, shifting later elements to the
@@ -567,20 +609,27 @@ impl<T, A: Allocator> Vec<T, A> {
             }
         }
         let ptr = self.as_mut_ptr();
-        // SAFETY: `index < self.len <= capacity`, so both pointers are in-bounds.
+        // SAFETY: `index < self.len < capacity`, so both pointers are in-bounds.
         let dest = unsafe { ptr.add(index) };
         let shifted = unsafe { dest.add(1) };
         // Shift the tail `[index..len]` one slot to the right (overlap allowed).
         // `copy` handles overlapping regions by copying in the correct order
         // for the direction of movement.
         // The tail's location is also "dest" so we use that variable directly to save space.
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted index < self.len")]
         unsafe {
             ptr::copy(dest, shifted, self.len - index);
         }
         // SAFETY: we write to `dest`, which is initialized and within bounds.
         Ok(unsafe {
             dest.write(value);
-            self.len += 1;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted self.len < self.capacity, self.capacity <= usize::MAX"
+            )]
+            {
+                self.len += 1;
+            }
             &mut *dest
         })
     }
@@ -630,8 +679,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// - `length` needs to be less than or equal to `capacity`.
     /// - The first `length` values must be properly initialized values of type T.
     /// - `capacity` needs to be the capacity that the pointer was allocated with, if the pointer is required to be allocated.
-    /// - The allocated size in bytes must be no larger than `isize::MAX`. See the safety documentation of [`pointer::offset`](core::pointer::offset).
-    // FIXME: pointer::offset is unlinked
+    /// - The allocated size in bytes must be no larger than `isize::MAX`. See the safety documentation of `ptr.offset()`.
     #[inline]
     pub unsafe fn from_raw_parts_in(ptr: *mut T, length: usize, capacity: usize, alloc: A) -> Self {
         debug_assert!(
@@ -674,12 +722,12 @@ impl<T, A: Allocator> Vec<T, A> {
     /// allocation: it must eventually deallocate `ptr` with `alloc`.
     #[must_use = "losing the pointer will leak memory"]
     pub unsafe fn into_raw_parts_with_alloc(self) -> (*mut T, usize, usize, A) {
-        let this = ManuallyDrop::new(self);
+        let mut this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller.
         unsafe {
             (
-                this.raw.ptr(),
-                this.len,
+                this.as_mut_ptr(),
+                this.len(),
                 this.capacity(),
                 ptr::read(this.raw.allocator()),
             )
@@ -724,7 +772,25 @@ impl<T, A: Allocator> Vec<T, A> {
         self.raw.try_reserve_exact(self.len, additional)
     }
 
+    /// Ensures the vector has room for at least `total` elements *in total*
+    /// (an absolute target, not an increment). This is the shape callers need
+    /// when they already hold a desired final size — e.g. sizing from an
+    /// iterator's `size_hint`.
+    ///
+    /// A degenerate input (`total < len`) needs no growth and succeeds without
+    /// touching the allocator; it never wraps into a spurious huge request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the new capacity overflows or the
+    /// allocation fails.
+    pub fn try_reserve_total(&mut self, total: usize) -> Result<(), TryReserveError> {
+        let additional = total.saturating_sub(self.len);
+        self.raw.try_reserve(self.len, additional)
+    }
+
     /// Shrinks the capacity down to `min_capacity`, keeping at least `len`.
+    /// Note that the resulting capacity may still be more than `min_capacity`.
     ///
     /// # Errors
     ///
@@ -739,7 +805,8 @@ impl<T, A: Allocator> Vec<T, A> {
         }
     }
 
-    /// Shrinks the capacity to fit the current length.
+    /// Shrinks the capacity to attempt to fit the current length.
+    /// Note that the actual capacity may still be more than the current length.
     ///
     /// # Errors
     ///
@@ -756,11 +823,19 @@ impl<T, A: Allocator> Vec<T, A> {
 
 impl<T, A: Allocator> Vec<T, A> {
     /// Converts this vector into a `Box<[T]>` with exactly `len()` elements and
-    /// no excess capacity.
+    /// potentially no excess capacity.
     ///
     /// No elements are cloned: when there is spare capacity the buffer is
     /// shrunk in place, then handed straight to the box. For an empty vector
     /// this returns an empty boxed slice without allocating.
+    ///
+    /// # Implementation notes
+    ///
+    /// In case there is more hidden capacity than the slice describes due to
+    /// allocator quirks, it is still possible to deallocate or grow down the line
+    /// because the allocator specification allows specifying any current layout
+    /// that is anywhere between the size of the expected layout and the actual
+    /// layout given (including both ends).
     ///
     /// # Errors
     ///
@@ -804,6 +879,14 @@ impl<T, A: Allocator> Vec<T, A> {
     /// excess capacity beyond `N`, a shrink-to-fit reallocation is attempted
     /// first; failure there yields [`TryVecIntoArrayError::Shrink`].
     ///
+    /// # Implementation notes
+    ///
+    /// In case there is more hidden capacity than the array describes due to
+    /// allocator quirks, it is still possible to deallocate or grow down the line
+    /// because the allocator specification allows specifying any current layout
+    /// that is anywhere between the size of the expected layout and the actual
+    /// layout given (including both ends).
+    ///
     /// # Errors
     ///
     /// * [`TryVecIntoArrayError::LengthMismatch`] — `self.len() != N`.
@@ -840,9 +923,8 @@ impl<T, A: Allocator> Vec<T, A> {
         }
         // Prevent the outer `Drop` from running while we dismantle the fields.
         let this = ManuallyDrop::new(self);
-        // SAFETY: identical to `try_into_array` — the buffer holds exactly `N`
-        // initialized elements allocated by `A`; casting to `*mut [T; N]` is
-        // layout-compatible.
+        // SAFETY: the buffer holds exactly `N` initialized elements allocated by `A`;
+        // casting to `*mut [T; N]` is layout-compatible. Allocator is moved out.
         unsafe {
             let raw_ptr = this.raw.ptr();
             let alloc = ptr::read(this.raw.allocator());
@@ -913,6 +995,29 @@ impl<T, A: Allocator> Vec<T, A> {
     }
 }
 
+/// Panic-aware rollback guard for fallible mutation loops.
+///
+/// If the guarded section unwinds (e.g. a clone or closure panics), `Drop`
+/// truncates the vector back to `original_len`, ensuring any partially-written
+/// tail is dropped exactly once.
+///
+/// Stores a raw `*mut Vec` to avoid conflicting with the `&mut self` borrows
+/// used by the guarded loop body. The pointer is derived directly from the
+/// enclosing `&mut self` (via `&raw mut *self`), so it carries mutable provenance
+/// — no `*const → *mut` reborrow round-trip, which keeps Miri's Stacked Borrows
+/// model happy.
+struct RollbackGuard<T, A: Allocator>(*mut Vec<T, A>, usize);
+
+impl<T, A: Allocator> Drop for RollbackGuard<T, A> {
+    fn drop(&mut self) {
+        // SAFETY: the pointer was obtained from a valid `&mut Vec` at guard
+        // construction time; the Vec is alive for the entire scope (the guard
+        // is a local that drops before the function returns).
+        let vec_ref = unsafe { &mut *self.0 };
+        vec_ref.truncate(self.1);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mutation methods — generic allocator
 // ---------------------------------------------------------------------------
@@ -935,7 +1040,10 @@ impl<T, A: Allocator> Vec<T, A> {
         if self.len == 0 {
             None
         } else {
-            self.len -= 1;
+            #[allow(clippy::arithmetic_side_effects, reason = "asserted self.len > 0")]
+            {
+                self.len -= 1;
+            }
             // SAFETY: we extract and move the element at self.len == new_len == old_len - 1
             Some(unsafe { ptr::read(self.as_mut_ptr().add(self.len)) })
         }
@@ -959,7 +1067,11 @@ impl<T, A: Allocator> Vec<T, A> {
         //   those elements and unwinding cannot double-free them. (A second
         //   panic during unwind aborts, per Rust's rules.)
         unsafe {
-            let remaining = self.len - new_len;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted new_len < self.len"
+            )]
+            let remaining = { self.len - new_len };
             let tail = slice::from_raw_parts_mut(self.as_mut_ptr().add(new_len), remaining);
             self.len = new_len;
             ptr::drop_in_place(tail);
@@ -995,13 +1107,20 @@ impl<T, A: Allocator> Vec<T, A> {
         if index >= len {
             return Err(TryVecRemoveError { index, len });
         }
-        self.len -= 1;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "if len == 0, then index >= len, which causes early return above"
+        )]
+        {
+            self.len -= 1;
+        }
+        let last_index = self.len;
         // SAFETY: bounds checked above.
         Ok(unsafe {
             let value = ptr::read(self.as_mut_ptr().add(index));
-            if index != len - 1 {
+            if index != last_index {
                 ptr::copy_nonoverlapping(
-                    self.as_mut_ptr().add(len - 1),
+                    self.as_mut_ptr().add(last_index),
                     self.as_mut_ptr().add(index),
                     1,
                 );
@@ -1021,13 +1140,33 @@ impl<T, A: Allocator> Vec<T, A> {
         if index >= len {
             return Err(TryVecRemoveError { index, len });
         }
-        self.len -= 1;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "if len == 0, then index >= len, which causes early return above"
+        )]
+        {
+            self.len -= 1;
+        }
         let ptr = self.as_mut_ptr();
         // SAFETY: bounds checked above.
-        let removed = unsafe { ptr::read(ptr.add(index)) };
+        let ptr_at_index = unsafe { ptr.add(index) };
+        let removed = unsafe { ptr::read(ptr_at_index) };
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted index < len => index + 1 <= len"
+        )]
+        let index_plus_one = index + 1;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted index + 1 <= len, by corollary len - (index + 1) >= 0"
+        )]
+        let remaining = len - index_plus_one;
         // SAFETY: We are removing elements from `index + 1..len` (`len` noninclusive).
-        unsafe {
-            ptr::copy(ptr.add(index + 1), ptr.add(index), len - index - 1);
+        // if `remaining == 0`, the source pointer is out of bounds and may overflow to 0 in special cases.
+        if remaining > 0 {
+            unsafe {
+                ptr::copy(ptr.add(index_plus_one), ptr_at_index, remaining);
+            }
         }
         Ok(removed)
     }
@@ -1053,7 +1192,6 @@ impl<T, A: Allocator> Vec<T, A> {
     ///
     /// The predicate receives a mutable reference to each element. Elements
     /// for which it returns `false` are dropped in place.
-    // TODO: need to validate from here
     pub fn retain_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut T) -> bool,
@@ -1085,17 +1223,32 @@ impl<T, A: Allocator> Vec<T, A> {
         impl<T, A: Allocator> Drop for PanicGuard<'_, T, A> {
             #[cold]
             fn drop(&mut self) {
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted self.read <= self.original_len"
+                )]
                 let remaining = self.original_len - self.read;
-                // SAFETY: Trailing unchecked items must be valid since we never touch them.
-                unsafe {
-                    ptr::copy(
-                        self.v.as_ptr().add(self.read),
-                        self.v.as_mut_ptr().add(self.write),
-                        remaining,
-                    );
+                // If `remaining == 0`, then `self.read == self.original_len` and
+                // `as_ptr().add(self.read)` would address one past the buffer's
+                // end (and could even overflow when `original_len == capacity`).
+                // A zero-length copy is a no-op anyway, so skip it entirely.
+                if remaining > 0 {
+                    // SAFETY: Trailing unchecked items must be valid since we
+                    // never touch them, and `read < original_len <= capacity`.
+                    unsafe {
+                        ptr::copy(
+                            self.v.as_ptr().add(self.read),
+                            self.v.as_mut_ptr().add(self.write),
+                            remaining,
+                        );
+                    }
                 }
                 // SAFETY: After filling holes, all items are in contiguous memory.
                 unsafe {
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "asserted write + remaining < read + remaining <= original_len"
+                    )]
                     self.v.set_len(self.write + remaining);
                 }
             }
@@ -1108,7 +1261,13 @@ impl<T, A: Allocator> Vec<T, A> {
             if !f(cur) {
                 break;
             }
-            read += 1;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted read <= original_len"
+            )]
+            {
+                read += 1;
+            }
             if read == original_len {
                 // All elements are kept, return early.
                 return;
@@ -1116,7 +1275,12 @@ impl<T, A: Allocator> Vec<T, A> {
         }
 
         // Critical section starts here and at least one element is going to be removed.
-        // Advance `g.read` early to avoid double drop if `drop_in_place` panicked.
+        // Advance `g.read` early to avoid double drop (i.e. shifting a hole that has attempted drop in)
+        // if `drop_in_place` panicked.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted read < original_len => read + 1 == original_len"
+        )]
         let mut g = PanicGuard {
             v: self,
             read: read + 1,
@@ -1131,7 +1295,13 @@ impl<T, A: Allocator> Vec<T, A> {
             let cur = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
             if !f(cur) {
                 // Advance `read` early to avoid double drop if `drop_in_place` panicked.
-                g.read += 1;
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted g.read < original_len"
+                )]
+                {
+                    g.read += 1;
+                }
                 // SAFETY: We never touch this element again after dropped.
                 unsafe { ptr::drop_in_place(cur) };
             } else {
@@ -1141,8 +1311,20 @@ impl<T, A: Allocator> Vec<T, A> {
                     let hole = g.v.as_mut_ptr().add(g.write);
                     ptr::copy_nonoverlapping(cur, hole, 1);
                 }
-                g.write += 1;
-                g.read += 1;
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted g.write < g.read < original_len"
+                )]
+                {
+                    g.write += 1;
+                }
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted g.read < original_len"
+                )]
+                {
+                    g.read += 1;
+                }
             }
         }
 
@@ -1171,112 +1353,173 @@ impl<T, A: Allocator> Vec<T, A> {
     /// The `same_bucket` function is passed references to two elements; if
     /// `same_bucket(a, b)` returns `true`, `a` is removed. Note the arguments
     /// are in reverse order relative to their position in the vector.
-    // TODO: need to validate this function
     pub fn dedup_by<F>(&mut self, mut same_bucket: F)
     where
         F: FnMut(&mut T, &mut T) -> bool,
     {
-        let len = self.len;
+        let len = self.len();
         if len <= 1 {
             return;
         }
 
-        // Drop guard: if `same_bucket` panics mid-way, some slots have already
-        // been dropped (leaving holes) while `self.len` still reflects the
-        // original length. Without restoring contiguity, the Vec's `Drop`
-        // would either double-free the dropped slots or leak the tail. The
-        // guard backfills any remaining gap and corrects the length on unwind.
-        struct DedupGuard<'a, T, A: Allocator> {
-            v: &'a mut Vec<T, A>,
-            write: usize,
-            read: usize,
-            original_len: usize,
-            active: bool,
-        }
-
-        impl<T, A: Allocator> Drop for DedupGuard<'_, T, A> {
-            fn drop(&mut self) {
-                if !self.active || self.read == self.original_len {
-                    return;
-                }
-                // Backfill `[write..read)` from `[read..original_len)` to close
-                // the hole left by the duplicates we already dropped.
-                unsafe {
-                    ptr::copy(
-                        self.v.as_ptr().add(self.read),
-                        self.v.as_mut_ptr().add(self.write),
-                        self.original_len - self.read,
-                    );
-                }
-                // SAFETY: after backfilling, items `[0..write)` are contiguous
-                // and valid; the rest are uninitialized.
-                unsafe {
-                    self.v.set_len(self.write);
-                }
-            }
-        }
-
-        let start = self.as_mut_ptr();
-        // Find the first duplicate.
+        // Check if we ever want to remove anything.
+        // This allows to use copy_non_overlapping in next cycle.
+        // And avoids any memory writes if we don't need to remove anything.
         let mut first_duplicate_idx: usize = 1;
+        let start = self.as_mut_ptr();
         while first_duplicate_idx != len {
-            let found = unsafe {
-                // SAFETY: first_duplicate_idx is in [1, len).
-                let prev = start.add(first_duplicate_idx - 1);
+            let found_duplicate = unsafe {
+                // SAFETY: first_duplicate always in range [1..len)
+                // Note that we start iteration from 1 so we never overflow.
+                let prev = start.add(first_duplicate_idx.wrapping_sub(1));
                 let current = start.add(first_duplicate_idx);
+                // We explicitly say in docs that references are reversed.
                 same_bucket(&mut *current, &mut *prev)
             };
-            if found {
+            if found_duplicate {
                 break;
             }
-            first_duplicate_idx += 1;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted in loop that first_duplicate_idx != len and 
+                first_duplicate_idx starts with 0 => first_duplicate_idx < len"
+            )]
+            {
+                first_duplicate_idx += 1;
+            }
         }
+        // Don't need to remove anything.
+        // We cannot get bigger than len.
         if first_duplicate_idx == len {
             return;
         }
 
-        // Gap-filling loop.
-        let mut read = first_duplicate_idx + 1;
-        let mut write = first_duplicate_idx;
+        /* INVARIANT: vec.len() >= read > write > write-1 >= 0 */
+        struct FillGapOnDrop<'a, T, A: Allocator> {
+            /* Offset of the element we want to check if it is duplicate */
+            read: usize,
 
-        // Activate the guard before mutating anything.
-        let mut guard = DedupGuard {
-            v: self,
-            write,
-            read,
-            original_len: len,
-            active: true,
-        };
+            /* Offset of the place where we want to place the non-duplicate
+             * when we find it. */
+            write: usize,
 
-        // SAFETY: first_duplicate_idx < len, so this slot is initialized.
-        unsafe { ptr::drop_in_place(start.add(first_duplicate_idx)) };
+            /* The Vec that would need correction if `same_bucket` panicked */
+            vec: &'a mut Vec<T, A>,
+        }
 
-        while read < len {
-            // SAFETY: read < len, write >= 1, so all derived pointers are valid.
-            let (read_ptr, prev_ptr) = unsafe { (start.add(read), start.add(write - 1)) };
-            let found = unsafe { same_bucket(&mut *read_ptr, &mut *prev_ptr) };
-            if found {
-                read += 1;
-                guard.read = read;
-                // SAFETY: read_ptr points to an initialized element.
-                unsafe { ptr::drop_in_place(read_ptr) };
-            } else {
-                // SAFETY: write < read, so write_ptr is a valid distinct slot.
-                let write_ptr = unsafe { start.add(write) };
-                // SAFETY: read_ptr != write_ptr (guaranteed by initial gap).
-                unsafe { ptr::copy_nonoverlapping(read_ptr, write_ptr, 1) };
-                write += 1;
-                read += 1;
-                guard.write = write;
-                guard.read = read;
+        impl<T, A: Allocator> Drop for FillGapOnDrop<'_, T, A> {
+            fn drop(&mut self) {
+                /* This code gets executed when `same_bucket` panics */
+
+                /* SAFETY: invariant guarantees that `read - write`
+                 * and `len - read` never overflow and that the copy is always
+                 * in-bounds. */
+                unsafe {
+                    let ptr = self.vec.as_mut_ptr();
+                    let len = self.vec.len();
+
+                    /* How many items were left when `same_bucket` panicked.
+                     * Basically vec[read..].len() */
+                    let items_left = len.wrapping_sub(self.read);
+
+                    if items_left > 0 {
+                        /* Pointer to first item in vec[write..write+items_left] slice */
+                        let dropped_ptr = ptr.add(self.write);
+                        /* Pointer to first item in vec[read..] slice */
+                        let valid_ptr = ptr.add(self.read);
+
+                        /* Copy `vec[read..]` to `vec[write..write+items_left]`.
+                         * The slices can overlap, so `copy_nonoverlapping`
+                         * cannot be used. Skipping the copy when `items_left
+                         * == 0` avoids forming a one-past-the-end (and
+                         * possibly overflowing) source pointer. */
+                        ptr::copy(valid_ptr, dropped_ptr, items_left);
+                    }
+
+                    /* How many items have been already dropped
+                     * Basically vec[read..write].len() */
+                    // asserted self.write < self.read
+                    let dropped = self.read.wrapping_sub(self.write);
+
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "asserted dropped <= self.read <= len"
+                    )]
+                    self.vec.set_len(len - dropped);
+                }
             }
         }
-        // Loop completed without panic; deactivate the guard and finalize via
-        // the guard's own reference (we cannot borrow `self` again while the
-        // guard is alive).
-        guard.active = false;
-        // SAFETY: all items before `write` are now valid and contiguous.
-        unsafe { guard.v.set_len(write) };
+
+        /* Drop items while going through Vec, it should be more efficient than
+         * doing slice partition_dedup + truncate */
+
+        // Construct gap first and then drop item to avoid memory corruption if `T::drop` panics.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted first_duplicate_idx < len"
+        )]
+        let mut gap = FillGapOnDrop {
+            read: first_duplicate_idx + 1,
+            write: first_duplicate_idx,
+            vec: self,
+        };
+        unsafe {
+            // SAFETY: we checked that first_duplicate_idx in bounds before.
+            // If drop panics, `gap` would remove this item without drop.
+            ptr::drop_in_place(start.add(first_duplicate_idx));
+        }
+
+        /* SAFETY: Because of the invariant, read_ptr, prev_ptr and write_ptr
+         * are always in-bounds and read_ptr never aliases prev_ptr */
+        unsafe {
+            while gap.read < len {
+                // SAFETY: `gap.read < len <= capacity`, so both offsets address
+                // initialized slots within the buffer. When `gap.read` is the
+                // final index (`len - 1`), the pointers still point at valid,
+                // allocated memory — no one-past-the-end or overflowing offset
+                // is ever formed here.
+                let read_ptr = start.add(gap.read);
+                let prev_ptr = start.add(gap.write.wrapping_sub(1));
+
+                // We explicitly say in docs that references are reversed.
+                let found_duplicate = same_bucket(&mut *read_ptr, &mut *prev_ptr);
+                if found_duplicate {
+                    // Increase `gap.read` now since the drop may panic.
+                    #[allow(clippy::arithmetic_side_effects, reason = "asserted gap.read < len")]
+                    {
+                        gap.read += 1;
+                    }
+                    /* We have found duplicate, drop it in-place */
+                    ptr::drop_in_place(read_ptr);
+                } else {
+                    let write_ptr = start.add(gap.write);
+
+                    /* read_ptr cannot be equal to write_ptr because at this point
+                     * we guaranteed to skip at least one element (before loop starts).
+                     */
+                    ptr::copy_nonoverlapping(read_ptr, write_ptr, 1);
+
+                    /* We have filled that place, so go further */
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "asserted gap.write < gap.read < len"
+                    )]
+                    {
+                        gap.write += 1;
+                    }
+                    #[allow(clippy::arithmetic_side_effects, reason = "asserted gap.read < len")]
+                    {
+                        gap.read += 1;
+                    }
+                }
+            }
+
+            /* Technically we could let `gap` clean up with its Drop, but
+             * when `same_bucket` is guaranteed to not panic, this bloats a little
+             * the codegen, so we just do it manually */
+            gap.vec.set_len(gap.write);
+            olive_core::mem::forget(gap);
+        }
     }
 
     /// Pushes an element onto the end of the vector without attempting to grow
@@ -1285,17 +1528,13 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Errors
     ///
     /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
-    // FIXME: need give_back variant. Replace inline pushing with unsafe force_push()
     pub fn try_push_within_capacity(&mut self, value: T) -> Result<(), TryPushWithinCapacityError> {
         // Prevent a degenerate scenario where `length` is exceeding `capacity`
         if self.len >= self.capacity() {
             return Err(TryPushWithinCapacityError { len: self.len });
         }
-        // SAFETY: capacity confirmed, slot is allocated.
-        unsafe {
-            self.raw.ptr().add(self.len).write(value);
-        }
-        self.len += 1;
+        // SAFETY: spare capacity was just confirmed above.
+        unsafe { self.force_push(value) };
         Ok(())
     }
 
@@ -1306,6 +1545,7 @@ impl<T, A: Allocator> Vec<T, A> {
             return None;
         }
         // SAFETY: len > 0, so the last slot is initialized.
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted self.len > 0")]
         let last = unsafe { &mut *self.as_mut_ptr().add(self.len - 1) };
         if predicate(last) { self.pop() } else { None }
     }
@@ -1319,7 +1559,6 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Errors
     ///
     /// Returns [`TryVecWithCloneError`] on a reservation or clone failure.
-    // FIXME: need a panic-aware rollback guard, replace inline pushing with unsafe force_push()
     pub fn try_extend_from_slice_with_rollback(
         &mut self,
         other: &[T],
@@ -1330,24 +1569,22 @@ impl<T, A: Allocator> Vec<T, A> {
         if other.is_empty() {
             return Ok(());
         }
-        self.raw
-            .try_reserve(self.len, other.len())
+        self.try_reserve(other.len())
             .map_err(TryVecWithCloneError::Reserve)?;
         let len_before = self.len;
+        let guard = RollbackGuard(&raw mut *self, len_before);
         for item in other {
             match item.try_clone() {
                 Ok(cloned) => {
-                    unsafe {
-                        self.raw.ptr().add(self.len).write(cloned);
-                    }
-                    self.len += 1;
+                    // SAFETY: capacity was reserved above for all of `other`.
+                    unsafe { self.force_push(cloned) };
                 }
                 Err(e) => {
-                    self.truncate(len_before);
                     return Err(TryVecWithCloneError::Clone(e));
                 }
             }
         }
+        core::mem::forget(guard);
         Ok(())
     }
 
@@ -1360,25 +1597,33 @@ impl<T, A: Allocator> Vec<T, A> {
     ///
     /// Returns [`TryReserveError`] if reserving space for `other`'s elements
     /// fails.
-    // FIXME: Replace inner try_reserve() with public try_reserve
     pub fn try_append(&mut self, other: &mut Self) -> Result<(), TryReserveError> {
         let extra = other.len;
         if extra == 0 {
             return Ok(());
         }
-        self.raw.try_reserve(self.len, extra)?;
+        self.try_reserve(extra)?;
         let src = other.as_mut_ptr();
         let dst = unsafe { self.as_mut_ptr().add(self.len) };
         // SAFETY: `self` and `other` are distinct vectors; their buffers never overlap.
         unsafe {
             ptr::copy_nonoverlapping(src, dst, extra);
         }
-        self.len += extra;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted len + extra <= capacity (reserved above)"
+        )]
+        {
+            self.len += extra;
+        }
         other.len = 0;
         Ok(())
     }
 
     /// Resizes the vector so its length becomes `new_len`.
+    ///
+    /// Parameter order matches [`Self::try_resize_with`] and std's `resize`:
+    /// the target length comes first, then the fill value.
     ///
     /// If `new_len` is greater than the current length, the vector is extended
     /// by cloning `value` via [`TryClone`]. If smaller, it is truncated.
@@ -1386,8 +1631,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// # Errors
     ///
     /// Returns [`TryVecWithCloneError`] on a reservation or clone failure.
-    // FIXME: need panic-aware rollback behavior. replace inline pushing with unsafe force_push()
-    pub fn try_resize(&mut self, value: &T, new_len: usize) -> Result<(), TryVecWithCloneError>
+    pub fn try_resize(&mut self, new_len: usize, value: &T) -> Result<(), TryVecWithCloneError>
     where
         T: TryClone,
     {
@@ -1396,69 +1640,95 @@ impl<T, A: Allocator> Vec<T, A> {
             self.truncate(new_len);
             return Ok(());
         }
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = new_len - current;
-        self.raw
-            .try_reserve(self.len, extra)
+        self.try_reserve(extra)
             .map_err(TryVecWithCloneError::Reserve)?;
+        let guard = RollbackGuard(&raw mut *self, current);
         for _ in 0..extra {
             match value.try_clone() {
                 Ok(cloned) => {
-                    // Capacity was reserved above, so this cannot fail.
-                    unsafe {
-                        self.raw.ptr().add(self.len).write(cloned);
-                    }
-                    self.len += 1;
+                    // SAFETY: capacity was reserved above for all `extra`.
+                    unsafe { self.force_push(cloned) };
                 }
                 Err(e) => {
-                    self.truncate(current);
                     return Err(TryVecWithCloneError::Clone(e));
                 }
             }
         }
+        core::mem::forget(guard);
         Ok(())
     }
 
     /// Resizes the vector so its length becomes `new_len`, producing new
-    /// elements with the closure `f`.
+    /// elements with the fallible closure `f`.
     ///
-    /// The closure is invoked only after capacity is secured.
+    /// The closure is invoked only after capacity is secured. If it returns an
+    /// error, the vector is truncated back to its original length so no
+    /// partially-produced elements remain.
     ///
     /// # Errors
     ///
-    /// Returns [`TryReserveError`] if reserving space fails.
-    // FIXME: make the callback fallible and return something like `TryResizeWithError`, and add panic-aware rollback as well
-    // also replace inline pushing with unsafe force_push(). Replace inner try_reserve() with public try_reserve
-    pub fn try_resize_with<F>(&mut self, new_len: usize, mut f: F) -> Result<(), TryReserveError>
+    /// Returns [`TryVecWithClosureError<E>`] if either the capacity reservation
+    /// fails or the closure returns `Err(e)`.
+    pub fn try_resize_with<E, F>(
+        &mut self,
+        new_len: usize,
+        mut f: F,
+    ) -> Result<(), TryVecWithClosureError<E>>
     where
-        F: FnMut() -> T,
+        F: FnMut() -> Result<T, E>,
     {
         let current = self.len;
         if new_len <= current {
             self.truncate(new_len);
             return Ok(());
         }
-        let extra = new_len - current;
-        self.raw.try_reserve(self.len, extra)?;
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
+        let extra = { new_len - current };
+        self.try_reserve(extra)
+            .map_err(TryVecWithClosureError::Reserve)?;
+        let guard = RollbackGuard(&raw mut *self, current);
         for _ in 0..extra {
-            // Capacity was reserved above, so this cannot fail.
-            unsafe {
-                self.raw.ptr().add(self.len).write(f());
+            match f() {
+                Ok(item) => {
+                    // SAFETY: capacity was reserved above for all `extra`.
+                    unsafe { self.force_push(item) };
+                }
+                Err(e) => {
+                    // Guard drops here and truncates back to `current`.
+                    return Err(TryVecWithClosureError::Closure(e));
+                }
             }
-            self.len += 1;
         }
+        // Success: defuse the guard so it doesn't truncate the new elements.
+        core::mem::forget(guard);
         Ok(())
     }
 
-    /// Swaps two elements in the vector by their indices.
+    /// Swaps two elements in the vector by their indices without panicking.
     ///
-    /// # Panics
+    /// The caller owns the outcome: an out-of-bounds index is reported through
+    /// the returned [`Result`] rather than unwinding.
     ///
-    /// Panics if either index is out of bounds.
-    // TODO: replace with try_swap that *doesn't* panic. Replace with try_swap.
-    #[track_caller]
-    pub fn swap(&mut self, a: usize, b: usize) {
-        let sl = self.as_mut_slice();
-        sl.swap(a, b);
+    /// # Errors
+    ///
+    /// Returns [`TrySwapError`] if either index is out of bounds.
+    pub fn try_swap(&mut self, a: usize, b: usize) -> Result<(), TrySwapError> {
+        let len = self.len;
+        if a >= len || b >= len {
+            return Err(TrySwapError {
+                index: if a >= len { a } else { b },
+                len,
+            });
+        }
+        // SAFETY: both indices were bounds-checked above.
+        unsafe {
+            let pa = self.as_mut_ptr().add(a);
+            let pb = self.as_mut_ptr().add(b);
+            ptr::swap(pa, pb);
+        }
+        Ok(())
     }
 
     /// Reverses the order of the elements in place.
@@ -1495,20 +1765,14 @@ impl<T, A: Allocator> Vec<T, A> {
     where
         T: TryClone,
     {
-        let mut vec = Self::new_in(alloc);
-        if count > 0 {
-            vec.raw
-                .try_reserve(0, count)
-                .map_err(TryVecWithCloneError::Reserve)?;
-        }
+        let mut vec =
+            Self::try_with_capacity_in(count, alloc).map_err(TryVecWithCloneError::Reserve)?;
+
         for _ in 0..count {
             match value.try_clone() {
                 Ok(cloned) => {
-                    // Capacity was reserved above, so this cannot fail.
-                    unsafe {
-                        vec.raw.ptr().add(vec.len).write(cloned);
-                    }
-                    vec.len += 1;
+                    // SAFETY: Capacity was reserved above, so this cannot fail.
+                    unsafe { vec.force_push(cloned) };
                 }
                 Err(e) => return Err(TryVecWithCloneError::Clone(e)),
             }
@@ -1516,36 +1780,7 @@ impl<T, A: Allocator> Vec<T, A> {
         Ok(vec)
     }
 
-    /// Like [`Self::try_from_elem_in`], but takes ownership of `value` and
-    /// returns it on failure so the caller is not left empty-handed.
-    ///
-    /// # Errors
-    ///
-    /// Returns `(T, TryVecWithCloneError)` on failure.
-    pub fn try_from_elem_give_back_in(
-        value: T,
-        count: usize,
-        alloc: A,
-    ) -> Result<Self, (T, TryVecWithCloneError)>
-    where
-        T: TryClone,
-    {
-        // Wrap in `ManuallyDrop` so that on failure we can hand the original
-        // value back without dropping it twice (once here, once by the caller).
-        let mut value = ManuallyDrop::new(value);
-        match Self::try_from_elem_in(&value, count, alloc) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                // SAFETY: `value` was only ever lent by reference; it is still
-                // fully initialized and owned by us. Taking it out transfers
-                // ownership to the error tuple.
-                let recovered = unsafe { ManuallyDrop::take(&mut value) };
-                Err((recovered, e))
-            }
-        }
-    }
-
-    /// Creates a `Vec<T>` from a slice by cloning each element via
+    /// Creates a [`Vec<T>`] from a slice by cloning each element via
     /// [`TryClone`].
     ///
     /// # Errors
@@ -1555,20 +1790,13 @@ impl<T, A: Allocator> Vec<T, A> {
     where
         T: TryClone,
     {
-        let mut vec = Self::new_in(alloc);
-        if !slice.is_empty() {
-            vec.raw
-                .try_reserve(0, slice.len())
-                .map_err(TryVecWithCloneError::Reserve)?;
-        }
+        let mut vec = Self::try_with_capacity_in(slice.len(), alloc)
+            .map_err(TryVecWithCloneError::Reserve)?;
         for item in slice {
             match item.try_clone() {
                 Ok(cloned) => {
-                    // Capacity was reserved above, so this cannot fail.
-                    unsafe {
-                        vec.raw.ptr().add(vec.len).write(cloned);
-                    }
-                    vec.len += 1;
+                    // SAFETY: Capacity was reserved above, so this cannot fail.
+                    unsafe { vec.force_push(cloned) };
                 }
                 Err(e) => return Err(TryVecWithCloneError::Clone(e)),
             }
@@ -1576,78 +1804,44 @@ impl<T, A: Allocator> Vec<T, A> {
         Ok(vec)
     }
 
-    /// Fallibly collects an iterator into a `Vec<T>`, using the size hint to
-    /// pre-allocate when possible.
+    /// Fallibly collects an iterator into a [`Vec<T>`] on the given allocator,
+    /// using the size hint to pre-allocate when possible.
+    ///
+    /// This is the allocator-aware backend for [`TryFromIterator`]. It reserves
+    /// up front from the hint's upper bound and grows as needed if the iterator
+    /// yields more elements than advertised.
     ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if a reservation fails.
-    // FIXME: move implementation to TryFromIterator.
-    pub fn try_collect_in<I: IntoIterator<Item = T>>(
+    pub fn try_from_iter_in<I: IntoIterator<Item = T>>(
         iter: I,
         alloc: A,
     ) -> Result<Self, TryReserveError> {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let capacity = upper.unwrap_or(lower);
-        let mut vec = Self::new_in(alloc);
-        if capacity > 0 {
-            vec.raw.try_reserve(0, capacity)?;
-        }
+        let mut vec = Self::try_with_capacity_in(capacity, alloc)?;
         for item in iter {
             // The iterator may yield more elements than its hint promised.
             if vec.len == vec.capacity() {
                 // SAFETY: `len == capacity` holds here.
                 unsafe { vec.raw.try_grow_one()? };
             }
-            unsafe {
-                vec.raw.ptr().add(vec.len).write(item);
-            }
-            vec.len += 1;
+            // SAFETY: we just confirmed there is a spare slot.
+            unsafe { vec.force_push(item) };
         }
         Ok(vec)
     }
 }
 
-// Additional convenience constructors for the default (`Global`) allocator.
-impl<T> Vec<T, Global> {
-    /// Like [`Self::try_from_elem`], but takes ownership of `value` and
-    /// returns it on failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns `(T, TryVecWithCloneError)` on failure.
-    pub fn try_from_elem_give_back(
-        value: T,
-        count: usize,
-    ) -> Result<Self, (T, TryVecWithCloneError)>
-    where
-        T: TryClone,
-    {
-        Self::try_from_elem_give_back_in(value, count, Global)
-    }
+/// Fallible construction of a `Vec<T>` on the default [`Global`] allocator from
+/// a borrowed slice, cloning each element via [`TryClone`].
+impl<T: TryClone> TryFrom<&[T]> for Vec<T, Global> {
+    type Error = TryVecWithCloneError;
 
-    /// Creates a `Vec<T>` from a slice by cloning each element via
-    /// [`TryClone`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryVecWithCloneError`] on a reservation or clone failure.
-    pub fn try_from_slice(slice: &[T]) -> Result<Self, TryVecWithCloneError>
-    where
-        T: TryClone,
-    {
+    fn try_from(slice: &[T]) -> Result<Self, Self::Error> {
         Self::try_from_slice_in(slice, Global)
-    }
-
-    /// Fallibly collects an iterator into a `Vec<T>`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryReserveError`] if a reservation fails.
-    // FIXME: std does not have it, may retire
-    pub fn try_collect<I: IntoIterator<Item = T>>(iter: I) -> Result<Self, TryReserveError> {
-        Self::try_collect_in(iter, Global)
     }
 }
 
@@ -1724,7 +1918,7 @@ impl<T, A: Allocator> Drop for Vec<T, A> {
     fn drop(&mut self) {
         // SAFETY: the first `self.len` slots are initialized; dropping them in
         // place runs each element's destructor exactly once. The buffer itself
-        // is freed by `RawVec`'s `Drop` immediately afterward 
+        // is freed by `RawVec`'s `Drop` immediately afterward
         // (even when drop_in_place panics).
         unsafe {
             let slice = ptr::slice_from_raw_parts_mut(self.as_mut_ptr(), self.len);
@@ -1736,32 +1930,23 @@ impl<T, A: Allocator> Drop for Vec<T, A> {
 impl<T, A: Allocator> TryExtend<T> for Vec<T, A> {
     type Error = TryReserveError;
 
-    // FIXME: need size_hint and call reserve with public try_reserve method.
-    // force_push() within size_hint range after reserving capacity,
-    // try_push for the rest after size_hint exhausted but there is still an item in the iterator
     fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
     where
         S: ResumableSource<Item = T>,
     {
-        let (head, mut inner) = source.safe_into_iter();
-
-        // Peek ahead: if there is at least one element, reserve up-front.
-        let first = head.or_else(|| inner.next());
-        let Some(first) = first else {
-            return Ok(());
-        };
-
-        if let Err(e) = self.raw.try_reserve(self.len, 1) {
-            return Err((Resume::new(first, inner), e));
+        let (head, mut inner, hint) = source.decompose_with_size_hint();
+        // Ignore over-reserve.
+        let _ = self.try_reserve_total(hint.estimated_total());
+        // Push the head first.
+        if let Some(head) = head {
+            if let Err((head, err)) = self.try_push_give_back(head) {
+                return Err((Resume::new(head, inner), err));
+            }
         }
 
-        // Push the first element (capacity guaranteed).
-        unsafe {
-            self.raw.ptr().add(self.len).write(first);
-        }
-        self.len += 1;
-
-        // Push the remainder, growing as needed.
+        // Push the remainder. While we have spare capacity this is a cheap
+        // force_push; once capacity is exhausted (under-hinted or OOM'd) grow
+        // one slot at a time, stranding the current element on failure.
         while let Some(next) = inner.next() {
             if self.len == self.capacity() {
                 // SAFETY: `len == capacity` holds here.
@@ -1769,10 +1954,8 @@ impl<T, A: Allocator> TryExtend<T> for Vec<T, A> {
                     return Err((Resume::new(next, inner), e));
                 }
             }
-            unsafe {
-                self.raw.ptr().add(self.len).write(next);
-            }
-            self.len += 1;
+            // SAFETY: a spare slot was just confirmed.
+            unsafe { self.force_push(next) };
         }
         Ok(())
     }
@@ -1784,23 +1967,22 @@ where
 {
     type Error = TryCloneError;
 
-    // FIXME: replace with force_push(), use the Vec::try_reserve public method
     fn try_extend_from_slice(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
         if other.is_empty() {
             return Ok(());
         }
-        self.raw
-            .try_reserve(self.len, other.len())
+        self.try_reserve(other.len())
             .map_err(|e| (other, TryCloneError::Reserve(e)))?;
         let mut i = 0usize;
         for item in other {
             match item.try_clone() {
                 Ok(cloned) => {
-                    unsafe {
-                        self.raw.ptr().add(self.len).write(cloned);
+                    // SAFETY: capacity was reserved above for all of `other`.
+                    unsafe { self.force_push(cloned) };
+                    #[allow(clippy::arithmetic_side_effects, reason = "i <= other.len()")]
+                    {
+                        i += 1;
                     }
-                    self.len += 1;
-                    i += 1;
                 }
                 Err(e) => return Err((&other[i..], e)),
             }
@@ -1810,18 +1992,15 @@ where
 }
 
 impl<T: TryClone, A: Allocator + Clone> TryClone for Vec<T, A> {
-    // FIXME: replace try_push with force_push for performance, use the public Vec::try_reserve.
-    // Allocator needs try_clone per convention as well
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let mut out = Self::new_in(self.raw.allocator().clone());
         if !self.is_empty() {
-            out.raw
-                .try_reserve(0, self.len)
-                .map_err(TryCloneError::Reserve)?;
+            out.try_reserve(self.len).map_err(TryCloneError::Reserve)?;
         }
         for elem in self.iter() {
             match elem.try_clone() {
-                Ok(cloned) => out.try_push(cloned).map_err(TryCloneError::Reserve)?,
+                // SAFETY: capacity was reserved above for every element.
+                Ok(cloned) => unsafe { out.force_push(cloned) },
                 Err(e) => return Err(e),
             }
         }
@@ -1829,12 +2008,13 @@ impl<T: TryClone, A: Allocator + Clone> TryClone for Vec<T, A> {
     }
 }
 
-// FIXME: move try_collect() here, generalize this block to support any allocator 
+// Collects into the default (`Global`) allocator. For a custom allocator use
+// [`Vec::try_from_iter_in`].
 impl<T> TryFromIterator<T> for Vec<T, Global> {
     type Error = TryReserveError;
 
     fn try_from_iter<I: IntoIterator<Item = T>>(iter: I) -> Result<Self, Self::Error> {
-        Self::try_collect(iter)
+        Self::try_from_iter_in(iter, Global)
     }
 }
 
@@ -1859,8 +2039,28 @@ impl<T, A: Allocator> IntoIterator for Vec<T, A> {
     }
 }
 
-// Borrowed iterators delegate to the slice methods. 
-// FIXME: need to use IntoIterator block for reference and mutable reference
+// Borrowed iteration delegates to the slice methods, mirroring `std`'s
+// `IntoIterator` impls for `&Vec` and `&mut Vec`.
+impl<'a, T, A: Allocator> IntoIterator for &'a Vec<T, A> {
+    type Item = &'a T;
+    type IntoIter = slice::Iter<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a, T, A: Allocator> IntoIterator for &'a mut Vec<T, A> {
+    type Item = &'a mut T;
+    type IntoIter = slice::IterMut<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_mut_slice().iter_mut()
+    }
+}
+
 impl<T, A: Allocator> Vec<T, A> {
     /// Returns an iterator over the vector's elements.
     #[inline]

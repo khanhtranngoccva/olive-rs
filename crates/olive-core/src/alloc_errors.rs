@@ -1,9 +1,6 @@
 //! Collection-level allocation errors.
 //!
-//! The low-level [`AllocError`] is defined here (it must live in `olive_core`,
-//! since this crate has no dependency on `olive_alloc`) and is re-exported by
-//! [`olive_alloc::allocator`] alongside the
-//! [`Allocator`](olive_alloc::allocator::Allocator) trait it originates from.
+//! The low-level [`AllocError`] is defined here.
 //! This module also defines the higher-level [`TryReserveError`], which a
 //! *collection* returns when reserving capacity fails:
 //!

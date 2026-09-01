@@ -51,11 +51,33 @@ impl Cap {
 
     /// # Safety
     ///
-    /// `cap` must be `<= isize::MAX`.
+    /// `cap` must be `<= isize::MAX`. Only valid for non-ZST element types; use
+    /// [`Self::new_zst_aware`] at sites where the element type is known.
     const unsafe fn new_unchecked(cap: usize) -> Self {
         debug_assert!(cap <= isize::MAX as usize);
         // SAFETY: caller guarantees `cap <= isize::MAX`.
         Cap(cap)
+    }
+
+    /// Stores `cap`, or [`Cap::ZERO`] when `T` is a zero-sized type.
+    ///
+    /// A ZST's effective capacity is reported as `usize::MAX` by
+    /// [`RawVec::capacity`], but no real allocation backs it — storing that
+    /// sentinel would trip the size-limit invariant in [`Self::new_unchecked`]
+    /// (and is meaningless). Collapsing it to `Cap::ZERO` keeps the stored
+    /// value honest while leaving the reported capacity untouched, since
+    /// `capacity()` special-cases ZSTs.
+    ///
+    /// # Safety
+    ///
+    /// When `T` is not a ZST, `cap` must be `<= isize::MAX`.
+    const unsafe fn new_zst_aware<T>(cap: usize) -> Self {
+        if core::mem::size_of::<T>() == 0 {
+            Cap::ZERO
+        } else {
+            // SAFETY: non-ZST branch defers to the same invariant.
+            unsafe { Self::new_unchecked(cap) }
+        }
     }
 }
 
@@ -260,18 +282,17 @@ impl<T, A: Allocator> RawVec<T, A> {
     ///
     /// # Safety
     ///
-    /// The `ptr` must be allocated (via the given allocator `alloc`), and with
-    /// the given `capacity`.
-    /// The `capacity` cannot exceed `isize::MAX` for sized types. (only a concern on 32-bit systems).
-    /// For ZSTs capacity is ignored.
-    /// If the `ptr` and `capacity` come from a `RawVec` created via
-    /// `alloc`, then this is guaranteed.
+    /// The `ptr` must be non-null, allocated (via the given allocator `alloc`) if T is non zero-sized
+    /// or dangling if T is zero-sized, must be well aligned for T, and with the `capacity` that is 
+    /// between the previous requested capacity and the actual capacity (including both ends).
+    /// The `capacity` cannot exceed `isize::MAX` for sized types. For ZSTs `capacity` is ignored.
+    /// If the `ptr` and `capacity` come from a `RawVec` created via `alloc`, then this is guaranteed.
     #[inline]
     pub const unsafe fn from_raw_parts_in(ptr: *mut T, capacity: usize, alloc: A) -> Self {
         // SAFETY: Precondition passed to the caller.
         unsafe {
             let ptr = ptr.cast();
-            let capacity = Cap::new_unchecked(capacity);
+            let capacity = Cap::new_zst_aware::<T>(capacity);
             Self {
                 inner: RawVecInner::from_raw_parts_in(ptr, capacity, alloc),
                 _marker: PhantomData,
@@ -290,7 +311,7 @@ impl<T, A: Allocator> RawVec<T, A> {
         // SAFETY: Precondition passed to the caller.
         unsafe {
             let ptr = ptr.cast();
-            let capacity = Cap::new_unchecked(capacity);
+            let capacity = Cap::new_zst_aware::<T>(capacity);
             Self {
                 inner: RawVecInner::from_nonnull_in(ptr, capacity, alloc),
                 _marker: PhantomData,
@@ -465,7 +486,9 @@ impl<A: Allocator> RawVecInner<A> {
         };
 
         // The allocator returns a slice pointer whose length matches the size
-        // requested; we store only the thin base address.
+        // requested; we store only the thin base address. This path is only
+        // reachable for non-ZST `T` (the ZST case returned early above), so the
+        // real capacity is stored.
         Ok(Self {
             ptr,
             cap: unsafe { Cap::new_unchecked(capacity) },
@@ -480,7 +503,8 @@ impl<A: Allocator> RawVecInner<A> {
     /// - `elem_layout`'s size must be a multiple of its alignment
     #[inline]
     unsafe fn try_grow_one(&mut self, elem_layout: Layout) -> Result<(), TryReserveError> {
-        // SAFETY: Precondition passed to caller
+        // SAFETY: Precondition passed to caller. 
+        // additionally `self.cap.0` is meaningless if elem_layout encodes ZST
         unsafe { self.grow_amortized(self.cap.0, 1, elem_layout) }
     }
 
@@ -614,6 +638,7 @@ impl<A: Allocator> RawVecInner<A> {
         // the size requested. If that ever changes, the capacity here should
         // change to `ptr.len() / size_of::<T>()`.
         self.ptr = ptr.cast();
+        // Reaching here implies a non-ZST reallocation, so the real capacity is stored.
         self.cap = unsafe { Cap::new_unchecked(cap) };
     }
 

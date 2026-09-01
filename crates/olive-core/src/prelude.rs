@@ -10,7 +10,8 @@
 //! prelude. Callers who want those under an explicit import can use
 //! `use core::panic::*;`.
 
-pub use crate::recovery::{ResumableSource, Resume, Stall};
+pub use crate::alloc::AllocatorTryClone;
+pub use crate::recovery::{ResumableSource, Resume, LossySizeHint, Stall};
 pub use crate::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
 pub use crate::try_traits::try_collect::{TryCollect, TryCollectInto};
 pub use crate::try_traits::try_extend::{TryExtend, TryExtendFromSlice};

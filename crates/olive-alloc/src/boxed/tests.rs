@@ -11,6 +11,7 @@ use core::any::Any;
 use core::borrow::{Borrow, BorrowMut};
 use core::cmp::Ordering;
 use core::error::Error;
+use core::ffi::CStr;
 use core::fmt;
 use core::marker::PhantomPinned;
 use olive_core::TryClone;
@@ -187,25 +188,6 @@ fn test_box_slice_try_from_slice_chars() {
 }
 
 #[test]
-fn test_box_slice_try_from_array() {
-    let bs: Box<[u8]> = Box::try_from_array([10, 20, 30]).unwrap();
-    assert_eq!(bs.len(), 3);
-    assert_eq!(bs[2], 30);
-}
-
-#[test]
-fn test_box_slice_try_with_capacity() {
-    let bs: Box<[u8]> = Box::try_with_capacity(10).unwrap();
-    assert_eq!(bs.len(), 10);
-}
-
-#[test]
-fn test_box_slice_try_new_empty() {
-    let bs: Box<[i32]> = Box::try_new_empty().unwrap();
-    assert!(bs.is_empty());
-}
-
-#[test]
 fn test_box_slice_try_clone() {
     let orig: Box<[i32]> = Box::try_from_slice(&[1, 2, 3]).unwrap();
     let cloned: Box<[i32]> = orig.try_clone().unwrap();
@@ -214,22 +196,35 @@ fn test_box_slice_try_clone() {
 }
 
 #[test]
-fn test_box_str_try_from_str() {
-    let bs: Box<str> = Box::try_from_str("hello world").unwrap();
+fn test_box_str_try_from_ref() {
+    let bs: Box<str> = Box::try_clone_from_ref("hello world").unwrap();
     assert_eq!(&*bs, "hello world");
     assert_eq!(bs.len(), 11);
 }
 
 #[test]
 fn test_box_str_try_clone() {
-    let orig: Box<str> = Box::try_from_str("abc").unwrap();
+    let orig: Box<str> = Box::try_clone_from_ref("abc").unwrap();
     let cloned: Box<str> = orig.try_clone().unwrap();
     assert_eq!(orig, cloned);
 }
 
 #[test]
+fn test_box_cstr_try_clone() {
+    // Build a `Box<CStr>` by cloning from a `&CStr` reference — this exercises
+    // both the allocator-clone seam and the `TryCloneToUninit for CStr` impl.
+    let src = c"hello";
+    let boxed: Box<CStr, Global> = Box::try_clone_from_ref(src).unwrap();
+    assert_eq!(boxed.to_bytes_with_nul(), b"hello\x00");
+
+    let cloned: Box<CStr, Global> = boxed.try_clone().unwrap();
+    assert_eq!(cloned.to_bytes_with_nul(), b"hello\x00");
+    assert_ne!(Box::as_ptr(&boxed), Box::as_ptr(&cloned));
+}
+
+#[test]
 fn test_box_str_to_bytes() {
-    let bs: Box<str> = Box::try_from_str("xyz").unwrap();
+    let bs: Box<str> = Box::try_clone_from_ref("xyz").unwrap();
     let bytes: Box<[u8]> = Box::from(bs);
     assert_eq!(&bytes[..], b"xyz");
 }

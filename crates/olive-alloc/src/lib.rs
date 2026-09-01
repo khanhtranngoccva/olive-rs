@@ -18,12 +18,13 @@
 
 #![no_std]
 #![cfg_attr(not(test), deny(clippy::arithmetic_side_effects))]
-// FIXME: add deny lint for unsafe functions and invocations without SAFETY header
+// Require every `unsafe fn` / `unsafe impl` to carry a `# Safety` doc section.
+#![deny(clippy::missing_safety_doc)]
 
 // Modules are added incrementally as the port progresses. Each module mirrors
 // the corresponding `alloc` submodule but with fallible operations throughout.
 
 pub mod alloc;
 pub mod boxed;
-pub mod vec;
 mod raw_vec;
+pub mod vec;

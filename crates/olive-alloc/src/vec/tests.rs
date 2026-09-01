@@ -8,6 +8,7 @@ extern crate std;
 use core::ptr::NonNull;
 
 use olive_core::try_traits::try_clone::TryCloneError;
+use olive_core::try_traits::try_collect::TryCollect;
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
@@ -138,13 +139,21 @@ fn from_elem_zero_count_is_empty() {
 #[test]
 fn from_slice_clones_elements() {
     let src = [1, 2, 3];
-    let v = Vec::try_from_slice(&src).expect("slice ok");
+    let v = <Vec<i32>>::try_from(&src[..]).expect("slice ok");
     assert_eq!(v.as_slice(), &[1, 2, 3]);
 }
 
 #[test]
+fn try_from_facade_matches_infallible_clone() {
+    use core::convert::TryFrom;
+    let src: std::vec::Vec<u8> = std::vec![9, 8, 7];
+    let cloned = <Vec<u8>>::try_from(src.as_slice()).unwrap();
+    assert_eq!(cloned.as_slice(), &[9, 8, 7]);
+}
+
+#[test]
 fn collect_uses_size_hint() {
-    let v = Vec::try_collect(0..5).expect("collect ok");
+    let v: Vec<i32> = (0..5).try_collect().expect("collect ok");
     assert_eq!(v.as_slice(), &[0, 1, 2, 3, 4]);
 }
 
@@ -170,7 +179,9 @@ fn collect_grows_past_hint() {
             (0, Some(0)) // Deliberately under-reports.
         }
     }
-    let v = Vec::try_collect(LyingIter { n: 10, yielded: 0 }).expect("grow ok");
+    let v: Vec<i32> = LyingIter { n: 10, yielded: 0 }
+        .try_collect()
+        .expect("grow ok");
     assert_eq!(
         v.as_slice(),
         std::vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].as_slice()
@@ -307,10 +318,23 @@ fn swap_and_reverse() {
     for i in 0..4 {
         v.try_push(i).unwrap();
     }
-    v.swap(0, 3);
+    v.try_swap(0, 3).unwrap();
     assert_eq!(v.as_slice(), &[3, 1, 2, 0]);
     v.reverse();
     assert_eq!(v.as_slice(), &[0, 2, 1, 3]);
+}
+
+#[test]
+fn try_swap_out_of_bounds_reports_error() {
+    let mut v = Vec::new();
+    for i in 0..3 {
+        v.try_push(i).unwrap();
+    }
+    let err = v.try_swap(0, 3).unwrap_err();
+    assert_eq!(err.index, 3);
+    assert_eq!(err.len, 3);
+    // Nothing was swapped on failure.
+    assert_eq!(v.as_slice(), &[0, 1, 2]);
 }
 
 #[test]
@@ -331,7 +355,7 @@ fn sort_orders_elements() {
 fn resize_grows_by_cloning() {
     let mut v = Vec::new();
     v.try_push(1).unwrap();
-    v.try_resize(&9, 4).expect("resize ok");
+    v.try_resize(4, &9).expect("resize ok");
     assert_eq!(v.as_slice(), &[1, 9, 9, 9]);
 }
 
@@ -341,7 +365,7 @@ fn resize_shrinks() {
     for i in 0..5 {
         v.try_push(i).unwrap();
     }
-    v.try_resize(&0, 2).expect("shrink ok");
+    v.try_resize(2, &0).expect("shrink ok");
     assert_eq!(v.as_slice(), &[0, 1]);
 }
 
@@ -349,12 +373,22 @@ fn resize_shrinks() {
 fn resize_with_calls_closure() {
     let mut v = Vec::new();
     let mut counter = 0u32;
-    v.try_resize_with(3, || {
+    v.try_resize_with(3, || -> Result<i32, ()> {
         counter += 1;
-        counter as i32
+        Ok(counter as i32)
     })
     .expect("resize_with ok");
     assert_eq!(v.as_slice(), &[1, 2, 3]);
+}
+
+#[test]
+fn resize_with_closure_error_rolls_back() {
+    let mut v = Vec::new();
+    v.try_push(0).unwrap();
+    let result: Result<(), TryVecWithClosureError<i32>> = v.try_resize_with(4, || Err(42));
+    // The closure failed, so the vector must be rolled back to its original length.
+    assert!(result.is_err());
+    assert_eq!(v.as_slice(), &[0]);
 }
 
 #[test]
@@ -429,14 +463,6 @@ fn insert_give_back_oom_returns_value() {
     assert!(v.is_empty());
 }
 
-#[test]
-fn from_elem_give_back_in_fail_alloc() {
-    let (returned, e) =
-        Vec::try_from_elem_give_back_in(5i32, 3, FailAlloc).expect_err("fail alloc oom");
-    assert_eq!(returned, 5);
-    assert!(matches!(e, TryVecWithCloneError::Reserve(_)));
-}
-
 // ---------------------------------------------------------------------------
 // Fallible constructors under OOM
 // ---------------------------------------------------------------------------
@@ -468,8 +494,8 @@ fn from_slice_in_fail_alloc_reports_reserve() {
 }
 
 #[test]
-fn collect_in_fail_alloc_reports_reserve() {
-    let e = Vec::try_collect_in(0..3, FailAlloc).expect_err("should fail");
+fn from_iter_in_fail_alloc_reports_reserve() {
+    let e = Vec::<i32, FailAlloc>::try_from_iter_in(0..3, FailAlloc).expect_err("should fail");
     assert!(e.is_alloc());
 }
 
@@ -486,7 +512,7 @@ fn resize_rollbacks_partial_on_clone_failure() {
     // Growing from len 1 to len 4 requires 3 clones of the source value.
     // First 2 succeed, 3rd fails → rollback to original length.
     let e = v
-        .try_resize(&CountingFlaky, 4)
+        .try_resize(4, &CountingFlaky)
         .expect_err("clone should fail");
     assert!(matches!(e, TryVecWithCloneError::Clone(_)));
     // Rolled back to original length.

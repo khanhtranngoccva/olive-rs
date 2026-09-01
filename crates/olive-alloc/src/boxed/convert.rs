@@ -1,210 +1,13 @@
-//! Conversions, deref forwarding, and trait impls for [`Box`].
-//!
-//! Split out of the main module; see the crate-level docs in [`super`] for the
-//! overall design.
-// FIXME: split into "traits.rs", "convert.rs" (conversion-only module)
+//! Conversions impls for [`Box`].
 
 use core::any::Any;
-use core::borrow::{Borrow, BorrowMut};
-use core::cmp::Ordering;
 use core::error::Error;
-use core::fmt::{self, Debug, Display, Formatter};
-use core::hash::{Hash, Hasher};
 use core::mem;
-use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::{self, NonNull};
 
-use crate::alloc::{Allocator, Global, StaticAllocator};
-use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
-
 use super::Box;
-
-// ---------------------------------------------------------------------------
-// Slice-specific accessors: Box<[T], A>
-// ---------------------------------------------------------------------------
-// FIXME: deref is enough, remove
-impl<T, A: Allocator> Box<[T], A> {
-    /// Gets the number of elements in the boxed slice.
-    #[inline]
-    pub fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    /// Returns `true` if the boxed slice is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Gets a shared reference to the inner slice.
-    #[inline]
-    pub fn as_slice(&self) -> &[T] {
-        self
-    }
-
-    /// Gets a mutable reference to the inner slice.
-    #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Str-specific accessors: Box<str, A>
-// ---------------------------------------------------------------------------
-
-// FIXME: deref is enough, remove
-impl<A: Allocator> Box<str, A> {
-    /// Gets the length of the string in bytes.
-    #[inline]
-    pub fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    /// Returns `true` if the string is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Gets a shared reference to the inner `str`.
-    #[inline]
-    pub fn as_str(&self) -> &str {
-        self
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Deref / DerefMut
-// ---------------------------------------------------------------------------
-
-impl<T: ?Sized, A: Allocator> Deref for Box<T, A> {
-    type Target = T;
-
-    #[inline]
-    fn deref(&self) -> &T {
-        // SAFETY: `inner` is always a valid, aligned, non-null pointer to an
-        // initialized `T` (or a dangling pointer for ZSTs, which is fine for
-        // `&T` since no read occurs).
-        unsafe { self.inner.as_ref() }
-    }
-}
-
-impl<T: ?Sized, A: Allocator> DerefMut for Box<T, A> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: same as Deref.
-        unsafe { self.inner.as_mut() }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TryClone
-// ---------------------------------------------------------------------------
-
-impl<T: TryClone, A: Allocator + Clone> TryClone for Box<T, A> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let cloned_inner = (**self).try_clone()?;
-        Box::try_new_in(cloned_inner, self.alloc.clone()).map_err(TryCloneError::Alloc)
-    }
-}
-
-impl<T: TryClone, A: Allocator + Clone> TryClone for Box<[T], A> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let slice: &[T] = self;
-        Box::try_from_slice_try_clone_in(slice, self.alloc.clone())
-    }
-}
-
-impl<A: Allocator + Clone> TryClone for Box<str, A> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let s: &str = self;
-        Box::try_from_str_in(s, self.alloc.clone()).map_err(TryCloneError::Alloc)
-    }
-}
-
-// FIXME: missing CStr implementation
-
-// ---------------------------------------------------------------------------
-// Debug / Display
-// ---------------------------------------------------------------------------
-
-impl<T: ?Sized, A: Allocator> fmt::Pointer for Box<T, A> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        fmt::Pointer::fmt(&self.inner.as_ptr(), f)
-    }
-}
-
-impl<T: Debug + ?Sized, A: Allocator> Debug for Box<T, A> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&**self, f)
-    }
-}
-
-impl<T: Display + ?Sized, A: Allocator> Display for Box<T, A> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&**self, f)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PartialEq / Eq / PartialOrd / Ord / Hash
-// ---------------------------------------------------------------------------
-
-impl<T: PartialEq + ?Sized, A: Allocator> PartialEq for Box<T, A> {
-    fn eq(&self, other: &Self) -> bool {
-        PartialEq::eq(&**self, &**other)
-    }
-}
-
-impl<T: Eq + ?Sized, A: Allocator> Eq for Box<T, A> {}
-
-impl<T: PartialOrd + ?Sized, A: Allocator> PartialOrd for Box<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        PartialOrd::partial_cmp(&**self, &**other)
-    }
-}
-
-impl<T: Ord + ?Sized, A: Allocator> Ord for Box<T, A> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        Ord::cmp(&**self, &**other)
-    }
-}
-
-impl<T: Hash + ?Sized, A: Allocator> Hash for Box<T, A> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (**self).hash(state);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// AsRef / AsMut / Borrow / BorrowMut / ToOwned-style
-// ---------------------------------------------------------------------------
-
-impl<T: ?Sized, A: Allocator> AsRef<T> for Box<T, A> {
-    fn as_ref(&self) -> &T {
-        self
-    }
-}
-
-impl<T: ?Sized, A: Allocator> AsMut<T> for Box<T, A> {
-    fn as_mut(&mut self) -> &mut T {
-        self
-    }
-}
-
-impl<T: ?Sized, A: Allocator> Borrow<T> for Box<T, A> {
-    fn borrow(&self) -> &T {
-        self
-    }
-}
-
-impl<T: ?Sized, A: Allocator> BorrowMut<T> for Box<T, A> {
-    fn borrow_mut(&mut self) -> &mut T {
-        self
-    }
-}
+use crate::alloc::{Allocator, Global, StaticAllocator};
 
 // ---------------------------------------------------------------------------
 // From / Into conversions
@@ -304,10 +107,8 @@ impl<A: Allocator> Box<dyn Any, A> {
     pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                // Extract the base address from the fat pointer.
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 // Casting the thin base address to `*mut T` reinterprets the
                 // same address bits as a pointer to `T`, which is sound
@@ -326,9 +127,8 @@ impl<A: Allocator> Box<dyn Any + Send, A> {
     pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 let t_ptr: *mut T = base_addr.cast::<T>();
                 Ok(Box::from_raw_in(t_ptr, alloc))
@@ -344,9 +144,8 @@ impl<A: Allocator> Box<dyn Any + Send + Sync, A> {
     pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 let t_ptr: *mut T = base_addr.cast::<T>();
                 Ok(Box::from_raw_in(t_ptr, alloc))
@@ -362,9 +161,8 @@ impl<A: Allocator> Box<dyn Error, A> {
     pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 let t_ptr: *mut T = base_addr.cast::<T>();
                 Ok(Box::from_raw_in(t_ptr, alloc))
@@ -380,9 +178,8 @@ impl<A: Allocator> Box<dyn Error + Send, A> {
     pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 let t_ptr: *mut T = base_addr.cast::<T>();
                 Ok(Box::from_raw_in(t_ptr, alloc))
@@ -398,9 +195,8 @@ impl<A: Allocator> Box<dyn Error + Send + Sync, A> {
     pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
         if self.is::<T>() {
             unsafe {
-                let base_addr = self.inner.as_ptr() as *mut u8;
-                let alloc = ptr::read(&self.alloc);
-                mem::forget(self);
+                // Extract the base address and allocator.
+                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
                 // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
                 let t_ptr: *mut T = base_addr.cast::<T>();
                 Ok(Box::from_raw_in(t_ptr, alloc))
@@ -432,6 +228,16 @@ impl<I: Iterator + ?Sized, A: Allocator> Iterator for Box<I, A> {
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         (**self).nth(n)
     }
+
+    #[inline]
+    fn last(self) -> Option<Self::Item> {
+        #[inline]
+        fn some<T>(_: Option<T>, x: T) -> Option<T> {
+            Some(x)
+        }
+
+        self.fold(None, some)
+    }
 }
 
 impl<I: DoubleEndedIterator + ?Sized, A: Allocator> DoubleEndedIterator for Box<I, A> {
@@ -449,5 +255,3 @@ impl<I: DoubleEndedIterator + ?Sized, A: Allocator> DoubleEndedIterator for Box<
 impl<I: core::iter::FusedIterator + ?Sized, A: Allocator> core::iter::FusedIterator for Box<I, A> {}
 
 impl<I: ExactSizeIterator + ?Sized, A: Allocator> ExactSizeIterator for Box<I, A> {}
-
-
