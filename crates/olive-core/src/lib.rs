@@ -19,7 +19,8 @@
 //! * [`try_traits`] — the foundational fallible traits, each in its own module:
 //!   [`TryClone`](try_traits::try_clone),
 //!   [`TryFromIterator`](try_traits::try_from_iterator), [`TryCollect`](try_traits::try_collect),
-//!   [`TryExtend`](try_traits::try_extend) / [`TryExtendFromSlice`](try_traits::try_extend).
+//!   [`TryExtend`](try_traits::try_extend) / [`TryExtendFromSlice`](try_traits::try_extend), and
+//!   [`TryDefault`](try_traits::try_default).
 //! * Modules mirroring std's layout, containing Olive core trait implementations for various core types.
 //! * [`recovery`] — [`Resume`](recovery::Resume) / [`Stall`](recovery::Stall) for resuming a
 //!   failed fallible iteration without losing data.
@@ -111,6 +112,6 @@ pub mod ptr;
 pub use core::*;
 
 pub use try_traits::{
-    TryClone, TryCloneError, TryCloneToUninit, TryCollect, TryCollectInto, TryExtend,
-    TryExtendFromSlice, TryFromIterator,
+    TryClone, TryCloneError, TryCloneToUninit, TryCollect, TryCollectInto, TryDefault,
+    TryDefaultError, TryExtend, TryExtendFromSlice, TryFromIterator,
 };

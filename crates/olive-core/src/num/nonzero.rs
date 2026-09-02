@@ -1,10 +1,11 @@
 //! Foundational-trait impls for the [`core::num`] non-zero integer newtypes.
-//! FIXME: `NonZero` implementation is missing
 
 use core::num::{
     NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI128, NonZeroIsize, NonZeroU8,
     NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize,
 };
+
+// FIXME: missing generic NonZero
 
 use crate::try_traits::try_clone::{TryClone, TryCloneError};
 

@@ -120,6 +120,68 @@ Full suite green; `cargo clippy --all-targets` fully clean (the prior
 `RawVec::try_with_capacity(_zeroed)` dead-code warning is gone too, since the
 slice constructors are real consumers). No `FIXME`s remain anywhere in the tree.
 
+## Resolved this session (continued) — 2026-09-02
+
+Cleared the last three remaining FIXMEs:
+
+- **`TryDefault` trait** (`crates/olive-core/src/try_traits/try_default.rs`). A
+  fallible analogue of `core::default::Default`, with an associated `Error` type.
+  Infallible impls for all primitive integers, floats, `bool`, `char`, `()`,
+  `Option<T>` (→ `None`), and `Result<T, E: Default>` (→ `Err(E::default())`).
+  Wired into `try_traits.rs` umbrella, crate-root re-export, and `prelude.rs`.
+  Implemented for `Vec<T, Global>` (empty vec → infallible) and `Global`
+  allocator (stateless ZST → infallible) in olive-alloc. This satisfies the
+  original FIXME that "structures like TryHashMap and allocators need it."
+
+- **`nonzero.rs` stale FIXME.** The line-2 comment claimed `NonZero` impls were
+  missing, but the `impl_nonzero!` macro already covered all 12 types with
+  `TryClone`. Removed the stale comment and extended the macro to also emit a
+  `TryDefault` impl for each `NonZero*` type that always returns `Err(())` —
+  there is no canonical non-zero value, so fabrication is unsound. Added a test
+  asserting `try_default()` fails for representative types.
+
+- **`cell.rs` missing `UnsafeCell` / `BorrowError` / `BorrowMutError`.**
+  - `UnsafeCell<T>: TryClone` delegates to the inner `T: TryClone` via `get()`,
+    producing an independent cell. `TryDefault` always fails (no valid default
+    payload).
+  - `BorrowError` and `BorrowMutError` intentionally have **no** `TryClone` or
+    `TryDefault` impls: they are transient borrow-contention markers, not
+    values users clone or construct by default. The original FIXME is resolved
+    by acknowledging their exclusion rather than forcing impls onto them.
+  New tests cover `UnsafeCell` independence and the always-fail `TryDefault`
+  contract.
+
+Full workspace: `cargo build` clean, `cargo test --workspace` 224 passed / 0
+failed, `cargo clippy --workspace --all-targets` zero warnings.
+
+## Resolved this session (continued) — 2026-09-02 (cell trait completion)
+
+Completed the remaining `TryClone`/`TryDefault` impls for all cell types per the
+original spec:
+
+- **`Cell<T>: TryDefault`** (`T: Default`). Infallible; wraps `T::default()` in a
+  fresh `Cell`. Bound is `Default`, not `TryDefault`, because `Cell` stores its
+  payload inline and std's `Cell::new` takes an owned value directly.
+- **`LazyCell<T>: TryDefault`** (`T: Default`). Uses `T::default` as the fn pointer
+  initializer (the default type parameter is `F = fn() -> T`). Construction never
+  fails — evaluation is deferred to first access. Cannot use `T::try_default` here
+  because that would change `F`'s type to `fn() -> Result<T, _>`, breaking the
+  default type parameter.
+- **`OnceCell<T>: TryClone`** (`T: TryClone`). Preserves initialization state:
+  empty clones to empty, initialized clones the inner value via `TryClone`. The
+  internal `set` on a fresh cell cannot fail, so the `Err` arm is unreachable but
+  mapped defensively.
+- **`OnceCell<T>: TryDefault`**. Always succeeds with an empty cell (no `T` bound
+  needed since nothing is constructed).
+- **`RefCell<T>: TryDefault`** (`T: TryDefault`). Propagates `T::Error` since
+  constructing the default payload may genuinely fail.
+- **`UnsafeCell<T>: TryDefault`**. Already present from earlier work (always-fail,
+  no valid default payload). The previously-added `TryClone` impl was removed —
+  the user only specified `TryDefault` for `UnsafeCell`.
+
+Five new tests added (total olive-core count: 56 → 61). Full workspace: 224 passed,
+clippy clean.
+
 ## Decision: `AllocatorTryClone` marker for same-store allocator cloning (2026-09-01)
 
 **Question.** `Box<T, A>::try_clone` must land on the *same* backing store as the

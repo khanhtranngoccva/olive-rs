@@ -28,15 +28,14 @@
 pub use core::cell::*;
 
 use crate::try_traits::try_clone::{TryClone, TryCloneError};
-
-// FIXME: missing UnsafeCell, BorrowError, BorrowMutError
+use crate::try_traits::try_default::{TryDefault, TryDefaultError};
 
 // ---------------------------------------------------------------------------
 // Cell
 // ---------------------------------------------------------------------------
 
-// Bounds are intentionally lax - since Copy never fails because it is meant 
-// to represent bitwise copies, framework invariant is still honored. 
+// Bounds are intentionally lax - since Copy never fails because it is meant
+// to represent bitwise copies, framework invariant is still honored.
 impl<T: Copy> TryClone for Cell<T> {
     /// Fallibly clone a [`Cell`], producing an independent cell holding a clone of
     /// the current value.
@@ -44,6 +43,68 @@ impl<T: Copy> TryClone for Cell<T> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let value = self.get();
         Ok(Cell::new(value))
+    }
+}
+
+// An empty `Cell` holds its payload inline with no allocation; when the payload
+// has a canonical default, construction is infallible.
+impl<T: TryDefault> TryDefault for Cell<T> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Cell::new(T::try_default()?))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LazyCell
+// ---------------------------------------------------------------------------
+
+// Mirrors std's `impl<T: Default> Default for LazyCell<T>` which uses
+// `T::default` as the initializer function pointer (the default type parameter
+// is `F = fn() -> T`). Construction of the lazy cell itself never fails — it
+// merely stores the function; evaluation is deferred to first access.
+// FIXME: use TryDefault bounds
+impl<T: Default> TryDefault for LazyCell<T> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(LazyCell::new(T::default))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OnceCell
+// ---------------------------------------------------------------------------
+
+// Cloning an `OnceCell` reads its current state (initialized or not) and
+// produces an independent cell in the same state. If initialized, the inner
+// value is cloned via `TryClone`; if empty, the clone is also empty.
+impl<T: TryClone> TryClone for OnceCell<T> {
+    /// Fallibly clone an [`OnceCell`], preserving whether it is initialized.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the inner value's [`TryCloneError`] if the cell is initialized
+    /// and cloning its payload fails. An empty cell clones without error.
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        let out = Self::new();
+        if let Some(value) = self.get() {
+            let cloned = value.try_clone()?;
+            // `set` returns `Err` only if already initialized, which cannot
+            // happen on a freshly-constructed cell.
+            out.set(cloned).map_err(|_| {
+                TryCloneError::Other("OnceCell::try_clone: internal set failed unexpectedly")
+            })?;
+        }
+        Ok(out)
+    }
+}
+
+// An empty `OnceCell` carries no payload and performs no allocation, so its
+// default construction is infallible — mirroring std's `OnceCell::new`.
+impl<T> TryDefault for OnceCell<T> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::new())
     }
 }
 
@@ -74,6 +135,22 @@ impl<T: TryClone> TryClone for RefCell<T> {
         Ok(RefCell::new(value))
     }
 }
+
+// A `RefCell` with a default payload performs no allocation at construction
+// time — the value is stored inline. The fallible channel exists for symmetry
+// with other container types whose "empty" state may still allocate.
+impl<T: TryDefault> TryDefault for RefCell<T> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(RefCell::new(T::try_default()?))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UnsafeCell
+// ---------------------------------------------------------------------------
+//
+// FIXME: need TryDefault with TryDefault bounds for UnsafeCell
 
 #[cfg(test)]
 mod tests {
@@ -137,5 +214,52 @@ mod tests {
         assert!(res.is_err());
         // The source cell is undisturbed: it can still be borrowed and read.
         let _still_readable = r.try_borrow().expect("source cell must remain borrowable");
+    }
+
+    #[test]
+    fn cell_try_default_produces_default_payload() {
+        let c = Cell::<u32>::try_default().unwrap();
+        assert_eq!(c.get(), 0);
+        let s = Cell::<bool>::try_default().unwrap();
+        assert!(!s.get());
+    }
+
+    #[test]
+    fn lazy_cell_try_default_defers_evaluation() {
+        let lazy = LazyCell::<u32>::try_default().unwrap();
+        // The lazy cell is constructed without evaluating; first deref triggers
+        // the initializer which yields `T::default()`.
+        assert_eq!(*lazy, 0);
+    }
+
+    #[test]
+    fn once_cell_try_clone_empty() {
+        let oc: OnceCell<u32> = OnceCell::new();
+        let cloned = oc.try_clone().unwrap();
+        assert!(cloned.get().is_none());
+    }
+
+    #[test]
+    fn once_cell_try_clone_initialized() {
+        let oc = OnceCell::new();
+        oc.set(42).unwrap();
+        let cloned = oc.try_clone().unwrap();
+        assert_eq!(cloned.get(), Some(&42));
+        // Independent: mutating the clone doesn't affect the original.
+        // (OnceCell values are immutable once set, so independence is
+        // structural — they're separate allocations.)
+        assert_eq!(oc.get(), Some(&42));
+    }
+
+    #[test]
+    fn once_cell_try_default_is_empty() {
+        let oc: OnceCell<u32> = OnceCell::try_default().unwrap();
+        assert!(oc.get().is_none());
+    }
+
+    #[test]
+    fn refcell_try_default_wraps_default_payload() {
+        let r = RefCell::<u64>::try_default().unwrap();
+        assert_eq!(*r.borrow(), 0);
     }
 }

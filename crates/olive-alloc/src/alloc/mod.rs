@@ -11,6 +11,7 @@ pub use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc::LayoutExt;
 pub use olive_core::alloc::StaticAllocator;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Global + free functions
@@ -296,6 +297,15 @@ impl TryClone for Global {
 // deallocatable through the other; moving or dropping a clone invalidates
 // nothing. Equivalence therefore holds trivially.
 unsafe impl AllocatorTryClone for Global {}
+
+// `Global` carries no per-instance state and reserves nothing up front, so its
+// default construction cannot fail.
+impl TryDefault for Global {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Global)
+    }
+}
 
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///

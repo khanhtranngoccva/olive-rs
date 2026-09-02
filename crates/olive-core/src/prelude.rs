@@ -7,6 +7,7 @@
 pub use crate::recovery::{ResumableSource, Stall};
 pub use crate::try_traits::try_clone::{TryClone, TryCloneToUninit};
 pub use crate::try_traits::try_collect::{TryCollect, TryCollectInto};
+pub use crate::try_traits::try_default::{TryDefault, TryDefaultError};
 pub use crate::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 pub use crate::try_traits::try_from_iterator::TryFromIterator;
 pub use core::prelude::*;

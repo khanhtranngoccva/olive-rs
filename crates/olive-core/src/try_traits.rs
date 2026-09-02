@@ -26,13 +26,14 @@
 //! without losing data.
 //! `TryClone` and friends are atomic single-shot operations.
 
-// FIXME: Missing TryDefault. Structures like TryHashMap and allocators need it.
 pub mod try_clone;
 pub mod try_collect;
+pub mod try_default;
 pub mod try_extend;
 pub mod try_from_iterator;
 
 pub use try_clone::{TryClone, TryCloneError, TryCloneToUninit};
 pub use try_collect::{TryCollect, TryCollectInto};
+pub use try_default::{TryDefault, TryDefaultError};
 pub use try_extend::{TryExtend, TryExtendFromSlice};
 pub use try_from_iterator::TryFromIterator;

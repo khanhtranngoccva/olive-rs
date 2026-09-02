@@ -37,6 +37,7 @@ use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
@@ -2006,6 +2007,16 @@ impl<T: TryClone, A: AllocatorTryClone> TryClone for Vec<T, A> {
             }
         }
         Ok(out)
+    }
+}
+
+// An empty vector never allocates, so its default construction is infallible.
+// The default allocator is `Global`, matching std's `Vec<T>` (which defaults
+// to the global allocator).
+impl<T> TryDefault for Vec<T, Global> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Vec::new())
     }
 }
 
