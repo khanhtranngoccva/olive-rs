@@ -9,10 +9,11 @@
 //! on the standard library's `alloc` crate, because we control our own code here.
 //!
 //! Module organization mirrors the original `alloc` crate:
+//! - [`borrow`] — [`TryToOwned`], the fallible analogue of `ToOwned`, applied to
+//!   every [`TryClone`](olive_core::TryClone) type through a blanket impl.
 //! - [`boxed`] — fallible `Box`.
 //! - [`vec`] — fallible `Vec`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
-//! - [`borrow`] — borrow semantics (`Cow`, `ToOwned` analogues).
 //! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap`.
 //! - [`rc`] / [`arc`] — reference-counted pointers with fallible construction.
 
@@ -25,6 +26,10 @@
 // the corresponding `alloc` submodule but with fallible operations throughout.
 
 pub mod alloc;
+pub mod borrow;
 pub mod boxed;
 mod raw_vec;
 pub mod vec;
+
+/// The fallible `ToOwned` analogue and its error type.
+pub use borrow::{TryToOwned, TryToOwnedError};

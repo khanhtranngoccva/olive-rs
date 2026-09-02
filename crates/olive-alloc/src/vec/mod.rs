@@ -15,7 +15,7 @@
 //!
 //! Element cloning uses the fallible [`TryClone`] trait throughout, so a `Vec<T>`
 //! can hold values whose own construction can fail (nested collections, boxes,
-//! …) without ever aborting.
+//! …) without ever panicking or aborting.
 
 // This module performs a great deal of index arithmetic on `len`/`capacity`, so
 // `clippy::arithmetic_side_effects` (denied crate-wide on non-test builds) is
@@ -33,6 +33,7 @@ use core::slice;
 use crate::alloc::{Allocator, Global};
 use crate::boxed::Box;
 use crate::raw_vec::RawVec;
+use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -1991,9 +1992,9 @@ where
     }
 }
 
-impl<T: TryClone, A: Allocator + Clone> TryClone for Vec<T, A> {
+impl<T: TryClone, A: AllocatorTryClone> TryClone for Vec<T, A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let mut out = Self::new_in(self.raw.allocator().clone());
+        let mut out = Self::new_in(self.raw.allocator().try_clone()?);
         if !self.is_empty() {
             out.try_reserve(self.len).map_err(TryCloneError::Reserve)?;
         }

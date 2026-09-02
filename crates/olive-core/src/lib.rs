@@ -17,9 +17,10 @@
 //!   collection-level capacity-reservation error (and a re-export of
 //!   [`AllocError`](alloc::AllocError)).
 //! * [`try_traits`] — the foundational fallible traits, each in its own module:
-//!   [`TryClone`](try_traits::try_clone), [`TryToOwned`](try_traits::try_to_owned),
+//!   [`TryClone`](try_traits::try_clone),
 //!   [`TryFromIterator`](try_traits::try_from_iterator), [`TryCollect`](try_traits::try_collect),
 //!   [`TryExtend`](try_traits::try_extend) / [`TryExtendFromSlice`](try_traits::try_extend).
+//! * Modules mirroring std's layout, containing Olive core trait implementations for various core types.
 //! * [`recovery`] — [`Resume`](recovery::Resume) / [`Stall`](recovery::Stall) for resuming a
 //!   failed fallible iteration without losing data.
 //!
@@ -77,7 +78,15 @@ extern crate self as olive_core;
 pub mod alloc;
 /// Allocation errors: [`AllocError`] and [`TryReserveError`].
 pub mod alloc_errors;
-/// Iterator recovery primitives: [`Resume`] and the [`Stall`] trait.
+/// Foundational-trait impls for [`core::cell::Cell`] and [`core::cell::RefCell`].
+pub mod cell;
+/// Foundational-trait impls for [`core::marker::PhantomData`].
+pub mod marker;
+/// Foundational-trait impls for the [`core::num`] non-zero integer newtypes.
+pub mod num;
+/// Foundational-trait impls for [`core::ops`] types (ranges, control flow).
+pub mod ops;
+/// Iterator recovery primitives: [`Resume`](recovery::Resume) and the [`Stall`](recovery::Stall) trait.
 pub mod recovery;
 /// Foundational fallible traits.
 pub mod try_traits;
@@ -103,5 +112,5 @@ pub use core::*;
 
 pub use try_traits::{
     TryClone, TryCloneError, TryCloneToUninit, TryCollect, TryCollectInto, TryExtend,
-    TryExtendFromSlice, TryFromIterator, TryToOwned, TryToOwnedError,
+    TryExtendFromSlice, TryFromIterator,
 };

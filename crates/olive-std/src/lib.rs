@@ -1,7 +1,7 @@
 //! # olive-std
 //!
 //! A fully-fallible re-port of Rust's `std`-only surface: hash collections, FFI
-//! types, sync primitives, panic helpers (`catch_unwind`, `resume_unwind`), and many more. 
+//! types, sync primitives, panic helpers (`catch_unwind`, `resume_unwind`), and many more.
 //! This crate depends on both [`olive_core`] and [`olive_alloc`].
 //!
 //! (Placeholder — the std-only port is layered on top of the alloc port.)
