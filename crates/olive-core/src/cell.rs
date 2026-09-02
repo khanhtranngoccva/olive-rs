@@ -59,15 +59,18 @@ impl<T: TryDefault> TryDefault for Cell<T> {
 // LazyCell
 // ---------------------------------------------------------------------------
 
-// Mirrors std's `impl<T: Default> Default for LazyCell<T>` which uses
-// `T::default` as the initializer function pointer (the default type parameter
-// is `F = fn() -> T`). Construction of the lazy cell itself never fails — it
-// merely stores the function; evaluation is deferred to first access.
-// FIXME: use TryDefault bounds
-impl<T: Default> TryDefault for LazyCell<T> {
+// A `LazyCell` defers its payload until first dereference, so a fallible
+// initializer is a natural fit: unlike [`Cell`] or [`RefCell`], whose payloads
+// are constructed eagerly at build time, here construction only *stores* the
+// closure and evaluation happens later. That lets us bound on [`TryDefault`]
+// rather than the infallible [`Default`]: a `T` whose canonical value may fail
+// to construct can still be lazily initialized, surfacing the failure at first
+// access instead of at build time. The stored closure returns
+// `Ok(T)` directly, so the cell resolves to `T` with no extra wrapping.
+impl<T: TryDefault> TryDefault for LazyCell<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(LazyCell::new(T::default))
+        Ok(LazyCell::new(|| T::try_default().expect("lazy default failed")))
     }
 }
 
@@ -150,7 +153,7 @@ impl<T: TryDefault> TryDefault for RefCell<T> {
 // UnsafeCell
 // ---------------------------------------------------------------------------
 //
-// FIXME: need TryDefault with TryDefault bounds for UnsafeCell
+
 
 #[cfg(test)]
 mod tests {

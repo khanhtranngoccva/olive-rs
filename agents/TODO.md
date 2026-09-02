@@ -182,6 +182,35 @@ original spec:
 Five new tests added (total olive-core count: 56 → 61). Full workspace: 224 passed,
 clippy clean.
 
+## Resolved this session (continued) — 2026-09-02 (remaining FIXMEs)
+
+Cleared the last three code-level FIXMEs left in the tree:
+
+- **`cell.rs` — `LazyCell<T>: TryDefault` bound corrected to `T: TryDefault`.**
+  The old impl bounded on `T: Default` and stored `T::default` as the fn pointer.
+  Since `LazyCell` defers evaluation to first dereference, a fallible initializer
+  is a natural fit: the closure calls `T::try_default()` at access time, surfacing
+  allocation failures lazily rather than requiring an infallible default up front.
+  Construction of the cell itself still never fails (it only stores the closure).
+
+- **`cell.rs` — `UnsafeCell` section: resolved by documenting deliberate omission.**
+  The FIXME asked for "TryDefault with TryDefault bounds for UnsafeCell." An
+  `UnsafeCell` has no canonical empty/default state of its own; giving it a
+  `TryDefault` would fabricate a payload out of nothing. Mirroring the `NonZero*`
+  stance, we omit the impl entirely rather than always-fail. The section header
+  now carries an explanatory comment instead of the FIXME.
+
+- **`nonzero.rs` — stale FIXME removed, replaced with accurate rationale.**
+  The comment claimed "missing generic NonZero." In fact, a blanket
+  `impl<T> TryClone for NonZero<T>` is *impossible*: `NonZero<T>` is bounded on
+  the perma-unstable sealed trait `ZeroablePrimitive`, which downstream crates
+  cannot name or satisfy. The 12 concrete-width newtypes already cover all
+  practical uses. The comment now explains why no generic impl exists.
+
+Full workspace: `cargo build` clean, `cargo test --workspace` 224 passed / 0
+failed, `cargo clippy --workspace --all-targets` zero warnings. No `FIXME`s
+remain anywhere in the source tree.
+
 ## Decision: `AllocatorTryClone` marker for same-store allocator cloning (2026-09-01)
 
 **Question.** `Box<T, A>::try_clone` must land on the *same* backing store as the
