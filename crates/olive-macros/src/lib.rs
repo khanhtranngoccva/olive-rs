@@ -1,16 +1,18 @@
 //! Procedural macros for the Olive fallible standard library.
 //!
 //! These are host-side `proc-macro` helpers that generate boilerplate
-//! [`TryClone`](::olive_core::try_traits::try_clone::TryClone) implementations
-//! so that downstream crates (and Olive itself) do not have to hand-write the
-//! repetitive per-field / per-tuple glue. The generated code is emitted into the
-//! *calling* crate, where it resolves against that crate's own visibility — so
-//! the trait path used in the expansion is the absolute `::olive_core::…` path,
-//! which every Olive member depends on directly.
+//! [`TryClone`](::olive_core::try_traits::try_clone::TryClone) and
+//! [`TryDefault`](::olive_core::try_traits::try_default::TryDefault)
+//! implementations so that downstream crates (and Olive itself) do not have to
+//! hand-write the repetitive per-field / per-tuple glue. The generated code is
+//! emitted into the *calling* crate, where it resolves against that crate's own
+//! visibility — so the trait path used in the expansion is the absolute
+//! `::olive_core::…` path, which every Olive member depends on directly.
 
 extern crate proc_macro;
 
 mod try_clone;
+mod try_default;
 
 use proc_macro::TokenStream;
 
@@ -37,4 +39,35 @@ pub fn derive_try_clone(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn try_clone_tuples(input: TokenStream) -> TokenStream {
     try_clone::try_clone_tuples(input)
+}
+
+/// Derives [`TryDefault`](::olive_core::try_traits::try_default::TryDefault) for
+/// a struct or enum.
+///
+/// Every field in the struct must itself implement `TryDefault`; the generated
+/// implementation constructs each field fallibly and propagates the first error
+/// encountered, dropping any already-constructed prefix on failure.
+///
+/// For enums, exactly one variant must be marked with `#[try_default]` (a unit
+/// variant); the derived `try_default()` builds that variant. The modifier is
+/// named `try_default` rather than `default` so it cannot collide with
+/// `#[derive(Default)]`'s own `#[default]` variant marker when both derives are
+/// present on the same type.
+#[proc_macro_derive(TryDefault, attributes(try_default))]
+pub fn derive_try_default(input: TokenStream) -> TokenStream {
+    try_default::derive_try_default(input)
+}
+
+/// Generates `TryDefault` implementations for tuples of arities 1 through `max`
+/// (inclusive), clamped to the range 1..=16. Arity 0 (the unit type) is covered
+/// separately by the primitive impls in `olive-core`.
+///
+/// # Example
+///
+/// ```ignore
+/// olive_macros::try_default_tuples!(16);
+/// ```
+#[proc_macro]
+pub fn try_default_tuples(input: TokenStream) -> TokenStream {
+    try_default::try_default_tuples(input)
 }
