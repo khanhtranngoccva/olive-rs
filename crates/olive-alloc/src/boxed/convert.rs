@@ -2,9 +2,8 @@
 
 use core::any::Any;
 use core::error::Error;
-use core::mem;
 use core::pin::Pin;
-use core::ptr::{self, NonNull};
+use core::ptr::{self};
 
 use super::Box;
 use crate::alloc::{Allocator, Global, StaticAllocator};
@@ -31,19 +30,13 @@ where
 impl<A: Allocator> From<Box<str, A>> for Box<[u8], A> {
     /// Converts a `Box<str>` into a `Box<[u8]>`.
     ///
-    /// This conversion does not allocate on the heap and happens in place.
+    /// This conversion does not allocate on the heap.
     fn from(s: Box<str, A>) -> Self {
         unsafe {
-            // Extract fields directly to avoid the `Sized` requirement.
-            let inner = ptr::read(&s.inner);
-            let alloc = ptr::read(&s.alloc);
-            mem::forget(s);
-
-            // SAFETY: a `str` is just a sequence of `u8`s with the same layout.
-            // Reinterpret the fat pointer (address + length metadata) as
-            // `NonNull<[u8]>`, which has identical representation.
-            let nn_bytes: NonNull<[u8]> = mem::transmute(inner);
-            Box::from_raw_in(nn_bytes.as_ptr(), alloc)
+            let len = s.len();
+            let (ptr, alloc) = Box::into_non_null_with_allocator(s);
+            let reinterpreted = ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<u8>(), len);
+            Box::from_raw_in(reinterpreted, alloc)
         }
     }
 }
@@ -64,16 +57,9 @@ unsafe fn boxed_slice_as_array_unchecked<T, A: Allocator, const N: usize>(
 
     unsafe {
         // Extract fields directly to avoid the `Sized` requirement.
-        let inner = ptr::read(&boxed_slice.inner);
-        let alloc = ptr::read(&boxed_slice.alloc);
-        mem::forget(boxed_slice);
-
-        // SAFETY: Pointer and allocator came from an existing box,
-        // and our safety condition requires that the length is exactly `N`.
-        // A slice of length N has the same layout as an array [T; N]; drop
-        // the (redundant) length metadata by re-pointing at `[T; N]`.
-        let arr_ptr: *mut [T; N] = inner.as_ptr() as *mut u8 as *mut [T; N];
-        Box::from_raw_in(arr_ptr, alloc)
+        let (ptr, alloc) = Box::into_non_null_with_allocator(boxed_slice);
+        let arr_ptr = ptr.cast::<[T; N]>();
+        Box::from_non_null_in(arr_ptr, alloc)
     }
 }
 
