@@ -311,28 +311,20 @@ impl<A: Allocator> String<A> {
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the shrink reallocation fails.
-    pub fn try_into_boxed_str(mut self) -> Result<Box<str, A>, TryReserveError> {
-        // Shrink-to-fit first so the boxed allocation can be exactly `len` bytes.
-        self.buf.try_shrink_to_fit()?;
-        Ok(self.into_boxed_str())
+    pub fn try_into_boxed_str(self) -> Result<Box<str, A>, TryReserveError> {
+        self.try_into_boxed_str_give_back()
+            .map_err(|(_returned, err)| err)
     }
 
     /// Shrinks and consumes the `String`, returning its contents as a `Box<str>` on the
     /// same allocator — or, if the shrink reallocation fails, returns the original
-    /// `String` alongside the error so no work is lost.
-    ///
-    /// This mirrors the shape of [`Box::try_new_give_back`](crate::boxed::Box::try_new_give_back):
-    /// the fallible step (shrink-to-fit) either succeeds and yields the boxed string, or
-    /// hands back the untouched `String` together with the [`TryReserveError`] that caused
-    /// the failure. The caller can then decide whether to retry, keep the string at its
-    /// current capacity, or drop it.
+    /// `String` alongside the error so no data is lost.
     ///
     /// # Errors
     ///
     /// Returns `(Self, TryReserveError)` if the shrink reallocation fails.
-    pub fn try_into_boxed_str_give_back(
-        mut self,
-    ) -> Result<Box<str, A>, (Self, TryReserveError)> {
+    pub fn try_into_boxed_str_give_back(mut self) -> Result<Box<str, A>, (Self, TryReserveError)> {
+        // Shrink-to-fit first so the boxed allocation can be exactly `len` bytes.
         match self.buf.try_shrink_to_fit() {
             Ok(()) => Ok(self.into_boxed_str()),
             Err(e) => Err((self, e)),
@@ -1484,8 +1476,7 @@ mod tests {
         // Buffer is still small; push more to force growth via Global path.
         // Simpler: just verify the success path shape and that the signature
         // compiles — the failure path is exercised by the unit below.
-        let result: Result<Box<str, ShrinkFailAlloc>, (_, _)> =
-            s.try_into_boxed_str_give_back();
+        let result: Result<Box<str, ShrinkFailAlloc>, (_, _)> = s.try_into_boxed_str_give_back();
         match result {
             Ok(b) => assert_eq!(&*b, "tiny"),
             Err((s, e)) => {
