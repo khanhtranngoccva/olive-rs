@@ -283,7 +283,7 @@ impl From<TryReserveError> for TryVecIntoArrayError {
 // Vec
 // ---------------------------------------------------------------------------
 
-/// A growable list of memory, backed by a [`RawVec`] buffer.
+/// A growable contiguous list of items backed by the heap.
 ///
 /// This is the fully-fallible analogue of `std::vec::Vec`: every operation that
 /// could allocate or fail returns a [`Result`] instead of panicking. It is generic over
@@ -779,8 +779,7 @@ impl<T, A: Allocator> Vec<T, A> {
     /// when they already hold a desired final size — e.g. sizing from an
     /// iterator's `size_hint`.
     ///
-    /// A degenerate input (`total < len`) needs no growth and succeeds without
-    /// touching the allocator; it never wraps into a spurious huge request.
+    /// `total < len` results in a no-op.
     ///
     /// # Errors
     ///

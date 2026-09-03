@@ -1,16 +1,10 @@
-//! # olive-alloc
-//!
 //! A fully-fallible re-port of Rust's `alloc` crate. Every heap-owning type —
 //! `Vec`, `String`, `BTreeMap`/`BTreeSet`, `Rc`/`Arc`, `Cow`, `Box` — is rewritten
 //! so that any operation which can fail (above all, allocation) returns a
 //! [`Result`] instead of panicking.
 //!
-//! This crate depends only on [`olive_core`]; it deliberately does **not** depend
-//! on the standard library's `alloc` crate, because we control our own code here.
-//!
 //! Module organization mirrors the original `alloc` crate:
-//! - [`borrow`] — [`TryToOwned`], the fallible analogue of `ToOwned`, applied to
-//!   every [`TryClone`](olive_core::TryClone) type through a blanket impl.
+//! - [`borrow`] — [`TryToOwned`], the fallible analogue of [`ToOwned`](stock_alloc::borrow::ToOwned).
 //! - [`boxed`] — fallible `Box`.
 //! - [`vec`] — fallible `Vec`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
@@ -22,13 +16,16 @@
 // Require every `unsafe fn` / `unsafe impl` to carry a `# Safety` doc section.
 #![deny(clippy::missing_safety_doc)]
 
+// Need extern stub for documentation.
+extern crate alloc as stock_alloc;
+
 // Modules are added incrementally as the port progresses. Each module mirrors
 // the corresponding `alloc` submodule but with fallible operations throughout.
-
 pub mod alloc;
 pub mod borrow;
 pub mod boxed;
 mod raw_vec;
+pub mod string;
 pub mod vec;
 
 /// The fallible `ToOwned` analogue and its error type.

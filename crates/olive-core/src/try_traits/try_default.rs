@@ -86,8 +86,8 @@ impl From<AllocError> for TryDefaultError {
 ///       `tokio` employs.
 /// - **Types with no defaults.** Types having no meaningful default (e.g. [`core::num::NonZero`])
 ///   should omit this impl entirely rather than always fail.
-/// 
-/// These limitations allow the error mode of [`TryDefault`] to be the fixed 
+///
+/// These limitations allow the error mode of [`TryDefault`] to be the fixed
 /// [`TryDefaultError`] return type (rather than an associated type). This
 /// enables uniform generic composition and future `#[derive(TryDefault)]`
 /// support. In practice, default-construction failures are almost exclusively
@@ -179,7 +179,10 @@ mod tests {
         // Spot-check a few arities across the generated range.
         assert_eq!(<(u8,) as TryDefault>::try_default().unwrap(), (0,));
         assert_eq!(<(u8, i32) as TryDefault>::try_default().unwrap(), (0, 0));
-        assert_eq!(<(bool, char, f64) as TryDefault>::try_default().unwrap(), (false, '\0', 0.0));
+        assert_eq!(
+            <(bool, char, f64) as TryDefault>::try_default().unwrap(),
+            (false, '\0', 0.0)
+        );
         assert_eq!(
             <(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8) as TryDefault>::try_default()
                 .unwrap(),
@@ -203,6 +206,7 @@ mod tests {
     enum EnumWithDefault {
         #[try_default]
         Empty,
+        #[expect(unused, reason = "test cases do not use it yet")]
         Full(u32),
     }
 
@@ -240,7 +244,9 @@ mod tests {
             }
         }
         struct Mixed {
+            #[expect(unused, reason = "test code does not use this field")]
             ok: u32,
+            #[expect(unused, reason = "test code does not use this field")]
             bad: Failing,
         }
         impl TryDefault for Mixed {

@@ -16,8 +16,7 @@ mod try_default;
 
 use proc_macro::TokenStream;
 
-/// Derives [`TryClone`](::olive_core::try_traits::try_clone::TryClone) for a
-/// struct or enum.
+/// Derives `TryClone` for a struct or enum.
 ///
 /// Every field in every variant must itself implement `TryClone`. The generated
 /// implementation clones each field fallibly and propagates the first error
@@ -41,8 +40,7 @@ pub fn try_clone_tuples(input: TokenStream) -> TokenStream {
     try_clone::try_clone_tuples(input)
 }
 
-/// Derives [`TryDefault`](::olive_core::try_traits::try_default::TryDefault) for
-/// a struct or enum.
+/// Derives `TryDefault` for a struct or enum.
 ///
 /// Every field in the struct must itself implement `TryDefault`; the generated
 /// implementation constructs each field fallibly and propagates the first error

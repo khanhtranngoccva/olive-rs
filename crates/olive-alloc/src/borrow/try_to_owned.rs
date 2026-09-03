@@ -75,7 +75,7 @@ fn clone_err_to_owned(err: &TryCloneError) -> TryToOwnedError {
 ///
 /// Types implementing this trait guarantee that constructing their owned variant
 /// will not panic on allocation failure.
-pub trait TryToOwned: Sized {
+pub trait TryToOwned {
     /// The owned type produced by [`Self::try_to_owned`].
     type Owned: Borrow<Self>;
 

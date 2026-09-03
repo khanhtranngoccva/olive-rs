@@ -781,7 +781,10 @@ impl<T, A: Allocator> Box<[T], A> {
     ///
     /// Returns [`AllocError`] if the allocation fails or `n * size_of::<T>()` overflows.
     #[inline]
-    pub fn try_new_uninit_slice_in(n: usize, alloc: A) -> Result<Box<[MaybeUninit<T>], A>, AllocError> {
+    pub fn try_new_uninit_slice_in(
+        n: usize,
+        alloc: A,
+    ) -> Result<Box<[MaybeUninit<T>], A>, AllocError> {
         let buf = RawVec::<T, A>::try_with_capacity_in(n, alloc).map_err(|_| AllocError)?;
         // SAFETY: `buf` holds exactly `n` reserved slots and we wrap all of them, so the
         // length equals the requested capacity (within the allowed range).
@@ -799,7 +802,10 @@ impl<T, A: Allocator> Box<[T], A> {
     ///
     /// Returns [`AllocError`] if the allocation fails or `n * size_of::<T>()` overflows.
     #[inline]
-    pub fn try_new_zeroed_slice_in(n: usize, alloc: A) -> Result<Box<[MaybeUninit<T>], A>, AllocError> {
+    pub fn try_new_zeroed_slice_in(
+        n: usize,
+        alloc: A,
+    ) -> Result<Box<[MaybeUninit<T>], A>, AllocError> {
         let buf = RawVec::<T, A>::try_with_capacity_zeroed_in(n, alloc).map_err(|_| AllocError)?;
         // SAFETY: as in `try_new_uninit_slice_in`; the buffer is additionally zero-filled.
         Ok(unsafe { buf.into_box(n) })
@@ -837,9 +843,8 @@ impl<T> Box<[T], Global> {
 
     /// Allocates a boxed slice of zero-initialized memory on the global allocator.
     ///
-    /// The elements are zero-filled; use [`MaybeUninit::assume_init`] (or
-    /// [`MaybeUninit::write`]) to reinterpret them as `[T]`. This is the slice analogue of
-    /// [`try_new_zeroed`](Self::try_new_zeroed).
+    /// The elements are zero-filled; use [`MaybeUninit::assume_init`] to reinterpret
+    /// them as `[T]`. This is the slice analogue of [`try_new_zeroed`](Self::try_new_zeroed).
     ///
     /// # Errors
     ///
