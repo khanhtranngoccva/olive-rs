@@ -34,6 +34,9 @@
 //! All content is guaranteed to be valid UTF-8; the public API exposes it as `&str`
 //! via [`Deref`], so that [`String`] inherits all its methods.
 
+mod into_chars;
+pub use into_chars::IntoChars;
+
 use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{self, Debug, Display};
 use core::hash;
@@ -502,7 +505,8 @@ impl<A: Allocator> String<A> {
 
     /// Shared append path for a validated UTF-8 fragment.
     fn push_str_inner(&mut self, s: &str) -> Result<(), TryReserveError> {
-        // Sanity guard to ensure len < capacity and prevent dst from overflowing
+        // Sanity guard to ensure there is something to push =>
+        // len < capacity and prevent dst from overflowing
         if s.is_empty() {
             return Ok(());
         }
@@ -536,8 +540,9 @@ impl<A: Allocator> String<A> {
     /// Returns [`TryStringInsertError`] if the index is invalid or growing the
     /// buffer fails.
     pub fn try_insert_str(&mut self, index: usize, s: &str) -> Result<(), TryStringInsertError> {
-        if index > self.len() || !self.is_char_boundary(index) {
-            return Err(TryStringInsertError::NotCharBoundary(index));
+        let len = self.len();
+        if index > len || !self.is_char_boundary(index) {
+            return Err(TryStringInsertError::NotCharBoundary { index, len });
         }
 
         // Sanity guard to ensure len < capacity and prevent dst from overflowing
@@ -580,18 +585,33 @@ impl<A: Allocator> String<A> {
 
     /// Truncates the string to `new_len` bytes.
     ///
-    /// Panics if `new_len` is not on a character boundary.
-    // FIXME: move to try_truncate (char boundary)
-    pub fn truncate(&mut self, new_len: usize) {
-        assert!(
-            new_len <= self.len(),
-            "truncation len greater than string len"
-        );
-        assert!(
-            self.is_char_boundary(new_len),
-            "truncate called at non-char boundary"
-        );
+    /// If `new_len` is greater than or equal to the current length, this is a
+    /// no-op (the string is already at most that long).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringTruncateError`] if `new_len` lands in the middle of
+    /// a multi-byte character.
+    pub fn try_truncate(&mut self, new_len: usize) -> Result<(), TryStringTruncateError> {
+        let len = self.len();
+        if new_len >= len {
+            return Ok(());
+        }
+        if !self.is_char_boundary(new_len) {
+            return Err(TryStringTruncateError {
+                new_length: new_len,
+            });
+        }
         self.buf.truncate(new_len);
+        Ok(())
+    }
+
+    /// Returns an iterator over the characters of the string, consuming it.
+    ///
+    /// This is the fallible-port analogue of nightly std's `String::into_chars`. The
+    /// returned [`IntoChars`] iterator owns the string's bytes.
+    pub fn into_chars(self) -> IntoChars<A> {
+        IntoChars::new(self)
     }
 
     /// Removes the last character from the string and returns it, or `None` if
@@ -609,6 +629,476 @@ impl<A: Allocator> String<A> {
         Some(c)
     }
 
+    /// Removes the character whose first byte is at `index`, shifting the
+    /// following bytes left to close the gap.
+    ///
+    /// This is the fallible-port analogue of std's `String::remove`. It never
+    /// allocates; it only fails if `index` does not start a character.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringRemoveError`] if `index` is out of bounds or lands in
+    /// the middle of a multi-byte character.
+    pub fn try_remove(&mut self, index: usize) -> Result<char, TryStringRemoveError> {
+        let len = self.len();
+        if !self.is_char_boundary(index) || index >= len {
+            return Err(TryStringRemoveError { index, len });
+        }
+        // Decode the char being removed *before* shifting so we can return it.
+        let ch = self[index..]
+            .chars()
+            .next()
+            .unwrap_or_else(|| unreachable!("char boundary checked"));
+        let width = ch.len_utf8();
+        // Shift `[index + width .. len]` down by `width` bytes and shrink.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "index + width <= len (valid char fits)"
+        )]
+        let remaining = len - (index + width);
+        let ptr = self.buf.as_mut_ptr();
+        // SAFETY: shifting left `remaining` bytes by `width`. Must not occur if remaining == 0 to avoid
+        // OOB pointer overflow.
+        unsafe {
+            if remaining > 0 {
+                #[allow(clippy::arithmetic_side_effects, reason = "index + width <= len")]
+                {
+                    ptr::copy(ptr.add(index + width), ptr.add(index), remaining);
+                }
+            }
+        }
+        #[allow(clippy::arithmetic_side_effects, reason = "width <= len")]
+        unsafe {
+            self.buf.set_len(len - width);
+        }
+        Ok(ch)
+    }
+
+    /// Retains only the characters for which `predicate` returns `true`,
+    /// dropping the rest in place. No allocation occurs.
+    ///
+    /// # Panics
+    ///
+    /// If `predicate` panics, the string is sealed into a valid state: the
+    /// unchecked tail is shifted left over any holes created by rejected
+    /// characters, so the result contains all originally-kept characters
+    /// followed by all not-yet-examined characters (in their original order).
+    pub fn retain<F>(&mut self, mut predicate: F)
+    where
+        F: FnMut(char) -> bool,
+    {
+        let len = self.len();
+        if len == 0 {
+            return;
+        }
+        let base = self.buf.as_mut_ptr();
+
+        // Scan forward to find the first character that should be removed.
+        // Characters before it are all kept, so no critical section needed yet.
+        let mut read_pos = 0usize;
+        loop {
+            // SAFETY: read_pos < len (guarded below).
+            #[allow(clippy::arithmetic_side_effects, reason = "read_pos < len")]
+            let rest = unsafe { core::slice::from_raw_parts(base.add(read_pos), len - read_pos) };
+            let ch = unsafe { core::str::from_utf8_unchecked(rest) }
+                .chars()
+                .next()
+                .unwrap_or_else(|| unreachable!("non-empty slice has a leading char"));
+            let w = ch.len_utf8();
+            if !predicate(ch) {
+                break;
+            }
+            #[allow(clippy::arithmetic_side_effects, reason = "read_pos + w <= len")]
+            {
+                read_pos += w;
+            }
+            if read_pos == len {
+                // All characters kept; nothing to do.
+                return;
+            }
+        }
+
+        // Critical section: at least one character will be removed.
+        // On unwind, we shift the unchecked tail left to seal gaps, then
+        // restore the length. We track state in plain variables and use a
+        // small RAII guard that borrows `self` exclusively.
+        struct RetainGuard<'a, A: Allocator> {
+            string: &'a mut String<A>,
+            base: *mut u8,
+            read: usize,
+            write: usize,
+            original_len: usize,
+        }
+        impl<A: Allocator> Drop for RetainGuard<'_, A> {
+            #[cold]
+            fn drop(&mut self) {
+                #[allow(clippy::arithmetic_side_effects, reason = "read <= original_len")]
+                let remaining = self.original_len - self.read;
+                // Need to check to prevent OOB pointer.
+                if remaining > 0 {
+                    // SAFETY: The unchecked tail `[read..original_len)` consists
+                    // of whole characters. Shifting it left to position `write`
+                    // (also a char boundary) keeps the buffer valid UTF-8.
+                    unsafe {
+                        ptr::copy(
+                            self.base.add(self.read),
+                            self.base.add(self.write),
+                            remaining,
+                        );
+                    }
+                }
+                // SAFETY: After filling holes, all bytes are contiguous and
+                // valid UTF-8; the new length equals `write + remaining`.
+                unsafe {
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "write + remaining <= original_len"
+                    )]
+                    {
+                        self.string.buf.set_len(self.write + remaining);
+                    }
+                }
+            }
+        }
+
+        let mut g = RetainGuard {
+            string: self,
+            base,
+            read: read_pos,
+            write: read_pos,
+            original_len: len,
+        };
+
+        // Process the first rejected character: advance `read` past it.
+        // We don't copy anything for it (it's dropped).
+        // SAFETY: read_pos < len (established above).
+        #[allow(clippy::arithmetic_side_effects, reason = "read_pos < len")]
+        let first_width = {
+            let rest = unsafe { core::slice::from_raw_parts(base.add(read_pos), len - read_pos) };
+            unsafe { core::str::from_utf8_unchecked(rest) }
+                .chars()
+                .next()
+                .unwrap()
+                .len_utf8()
+        };
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "read_pos + first_width <= len"
+        )]
+        {
+            g.read += first_width;
+        }
+
+        // Continue scanning from after the first rejection.
+        while g.read < g.original_len {
+            // SAFETY: g.read < original_len.
+            #[allow(clippy::arithmetic_side_effects, reason = "g.read < original_len")]
+            let rest =
+                unsafe { core::slice::from_raw_parts(base.add(g.read), g.original_len - g.read) };
+            let ch = unsafe { core::str::from_utf8_unchecked(rest) }
+                .chars()
+                .next()
+                .unwrap_or_else(|| unreachable!("non-empty slice has a leading char"));
+            let w = ch.len_utf8();
+            if predicate(ch) {
+                if g.read != g.write {
+                    // SAFETY: Both offsets are on char boundaries; copying `w`
+                    // bytes from `[g.read..g.read+w)` to `[g.write..g.write+w)`
+                    // is in-bounds and overlapping only forward.
+                    unsafe {
+                        ptr::copy(base.add(g.read), base.add(g.write), w);
+                    }
+                }
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "g.write + w <= original_len"
+                )]
+                {
+                    g.write += w;
+                }
+            }
+            #[allow(clippy::arithmetic_side_effects, reason = "g.read + w <= original_len")]
+            {
+                g.read += w;
+            }
+        }
+
+        // Success path: commit the final length and forget the guard.
+        // SAFETY: `g.write` is the total bytes of kept characters, all valid.
+        unsafe { g.string.buf.set_len(g.write) };
+        core::mem::forget(g);
+    }
+
+    /// Retains only the characters for which `predicate` returns `true`,
+    /// using an auxiliary allocation to record surviving offsets. This variant
+    /// is **atomic**: if `predicate` panics, the string is restored to its
+    /// original contents (unlike [`retain`](Self::retain), which seals the gap
+    /// by appending the unchecked tail).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if allocating the offset table fails.
+    // TODO: evaluate this
+    pub fn retain_atomic<F>(&mut self, mut predicate: F) -> Result<(), TryReserveError>
+    where
+        F: FnMut(char) -> bool,
+    {
+        let len = self.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        // First pass: collect byte offsets of characters that survive.
+        // Each entry is the byte offset of a kept character within `[0..len)`.
+        let mut offsets = Vec::<usize>::try_with_capacity_in(len / 4, Global)?;
+        let mut pos = 0usize;
+        while pos < len {
+            // SAFETY: pos < len, buffer is valid UTF-8.
+            #[allow(clippy::arithmetic_side_effects, reason = "pos < len")]
+            let rest =
+                unsafe { core::slice::from_raw_parts(self.buf.as_ptr().add(pos), len - pos) };
+            let ch = unsafe { core::str::from_utf8_unchecked(rest) }
+                .chars()
+                .next()
+                .unwrap_or_else(|| unreachable!("non-empty slice has a leading char"));
+            let w = ch.len_utf8();
+            if predicate(ch) {
+                offsets.try_push(pos)?;
+            }
+            #[allow(clippy::arithmetic_side_effects, reason = "pos + w <= len")]
+            {
+                pos += w;
+            }
+        }
+
+        // Second pass: compact in-place using the recorded offsets.
+        // Since we have the full list, a panic here cannot corrupt the string
+        // (no predicate calls remain), but we still use a guard for safety.
+        let base = self.buf.as_mut_ptr();
+        let mut write_pos = 0usize;
+        for &src_pos in offsets.as_slice() {
+            // Determine the width of the char at src_pos.
+            // SAFETY: src_pos is a valid char boundary within [0..len).
+            #[allow(clippy::arithmetic_side_effects, reason = "src_pos < len")]
+            let rest = unsafe { core::slice::from_raw_parts(base.add(src_pos), len - src_pos) };
+            let w = unsafe { core::str::from_utf8_unchecked(rest) }
+                .chars()
+                .next()
+                .unwrap()
+                .len_utf8();
+            if src_pos != write_pos {
+                // SAFETY: both positions are on char boundaries; forward copy.
+                unsafe {
+                    ptr::copy(base.add(src_pos), base.add(write_pos), w);
+                }
+            }
+            #[allow(clippy::arithmetic_side_effects, reason = "write_pos + w <= len")]
+            {
+                write_pos += w;
+            }
+        }
+        // SAFETY: write_pos is the sum of widths of all kept chars, all valid.
+        unsafe { self.buf.set_len(write_pos) };
+        Ok(())
+    }
+
+    /// Splits the string into two at byte index `at`, keeping the portion
+    /// before `at` in `self` and returning the portion from `at` onward as a
+    /// new `String` allocated through the global allocator.
+    ///
+    /// This is the fallible-port analogue of std's `String::split_off`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringSplitOffOrReserveError::Boundary`] if `at` is out of
+    /// bounds or not on a character boundary, or
+    /// [`TryStringSplitOffOrReserveError::Reserve`] if the allocation for the
+    /// right-hand half fails.
+    pub fn try_split_off(&mut self, at: usize) -> Result<String, TryStringSplitOffError> {
+        self.try_split_off_in(at, Global)
+    }
+
+    /// Splits the string into two at byte index `at`, keeping the portion
+    /// before `at` in `self` and returning the portion from `at` onward as a
+    /// new `String` allocated through `alloc`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringSplitOffOrReserveError::Boundary`] if `at` is out of
+    /// bounds or not on a character boundary, or
+    /// [`TryStringSplitOffOrReserveError::Reserve`] if the allocation for the
+    /// right-hand half fails.
+    pub fn try_split_off_in<A2: Allocator>(
+        &mut self,
+        at: usize,
+        alloc: A2,
+    ) -> Result<String<A2>, TryStringSplitOffError> {
+        let len = self.len();
+        if at > len || !self.is_char_boundary(at) {
+            return Err(TryStringSplitOffError::NotCharBoundary { index: at, len });
+        }
+        let tail_bytes = self[at..].as_bytes();
+        // Fast path: splitting at the end produces an empty tail — no copy needed.
+        if tail_bytes.is_empty() {
+            return Ok(String::<A2>::new_in(alloc));
+        }
+        let mut out = String::<A2>::try_with_capacity_in(tail_bytes.len(), alloc)
+            .map_err(TryStringSplitOffError::Reserve)?;
+        let dst = out.buf.as_mut_ptr();
+        // SAFETY: `out` was created with capacity >= `tail_bytes.len()` and is
+        // empty; copying that many bytes is in-bounds and `set_len` to the same
+        // count is valid.
+        unsafe {
+            ptr::copy_nonoverlapping(tail_bytes.as_ptr(), dst, tail_bytes.len());
+            out.buf.set_len(tail_bytes.len());
+        }
+        self.buf.truncate(at);
+        Ok(out)
+    }
+
+    /// Extends this string with a subslice of itself identified by `indices`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringExtendFromWithinError::OutOfBounds`] if the resolved
+    /// range exceeds the string's length, or
+    /// [`TryStringExtendFromWithinError::Reserve`] if reserving room for the
+    /// extra bytes fails.
+    pub fn try_extend_from_within<R: core::ops::RangeBounds<usize>>(
+        &mut self,
+        indices: R,
+    ) -> Result<(), TryStringExtendFromWithinError> {
+        use core::ops::Bound;
+        let len = self.len();
+        let ovf = TryStringExtendFromWithinError::RangeOverflow;
+        let start = match indices.start_bound() {
+            Bound::Included(&i) => i,
+            Bound::Excluded(&i) => i.checked_add(1).ok_or(ovf)?,
+            Bound::Unbounded => 0,
+        };
+        let end = match indices.end_bound() {
+            Bound::Included(&i) => i.checked_add(1).ok_or(ovf)?,
+            Bound::Excluded(&i) => i,
+            Bound::Unbounded => len,
+        };
+        if start > end || end > len {
+            return Err(TryStringExtendFromWithinError::InvalidRange { start, end, len });
+        }
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "start <= end (checked above)"
+        )]
+        let count = end - start;
+        if count == 0 {
+            return Ok(());
+        }
+        // Reserve first so that any reallocation happens before we take the
+        // source pointer. After reserving, the data is intact at the same
+        // logical offsets, and the destination (at offset `len`) does not
+        // overlap the source (which ends at most at `len`).
+        self.try_reserve(count)
+            .map_err(TryStringExtendFromWithinError::Reserve)?;
+        let base = self.buf.as_mut_ptr();
+        // SAFETY: `base + start` and `base + len` are within the allocation;
+        // the source `[start..end)` and destination `[len..len+count)` do not
+        // overlap because `end <= len`. Writing `count` bytes at offset `len`
+        // is in-bounds (just reserved), and `set_len` to `len + count` matches.
+        unsafe {
+            ptr::copy_nonoverlapping(base.add(start), base.add(len), count);
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "reserve succeeded so no overflow"
+            )]
+            {
+                self.buf.set_len(len + count);
+            }
+        }
+        Ok(())
+    }
+
+    /// Replaces the substring in `range` with `replacement`, growing the buffer
+    /// as needed.
+    ///
+    /// This is the fallible-port analogue of std's `String::replace_range`.
+    /// The range accepts any `RangeBounds<usize>` (e.g. `0..3`, `..2`, `1..`,
+    /// `..`). Both resolved endpoints must be on character boundaries and in
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryStringReplaceRangeError::InvalidRange`] if the resolved
+    /// range is out of bounds, not on char boundaries, or reversed,
+    /// [`TryStringReplaceRangeError::Overflow`] if an unbounded edge overflows
+    /// when converted, or [`TryStringReplaceRangeError::Reserve`] if growth
+    /// fails.
+    pub fn try_replace_range<R: core::ops::RangeBounds<usize>>(
+        &mut self,
+        range: R,
+        replacement: &str,
+    ) -> Result<(), TryStringReplaceRangeError> {
+        use core::ops::Bound;
+        let len = self.len();
+        let ovf = TryStringReplaceRangeError::RangeOverflow;
+        // FIXME: formalize it as olive_core::slice::try_range, returning
+        let start = match range.start_bound() {
+            Bound::Included(&i) => i,
+            Bound::Excluded(&i) => i.checked_add(1).ok_or(ovf)?,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&i) => i.checked_add(1).ok_or(ovf)?,
+            Bound::Excluded(&i) => i,
+            Bound::Unbounded => len,
+        };
+        if start > end || end > len || !self.is_char_boundary(start) || !self.is_char_boundary(end)
+        {
+            return Err(TryStringReplaceRangeError::InvalidRange { start, end, len });
+        }
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "start <= end (checked above)"
+        )]
+        let removed = end - start;
+        let added = replacement.len();
+        let delta = added.saturating_sub(removed);
+        if delta > 0 {
+            self.try_reserve(delta)?;
+        }
+        let ptr = self.buf.as_mut_ptr();
+        // Move the trailing segment `[end..len]` to make room, accounting for
+        // the net length change. If shrinking, it moves left; if growing, right.
+        let tail_start = end;
+        #[allow(clippy::arithmetic_side_effects, reason = "end <= len (checked above)")]
+        let tail_len = len - end;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "reserve succeeded so no overflow"
+        )]
+        let dest = start + added;
+        if tail_len > 0 && dest != tail_start {
+            // SAFETY: overlapping shift within the (possibly grown) buffer;
+            // `ptr::copy` handles both left and right shifts.
+            unsafe {
+                ptr::copy(ptr.add(tail_start), ptr.add(dest), tail_len);
+            }
+        }
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "removed <= len and reserve succeeded"
+        )]
+        let new_len = len - removed + added;
+        // SAFETY: the tail was shifted to make room and `delta` bytes were
+        // reserved above when growing; writing `added` bytes at `start` is
+        // in-bounds, and the final length equals the validated `new_len`.
+        unsafe {
+            if added > 0 {
+                ptr::copy_nonoverlapping(replacement.as_ptr(), ptr.add(start), added);
+            }
+            self.buf.set_len(new_len);
+        }
+        Ok(())
+    }
+
     /// Clears the string, retaining its allocated capacity.
     #[inline]
     pub fn clear(&mut self) {
@@ -624,7 +1114,9 @@ impl<A: Allocator> String<A> {
     /// contains an unpaired surrogate, or reserving the buffer fails.
     #[allow(clippy::arithmetic_side_effects)]
     pub fn try_from_utf16_in(input: &[u16], alloc: A) -> Result<Self, TryFromUtf16Error> {
-        Self::try_from_codeunits_in(input.iter().cloned(), input.len(), alloc)
+        // SAFETY: the iterator is a slice iterator that yields exactly
+        // `input.len()` items, satisfying "at most count".
+        unsafe { Self::try_from_codeunits_in(input.iter().copied(), input.len(), alloc) }
     }
 
     /// Attempts to convert a byte slice holding UTF-16LE-encoded text into a
@@ -650,7 +1142,9 @@ impl<A: Allocator> String<A> {
                     convert_slice_to_u16_le_iter(input).map_err(|e| TryFromUtf16Error {
                         kind: TryFromUtf16ErrorKind::Reserve(e),
                     })?;
-                Self::try_from_codeunits_in(iter, count, alloc)
+                // SAFETY: `convert_slice_to_u16_le_iter` guarantees the
+                // iterator yields at most `count` items.
+                unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
             }
         }
     }
@@ -678,7 +1172,9 @@ impl<A: Allocator> String<A> {
                     convert_slice_to_u16_be_iter(input).map_err(|e| TryFromUtf16Error {
                         kind: TryFromUtf16ErrorKind::Reserve(e),
                     })?;
-                Self::try_from_codeunits_in(iter, count, alloc)
+                // SAFETY: `convert_slice_to_u16_be_iter` guarantees the
+                // iterator yields at most `count` items.
+                unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
             }
         }
     }
@@ -764,8 +1260,19 @@ impl<A: Allocator> String<A> {
         }
     }
 
-    /// Core decoder over already-interpreted, known-sized iterator over native-endian `u16` code units.
-    fn try_from_codeunits_in<I>(input: I, count: usize, alloc: A) -> Result<Self, TryFromUtf16Error>
+    /// Core decoder over an iterator of native-endian `u16` code units.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the iterator yields **at most** `count`
+    /// items. Fewer items are permitted (the iterator simply ends early); more
+    /// would violate the capacity reservation made from `count` and may cause
+    /// overflows.
+    unsafe fn try_from_codeunits_in<I>(
+        input: I,
+        count: usize,
+        alloc: A,
+    ) -> Result<Self, TryFromUtf16Error>
     where
         I: IntoIterator<Item = u16>,
     {
@@ -778,11 +1285,31 @@ impl<A: Allocator> String<A> {
         let mut ret = String::try_with_capacity_in(cap, alloc).map_err(|e| TryFromUtf16Error {
             kind: TryFromUtf16ErrorKind::Reserve(e),
         })?;
-        for c in char::decode_utf16(input.into_iter()) {
-            let c = c.map_err(|_| TryFromUtf16Error {
-                kind: TryFromUtf16ErrorKind::LoneSurrogate,
+
+        // Wrap the iterator so that each unit pulled increments a counter.
+        // When `char::decode_utf16` reports an error, the counter tells us
+        // how many units were consumed up to (and including) the offending one.
+        let units_consumed = core::cell::Cell::new(0usize);
+        let counting_iter = input.into_iter().inspect(|_| {
+            let prev = units_consumed.get();
+            #[allow(clippy::arithmetic_side_effects, reason = "bounded by count")]
+            {
+                units_consumed.set(prev + 1);
+            }
+        });
+
+        for decoded in char::decode_utf16(counting_iter) {
+            let ch = decoded.map_err(|_| {
+                // `units_consumed` now points past the lone surrogate (it was
+                // the last unit pulled). The offending unit is at index
+                // `units_consumed - 1`.
+                #[allow(clippy::arithmetic_side_effects, reason = "at least one unit consumed")]
+                let pos = units_consumed.get() - 1;
+                TryFromUtf16Error {
+                    kind: TryFromUtf16ErrorKind::LoneSurrogate(pos),
+                }
             })?;
-            ret.try_push(c).map_err(|e| TryFromUtf16Error {
+            ret.try_push(ch).map_err(|e| TryFromUtf16Error {
                 kind: TryFromUtf16ErrorKind::Reserve(e),
             })?;
         }
@@ -995,7 +1522,7 @@ impl TryFromUtf16Error {
     #[inline]
     #[must_use]
     pub const fn is_lone_surrogate(&self) -> bool {
-        matches!(self.kind, TryFromUtf16ErrorKind::LoneSurrogate)
+        matches!(self.kind, TryFromUtf16ErrorKind::LoneSurrogate(_))
     }
 
     /// Returns `true` if a capacity reservation failed during conversion.
@@ -1013,7 +1540,12 @@ pub enum TryFromUtf16ErrorKind {
     /// into whole 2-byte code units.
     OddBytes,
     /// The decoded stream contained a high or low surrogate without its pair.
-    LoneSurrogate,
+    /// Carries the zero-based **code unit index** (position in the sequence of
+    /// `u16` values) where the unpaired surrogate was encountered. This is
+    /// meaningful regardless of whether the input originated from a `&[u8]`
+    /// (LE/BE byte slice) or a `&[u16]` slice — it always refers to the Nth
+    /// 16-bit code unit in logical order.
+    LoneSurrogate(usize),
     /// A capacity reservation on the destination buffer failed (overflow or OOM).
     Reserve(TryReserveError),
 }
@@ -1030,7 +1562,9 @@ impl Display for TryFromUtf16Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             TryFromUtf16ErrorKind::OddBytes => write!(f, "input has an odd number of bytes"),
-            TryFromUtf16ErrorKind::LoneSurrogate => write!(f, "unpaired surrogate in input"),
+            TryFromUtf16ErrorKind::LoneSurrogate(idx) => {
+                write!(f, "unpaired surrogate at code-unit index {idx}")
+            }
             TryFromUtf16ErrorKind::Reserve(e) => write!(f, "{e}"),
         }
     }
@@ -1055,8 +1589,14 @@ impl From<TryReserveError> for TryFromUtf16Error {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TryStringInsertError {
     /// The index was greater than the string's length or landed in the middle
-    /// of a multi-byte character.
-    NotCharBoundary(usize),
+    /// of a multi-byte character. Carries the offending index and the string's
+    /// current length for diagnostic purposes.
+    NotCharBoundary {
+        /// The byte index that was attempted.
+        index: usize,
+        /// The string's current length at the time of the call.
+        len: usize,
+    },
     /// A capacity reservation failed (overflow or OOM).
     Reserve(TryReserveError),
 }
@@ -1064,9 +1604,10 @@ pub enum TryStringInsertError {
 impl Debug for TryStringInsertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotCharBoundary(i) => f
-                .debug_tuple("TryStringInsertError::NotCharBoundary")
-                .field(i)
+            Self::NotCharBoundary { index, len } => f
+                .debug_struct("TryStringInsertError::NotCharBoundary")
+                .field("index", index)
+                .field("len", len)
                 .finish(),
             Self::Reserve(e) => f
                 .debug_tuple("TryStringInsertError::Reserve")
@@ -1079,8 +1620,11 @@ impl Debug for TryStringInsertError {
 impl Display for TryStringInsertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotCharBoundary(i) => {
-                write!(f, "insertion index {i} is not on a character boundary")
+            Self::NotCharBoundary { index, len } => {
+                write!(
+                    f,
+                    "insertion index {index} is not on a character boundary (string length {len})"
+                )
             }
             Self::Reserve(e) => write!(f, "{e}"),
         }
@@ -1095,6 +1639,245 @@ impl From<TryReserveError> for TryStringInsertError {
         Self::Reserve(e)
     }
 }
+
+/// Error returned by [`String::try_truncate`].
+///
+/// Truncation is infallible with respect to allocation (it only shrinks), so
+/// the sole failure mode is a malformed target length: either past the end of
+/// the string, or landing in the middle of a multi-byte character.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TryStringTruncateError {
+    /// The requested truncation offset.
+    pub new_length: usize,
+}
+
+impl Debug for TryStringTruncateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TryStringTruncateError")
+            .field("new_length", &self.new_length)
+            .finish()
+    }
+}
+
+impl Display for TryStringTruncateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cannot truncate to length {length}: not on a character boundary",
+            length = self.new_length,
+        )
+    }
+}
+
+impl core::error::Error for TryStringTruncateError {}
+
+/// Error returned by [`String::try_extend_from_within`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TryStringExtendFromWithinError {
+    /// The resolved range exceeded the string's length, .
+    InvalidRange {
+        /// The computed start of the range.
+        start: usize,
+        /// The computed end of the range (noninclusive).
+        end: usize,
+        /// The string's current length.
+        len: usize,
+    },
+    /// Resolving the range results in an overflow.
+    RangeOverflow,
+    /// A capacity reservation failed (overflow or OOM).
+    Reserve(TryReserveError),
+}
+
+impl Debug for TryStringExtendFromWithinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => f
+                .debug_struct("TryStringExtendFromWithinError::OutOfBounds")
+                .field("start", start)
+                .field("end", end)
+                .field("len", len)
+                .finish(),
+            Self::Reserve(e) => f
+                .debug_tuple("TryStringExtendFromWithinError::Reserve")
+                .field(e)
+                .finish(),
+            Self::RangeOverflow => f
+                .debug_tuple("TryStringExtendFromWithinError::CapacityOverflow")
+                .finish(),
+        }
+    }
+}
+
+impl Display for TryStringExtendFromWithinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => write!(
+                f,
+                "range [{start}, {end}) is out of bounds for string of length {len}"
+            ),
+            Self::Reserve(e) => write!(f, "{e}"),
+            Self::RangeOverflow => write!(f, "arithmetic overflow while resolving range bounds"),
+        }
+    }
+}
+
+impl core::error::Error for TryStringExtendFromWithinError {}
+
+impl From<TryReserveError> for TryStringExtendFromWithinError {
+    #[inline]
+    fn from(e: TryReserveError) -> Self {
+        Self::Reserve(e)
+    }
+}
+
+/// Error returned by [`String::try_remove`].
+///
+/// Removal is infallible with respect to allocation, so the only failure mode
+/// is an index that does not start a character.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TryStringRemoveError {
+    /// The byte index that was attempted.
+    pub index: usize,
+    /// The string's current length at the time of the call.
+    pub len: usize,
+}
+
+impl Debug for TryStringRemoveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TryStringRemoveError")
+            .field("index", &self.index)
+            .field("len", &self.len)
+            .finish()
+    }
+}
+
+impl Display for TryStringRemoveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cannot remove byte {index}: not at a character boundary (string length is {len})",
+            index = self.index,
+            len = self.len
+        )
+    }
+}
+
+impl core::error::Error for TryStringRemoveError {}
+
+/// Error returned by [`String::try_replace_range`].
+///
+/// Replacement can fail because the range is invalid / misaligned, or because
+/// growing the buffer to fit the replacement failed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TryStringReplaceRangeError {
+    /// The resolved range endpoints were out of order, out of bounds, or not
+    /// on char boundaries. Carries the offending `(start, end)` pair.
+    InvalidRange {
+        /// Start of the invalid range.
+        start: usize,
+        /// End of the invalid range.
+        end: usize,
+        /// The string's current length.
+        len: usize,
+    },
+    /// An arithmetic overflow occurred while resolving an excluded/unbounded
+    /// range edge (e.g. `Excluded(usize::MAX)`).
+    RangeOverflow,
+    /// A capacity reservation failed (overflow or OOM).
+    Reserve(TryReserveError),
+}
+
+impl Debug for TryStringReplaceRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => f
+                .debug_struct("TryStringReplaceRangeError::InvalidRange")
+                .field("start", start)
+                .field("end", end)
+                .field("len", len)
+                .finish(),
+            Self::RangeOverflow => f
+                .debug_tuple("TryStringReplaceRangeError::Overflow")
+                .finish(),
+            Self::Reserve(e) => f
+                .debug_tuple("TryStringReplaceRangeError::Reserve")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl Display for TryStringReplaceRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => {
+                write!(
+                    f,
+                    "replacement range [{start}, {end}) is invalid or not aligned to char boundaries (string length is {len})"
+                )
+            }
+            Self::RangeOverflow => write!(f, "arithmetic overflow while resolving range bounds"),
+            Self::Reserve(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryStringReplaceRangeError {}
+
+impl From<TryReserveError> for TryStringReplaceRangeError {
+    #[inline]
+    fn from(e: TryReserveError) -> Self {
+        Self::Reserve(e)
+    }
+}
+
+/// Error returned by [`String::try_split_off`].
+///
+/// Splitting can fail because the split point is misaligned/out of range, or
+/// because allocating the right-hand half failed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TryStringSplitOffError {
+    /// The split offset was out of bounds or not on a char boundary.
+    NotCharBoundary {
+        /// The requested split offset.
+        index: usize,
+        /// The string's current length at the time of the call.
+        len: usize,
+    },
+    /// A capacity reservation for the new string failed (overflow or OOM).
+    Reserve(TryReserveError),
+}
+
+impl Debug for TryStringSplitOffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotCharBoundary { index, len } => f
+                .debug_struct("TryStringSplitOffError::NotCharBoundary")
+                .field("index", index)
+                .field("len", len)
+                .finish(),
+            Self::Reserve(e) => f
+                .debug_tuple("TryStringSplitOffError::Reserve")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl Display for TryStringSplitOffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotCharBoundary { index, len } => write!(
+                f,
+                "cannot split off at byte {index}: not on a character boundary (string length is {len})"
+            ),
+            Self::Reserve(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryStringSplitOffError {}
 
 /// Error returned by [`String::from_utf8`] and [`String::from_utf8_in`] when
 /// the supplied bytes are not valid UTF-8.
@@ -1318,7 +2101,10 @@ mod tests {
     fn insert_rejects_out_of_bounds() {
         let mut s = mk("ab");
         let err = s.try_insert_str(3, "x").unwrap_err();
-        assert!(matches!(err, TryStringInsertError::NotCharBoundary(3)));
+        assert!(matches!(
+            err,
+            TryStringInsertError::NotCharBoundary { index: 3, len: 2 }
+        ));
         assert_eq!(s.deref(), "ab");
     }
 
@@ -1327,17 +2113,39 @@ mod tests {
         // "hé" = [0x68, 0xC3, 0xA9]; index 2 is the continuation byte of 'é'.
         let mut s = mk("hé");
         let err = s.try_insert_str(2, "x").unwrap_err();
-        assert!(matches!(err, TryStringInsertError::NotCharBoundary(2)));
+        assert!(matches!(
+            err,
+            TryStringInsertError::NotCharBoundary { index: 2, len: 3 }
+        ));
         assert_eq!(s.deref(), "hé");
     }
 
     #[test]
-    fn truncate_shrinks_len_not_cap() {
+    fn try_truncate_shrinks_len_not_cap() {
         let mut s = mk("abcdefghij");
         let cap = s.capacity();
-        s.truncate(3);
+        s.try_truncate(3).unwrap();
         assert_eq!(s.deref(), "abc");
         assert!(s.capacity() >= cap);
+    }
+
+    #[test]
+    fn try_truncate_rejects_mid_char() {
+        // "aéb": a@0, é@1-2, b@3. Byte 2 is mid-'é'.
+        let mut s = mk("aéb");
+        let err = s.try_truncate(2).unwrap_err();
+        assert_eq!(err.new_length, 2);
+        // String unchanged on failure.
+        assert_eq!(s.deref(), "aéb");
+    }
+
+    #[test]
+    fn try_truncate_at_or_beyond_len_is_noop() {
+        let mut s = mk("ab");
+        assert!(s.try_truncate(5).is_ok());
+        assert_eq!(s.deref(), "ab");
+        assert!(s.try_truncate(2).is_ok());
+        assert_eq!(s.deref(), "ab");
     }
 
     #[test]
@@ -1511,7 +2319,7 @@ mod tests {
     fn utf16_invalid_high_surrogate_alone() {
         let units: &[u16] = &[0xD83E];
         let err = String::try_from_utf16(units).unwrap_err();
-        assert!(matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate));
+        assert!(matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate(0)));
     }
 
     #[test]
@@ -1527,5 +2335,220 @@ mod tests {
         let units: &[u16] = &[0x68, 0xDC00, 0x69];
         let s = String::try_from_utf16_lossy(units).unwrap();
         assert_eq!(s.deref(), "h\u{FFFD}i");
+    }
+
+    // ── into_chars ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn into_chars_yields_all_chars() {
+        let s = mk("aé🦊");
+        let chars: std::vec::Vec<char> = s.into_chars().collect();
+        assert_eq!(chars, std::vec!['a', 'é', '🦊']);
+    }
+
+    #[test]
+    fn into_chars_double_ended() {
+        let s = mk("abc");
+        let mut it = s.into_chars();
+        assert_eq!(it.next(), Some('a'));
+        assert_eq!(it.next_back(), Some('c'));
+        assert_eq!(it.next(), Some('b'));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn into_chars_empty() {
+        let s = mk("");
+        let mut it = s.into_chars();
+        assert_eq!(it.next(), None);
+        assert_eq!(it.next_back(), None);
+    }
+
+    #[test]
+    fn into_chars_as_str_and_into_string() {
+        let s = mk("hello");
+        let mut it = s.into_chars();
+        // Consume 'h' and 'e'.
+        assert_eq!(it.next(), Some('h'));
+        assert_eq!(it.next(), Some('e'));
+        // Remainder should be "llo".
+        assert_eq!(it.as_str(), "llo");
+        // Consume the rest via into_string.
+        let remaining = it.into_string();
+        assert_eq!(remaining.deref(), "llo");
+    }
+
+    #[test]
+    fn into_chars_into_string_no_consumption() {
+        let s = mk("abc");
+        let it = s.into_chars();
+        let back = it.into_string();
+        assert_eq!(back.deref(), "abc");
+    }
+
+    // ── try_remove ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_remove_ascii() {
+        let mut s = mk("hello");
+        assert_eq!(s.try_remove(1).unwrap(), 'e');
+        assert_eq!(s.deref(), "hllo");
+    }
+
+    #[test]
+    fn try_remove_multibyte() {
+        let mut s = mk("aéb");
+        // Remove 'é' at byte index 1 (2 bytes wide).
+        assert_eq!(s.try_remove(1).unwrap(), 'é');
+        assert_eq!(s.deref(), "ab");
+    }
+
+    #[test]
+    fn try_remove_mid_char_fails() {
+        let mut s = mk("aéb");
+        // Byte 2 is the second byte of 'é'.
+        let err = s.try_remove(2).unwrap_err();
+        assert_eq!(err.index, 2);
+        assert_eq!(s.deref(), "aéb"); // unchanged
+    }
+
+    #[test]
+    fn try_remove_out_of_bounds() {
+        let mut s = mk("ab");
+        assert!(s.try_remove(5).is_err());
+    }
+
+    // ── retain ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn retain_keeps_matching() {
+        let mut s = mk("a1b2c3");
+        s.retain(|c| c.is_ascii_alphabetic());
+        assert_eq!(s.deref(), "abc");
+    }
+
+    #[test]
+    fn retain_multibyte() {
+        let mut s = mk("aéb🦊d");
+        s.retain(|c| c == 'a' || c == 'd');
+        assert_eq!(s.deref(), "ad");
+    }
+
+    #[test]
+    fn retain_none_left() {
+        let mut s = mk("123");
+        s.retain(|_| false);
+        assert_eq!(s.deref(), "");
+    }
+
+    // ── try_split_off ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_split_off_middle() {
+        let mut s = mk("abcdef");
+        let right = s.try_split_off(3).unwrap();
+        assert_eq!(s.deref(), "abc");
+        assert_eq!(right.deref(), "def");
+    }
+
+    #[test]
+    fn try_split_off_at_end() {
+        let mut s = mk("abc");
+        let right = s.try_split_off(3).unwrap();
+        assert_eq!(s.deref(), "abc");
+        assert_eq!(right.deref(), "");
+    }
+
+    #[test]
+    fn try_split_off_at_start() {
+        let mut s = mk("abc");
+        let right = s.try_split_off(0).unwrap();
+        assert_eq!(s.deref(), "");
+        assert_eq!(right.deref(), "abc");
+    }
+
+    #[test]
+    fn try_split_off_mid_char_fails() {
+        let mut s = mk("aéb");
+        let err = s.try_split_off(2).unwrap_err();
+        assert!(matches!(
+            err,
+            TryStringSplitOffError::NotCharBoundary { .. }
+        ));
+        assert_eq!(s.deref(), "aéb"); // unchanged
+    }
+
+    // ── try_extend_from_within ────────────────────────────────────────────────
+
+    #[test]
+    fn extend_from_within_basic() {
+        let mut s = mk("abcd");
+        s.try_extend_from_within(1..3).unwrap();
+        assert_eq!(s.deref(), "abcdbc");
+    }
+
+    #[test]
+    fn extend_from_within_full() {
+        let mut s = mk("ab");
+        s.try_extend_from_within(..).unwrap();
+        assert_eq!(s.deref(), "abab");
+    }
+
+    #[test]
+    fn extend_from_within_empty_range() {
+        let mut s = mk("ab");
+        s.try_extend_from_within(1..1).unwrap();
+        assert_eq!(s.deref(), "ab");
+    }
+
+    // ── try_replace_range ─────────────────────────────────────────────────────
+
+    #[test]
+    fn replace_range_shrink() {
+        // "hello world": h0 e1 l2 l3 o4 ' '5 w6 o7 r8 l9 d10. Remove 5..11.
+        let mut s = mk("hello world");
+        s.try_replace_range(5..11, "").unwrap();
+        assert_eq!(s.deref(), "hello");
+    }
+
+    #[test]
+    fn replace_range_grow() {
+        let mut s = mk("say hi");
+        s.try_replace_range(4..6, "goodbye").unwrap();
+        assert_eq!(s.deref(), "say goodbye");
+    }
+
+    #[test]
+    fn replace_range_same_len() {
+        let mut s = mk("cat");
+        s.try_replace_range(0..3, "dog").unwrap();
+        assert_eq!(s.deref(), "dog");
+    }
+
+    #[test]
+    fn replace_range_multibyte() {
+        let mut s = mk("aéb");
+        // Replace 'é' (bytes 1..3) with 'x'.
+        s.try_replace_range(1..3, "x").unwrap();
+        assert_eq!(s.deref(), "axb");
+    }
+
+    #[test]
+    fn replace_range_invalid_mid_char() {
+        let mut s = mk("aéb");
+        let err = s.try_replace_range(1..2, "x").unwrap_err();
+        assert!(matches!(
+            err,
+            TryStringReplaceRangeError::InvalidRange { .. }
+        ));
+        assert_eq!(s.deref(), "aéb"); // unchanged
+    }
+
+    #[test]
+    fn replace_range_out_of_order() {
+        let mut s = mk("abc");
+        // Construct an out-of-order range without triggering clippy::reversed_empty_ranges.
+        let r = core::ops::Range { start: 2, end: 1 };
+        assert!(s.try_replace_range(r, "x").is_err());
     }
 }

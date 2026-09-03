@@ -7,13 +7,13 @@ notes repo appears later, migrate this file there to avoid codebase pollution.
 ## Strings
 FIXME: missing or faulty:
 - [ ] drain
-- [ ] try_extend_from_within
-- [ ] into_chars
-- [ ] try_remove (only has one error mode - not on char boundary)
-- [ ] try_replace_range (may allocate, should deal with invalid range and char boundary)
-- [ ] retain
-- [ ] try_split_off (only has one error mode - not on char boundary)
-- [ ] try_truncate (only has one error mode - not on char boundary, should supersede truncate)
+- [x] try_extend_from_within
+- [x] into_chars
+- [x] try_remove (only has one error mode - not on char boundary)
+- [x] try_replace_range (may allocate, should deal with invalid range and char boundary)
+- [x] retain
+- [x] try_split_off (only has one error mode - not on char boundary)
+- [x] try_truncate (only has one error mode - not on char boundary, should supersede truncate)
 - [ ] TryToString trait, subtrait of Display, fallibly dumps to string
 - [ ] AsMut<str>
 - [ ] TryExtend and TryFromIterator for boxed str

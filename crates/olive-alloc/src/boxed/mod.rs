@@ -121,6 +121,7 @@ impl<T> Box<T, Global> {
     ///
     /// Returns [`AllocError`] if the allocation fails.
     #[inline]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub fn try_pin_give_back(x: T) -> Result<Pin<Self>, (T, AllocError)> {
         match Self::try_new_give_back(x) {
             Ok(boxed) => {
@@ -138,6 +139,7 @@ impl<T> Box<T, Global> {
     ///
     /// Returns [`AllocError`] if the allocation fails.
     #[inline]
+    #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub fn try_new_zeroed() -> Result<Box<MaybeUninit<T>>, AllocError> {
         // ZST optimization: no actual allocation needed.
         if size_of::<T>() == 0 {
@@ -550,8 +552,12 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
     /// ```
     /// use olive_alloc::boxed::Box;
     ///
-    /// let s: &'static str = Box::leak(Box::try_new("world").unwrap());
-    /// assert_eq!(s, "world");
+    /// // This test leaks and cannot be triggered under Miri.
+    /// #[cfg(not(miri))]
+    /// {
+    ///     let s: &'static str = Box::leak(Box::try_new("world").unwrap());
+    ///     assert_eq!(s, "world");
+    /// }
     /// ```
     #[inline]
     pub fn leak<'a>(b: Self) -> &'a mut T

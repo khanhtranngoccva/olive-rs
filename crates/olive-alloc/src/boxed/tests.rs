@@ -64,6 +64,7 @@ fn test_box_into_raw_from_raw_roundtrip() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "this test leaks memory")]
 fn test_box_leak() {
     let b = Box::try_new(vec![1, 2, 3]).unwrap();
     let leaked: &'static mut Vec<i32> = Box::leak(b);
@@ -241,7 +242,11 @@ fn test_box_new_uninit_slice_in_custom_allocator() {
     assert_eq!(bs.len(), 8);
     drop(bs);
     assert_eq!(alloc.allocations(), 1, "expected one allocation");
-    assert_eq!(alloc.deallocations(), 1, "expected one deallocation on drop");
+    assert_eq!(
+        alloc.deallocations(),
+        1,
+        "expected one deallocation on drop"
+    );
 }
 
 #[test]
