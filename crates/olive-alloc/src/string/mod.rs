@@ -37,7 +37,6 @@
 use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{self, Debug, Display};
 use core::hash;
-use core::mem;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 
@@ -282,11 +281,7 @@ impl<A: Allocator> String<A> {
     /// This consumes the `String` and hands over ownership of the allocation;
     /// the caller is responsible for eventually freeing the buffer.
     pub fn into_bytes(self) -> Vec<u8, A> {
-        // SAFETY: `self` is wrapped in `ManuallyDrop`, so reading the buffer
-        // field out transfers sole ownership of the allocation to the caller
-        // without running the `String`'s drop glue.
-        let me = mem::ManuallyDrop::new(self);
-        unsafe { ptr::read(&me.buf) }
+        self.buf
     }
 
     /// Infallibly consumes the `String`, returning its contents as a `Box<str>`
@@ -498,7 +493,7 @@ impl<A: Allocator> String<A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryPushError`] if growing the buffer fails.
+    /// Returns [`TryReserveError`] if growing the buffer fails.
     pub fn try_push(&mut self, c: char) -> Result<(), TryReserveError> {
         let mut buf = [0u8; 4];
         let encoded = c.encode_utf8(&mut buf);

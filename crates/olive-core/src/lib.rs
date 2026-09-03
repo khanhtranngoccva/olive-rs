@@ -105,13 +105,8 @@ pub mod ptr;
 // Glob-re-export every item in `core` so `olive_core` is a drop-in superset of
 // `core`. Olive's own modules (`allocator`, `alloc_errors`, `recovery`,
 // `try_traits`) are declared above and take precedence over any name collision
-// because explicit items shadow glob imports. Notably, our own `Layout` /
-// `AllocError` / `Allocator` here shadow the identically-named items that the
-// `core::alloc` glob would otherwise bring into scope — intentional, so the
-// canonical Olive allocator API wins.
+// because explicit items shadow glob imports.
 pub use core::*;
 
-pub use try_traits::{
-    TryClone, TryCloneError, TryCloneToUninit, TryCollect, TryCollectInto, TryDefault,
-    TryDefaultError, TryExtend, TryExtendFromSlice, TryFromIterator,
-};
+// proc-macro names can co-exist with trait names.
+pub use olive_macros::{TryClone, TryDefault};

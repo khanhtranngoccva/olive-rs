@@ -71,7 +71,7 @@ fn clone_err_to_owned(err: &TryCloneError) -> TryToOwnedError {
     }
 }
 
-/// A fallible analogue of [`core::borrow::ToOwned`].
+/// A fallible analogue of [`alloc::borrow::ToOwned`].
 ///
 /// Types implementing this trait guarantee that constructing their owned variant
 /// will not panic on allocation failure.

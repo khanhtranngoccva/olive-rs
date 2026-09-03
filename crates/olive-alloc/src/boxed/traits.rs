@@ -7,7 +7,7 @@ use core::hash::{Hash, Hasher};
 use core::ops::{Deref, DerefMut};
 
 use crate::alloc::{Allocator, AllocatorTryClone};
-use olive_core::TryCloneToUninit;
+use olive_core::try_traits::TryCloneToUninit;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 use super::Box;

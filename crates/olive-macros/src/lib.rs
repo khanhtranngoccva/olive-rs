@@ -1,13 +1,6 @@
 //! Procedural macros for the Olive fallible standard library.
 //!
-//! These are host-side `proc-macro` helpers that generate boilerplate
-//! [`TryClone`](::olive_core::try_traits::try_clone::TryClone) and
-//! [`TryDefault`](::olive_core::try_traits::try_default::TryDefault)
-//! implementations so that downstream crates (and Olive itself) do not have to
-//! hand-write the repetitive per-field / per-tuple glue. The generated code is
-//! emitted into the *calling* crate, where it resolves against that crate's own
-//! visibility — so the trait path used in the expansion is the absolute
-//! `::olive_core::…` path, which every Olive member depends on directly.
+//! The user is advised not to use this crate directly.
 
 extern crate proc_macro;
 

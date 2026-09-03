@@ -706,16 +706,6 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Box<T, A> {
     /// Clones a `&T` into a freshly allocated `Box<T, A>` for potentially
     /// unsized `T`, using the given allocator.
     ///
-    /// Supported unsized targets are those with a [`TryCloneToUninit`] impl
-    /// whose fat-pointer metadata is a plain length: slices (`[U]`), `str`,
-    /// and `CStr`. The metadata is recovered from `src` and reattached to the
-    /// fresh base via stable constructors (`slice_from_raw_parts_mut`,
-    /// `str::from_utf8_unchecked`) — a Miri-clean path that derives provenance
-    /// from the *destination* allocation.
-    ///
-    /// For `dyn Trait` targets, use [`Box::try_clone_from_ref_into_dyn`]
-    /// instead, which takes the concrete type and preserves the vtable.
-    ///
     /// # Errors
     ///
     /// Returns [`TryCloneError`] if the allocation or any element clone fails.
