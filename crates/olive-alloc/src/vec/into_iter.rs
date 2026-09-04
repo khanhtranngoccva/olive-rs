@@ -5,7 +5,6 @@
 
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
-use core::mem::ManuallyDrop;
 use core::ptr::{self, NonNull};
 use core::slice;
 
@@ -30,21 +29,18 @@ use crate::raw_vec::RawVec;
 /// assert_eq!(collected, std::vec![0, 1, 2]);
 /// ```
 pub struct IntoIter<T, A: Allocator = Global> {
-    /// Base address of the original allocation. Kept separately from `ptr` so
-    /// we can deallocate the exact block even after `ptr` has advanced.
-    start: NonNull<T>,
-    /// Pointer to the next element to yield from the front. Advances toward the
-    /// end for non-ZSTs; for ZSTs it stays fixed (position lives in `remaining`).
-    ptr: NonNull<T>,
-    /// Number of elements not yet yielded. This is the single source of truth
-    /// for progress, which avoids any pointer arithmetic on the dangling base
-    /// pointer used for zero-sized types.
-    remaining: usize,
-    /// Capacity of the underlying allocation, used to free it by reconstituting a RawVec.
-    cap: usize,
-    /// Wrapped in `ManuallyDrop` because our `Drop` impl frees the allocation
-    /// explicitly; we must not also run the allocator's destructor.
-    alloc: ManuallyDrop<A>,
+    /// Owns the backing allocation. Its `Drop` frees the block and drops the
+    /// allocator. We read element pointers from it lazily (via `ptr()`) but
+    /// never advance a stored head pointer.
+    raw: RawVec<T, A>,
+    /// Number of elements already yielded from the front (via `next`). Together
+    /// with `taken_back` this partitions the buffer into three regions:
+    /// `[consumed, len - taken_back)` is still live.
+    consumed: usize,
+    /// Number of elements already yielded from the back (via `next_back`).
+    taken_back: usize,
+    /// Total number of elements originally held (`len` at construction).
+    len: usize,
     _marker: PhantomData<T>,
 }
 
@@ -57,51 +53,98 @@ unsafe impl<T: Sync, A: Allocator + Sync> Sync for IntoIter<T, A> {}
 impl<T, A: Allocator> IntoIter<T, A> {
     /// Constructs an iterator from the raw parts of a consumed `Vec`.
     ///
+    /// No pointer arithmetic is performed here: the caller passes the already-
+    /// validated integer bounds and the owning base pointer, and all element
+    /// pointers are derived lazily (and only while a live element provably
+    /// exists).
+    ///
     /// # Safety
     ///
-    /// `ptr` must be the base of a valid allocation of at least `cap` elements
-    /// made with `alloc`, and the first `len` slots must be initialized. For
-    /// zero-sized `T`, `ptr` may be a dangling aligned pointer and `cap` may be
-    /// an arbitrary value (it is completely ignored)
+    /// `start` must be the base of a valid allocation of at least `cap`
+    /// elements made with `alloc`, and the first `len` slots must be
+    /// initialized. For zero-sized `T`, `start` may be a dangling aligned
+    /// pointer and `cap` may be an arbitrary value (it is completely ignored).
     #[inline]
-    pub(super) unsafe fn new_from_parts(ptr: NonNull<T>, len: usize, cap: usize, alloc: A) -> Self {
+    pub(super) const unsafe fn new_from_parts(
+        start: NonNull<T>,
+        len: usize,
+        cap: usize,
+        alloc: A,
+    ) -> Self {
+        // SAFETY: preconditions passed through from the caller.
         Self {
-            start: ptr,
-            ptr,
-            remaining: len,
-            cap,
-            alloc: ManuallyDrop::new(alloc),
+            raw: unsafe { RawVec::from_nonnull_in(start, cap, alloc) },
+            consumed: 0,
+            taken_back: 0,
+            len,
             _marker: PhantomData,
+        }
+    }
+
+    /// Number of elements still held in the live window.
+    #[inline]
+    const fn remaining(&self) -> usize {
+        // `consumed + taken_back` can never exceed `len`: each yield shrinks the
+        // live window by exactly one and stops at zero.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "consumed + taken_back <= len"
+        )]
+        let taken = { self.consumed + self.taken_back };
+        #[allow(clippy::arithmetic_side_effects, reason = "taken <= len")]
+        {
+            self.len - taken
         }
     }
 
     /// Returns the number of elements still held by this iterator.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.remaining
+        self.remaining()
     }
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
     pub const fn is_empty(&self) -> bool {
-        self.remaining == 0
+        self.remaining() == 0
     }
 
     /// Views the remaining elements as a slice.
     #[inline]
     pub fn as_slice(&self) -> &[T] {
-        // SAFETY: `[ptr, ptr + remaining)` lies within the initialized region
-        // of the buffer. For ZSTs `from_raw_parts` on a dangling aligned
-        // pointer is well defined.
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.remaining) }
+        // The computed front pointer is invalid only when it lands one-past-the-
+        // end of the buffer: `front_offset() == len`. When that case happens,
+        // the fallback must be used. This fallback behavior is triggered
+        // sparingly for conformance with std. (this also happens to work with ZSTs)
+        if self.front_offset() == self.len {
+            return unsafe { slice::from_raw_parts(self.raw.ptr(), 0) };
+        }
+        // SAFETY: `front_offset() < len`; the front of the live window addresses a
+        // real, initialized slot (or a valid dangling-aligned ZST address),
+        // and `[front, front + rem)` lies entirely within the initialized region
+        // of the buffer.
+        let rem = self.remaining();
+        unsafe {
+            let front = self.raw.ptr().add(self.front_offset());
+            slice::from_raw_parts(front, rem)
+        }
     }
 
-    /// Releases the exact block described by `start`/`cap` using `alloc`.
-    ///
-    /// SAFETY:
-    /// - The block must satisfy safety conditions of [`RawVec::from_nonnull_in`].
-    unsafe fn dealloc_block(start: NonNull<T>, cap: usize, alloc: &A) {
-        unsafe { drop(RawVec::from_nonnull_in(start, cap, alloc)) }
+    /// Element offset (from the buffer base) of the current front of the live
+    /// window.
+    #[inline]
+    fn front_offset(&self) -> usize {
+        self.consumed
+    }
+
+    /// Element offset (from the buffer base) just past the current back of the
+    /// live window (the last live element is at `back_offset() - 1`).
+    #[inline]
+    fn back_offset(&self) -> usize {
+        #[allow(clippy::arithmetic_side_effects, reason = "taken_back <= len")]
+        {
+            self.len - self.taken_back
+        }
     }
 }
 
@@ -110,36 +153,25 @@ impl<T, A: Allocator> Iterator for IntoIter<T, A> {
 
     #[inline]
     fn next(&mut self) -> Option<T> {
-        if self.remaining == 0 {
+        if self.remaining() == 0 {
             return None;
         }
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "asserted self.remaining > 0"
-        )]
+        // Record the front offset *before* advancing; it addresses a live,
+        // initialized slot because we just confirmed `remaining > 0`.
+        let offset = self.front_offset();
+        #[allow(clippy::arithmetic_side_effects, reason = "consumed < len")]
         {
-            self.remaining -= 1;
+            self.consumed += 1;
         }
-        // For non-ZSTs advance the read pointer *before* reading so that a
-        // panicking consumer cannot cause the same slot to be yielded twice.
-        // For ZSTs the pointer is left alone (advancing it would be UB on a
-        // dangling pointer); position is carried entirely by `remaining`.
-        let item = if size_of::<T>() == 0 {
-            self.ptr
-        } else {
-            let old = self.ptr;
-            self.ptr = unsafe { old.add(1) };
-            old
-        };
-        // SAFETY: the slot addressed by `item` was part of the initialized
-        // region and is now ours to move out. Reading a ZST from its dangling
-        // aligned pointer is well defined.
-        Some(unsafe { ptr::read(item.as_ptr()) })
+        // SAFETY: `offset` is within the initialized region and the value is now
+        // ours to move out. Reading a ZST from its (possibly dangling-aligned)
+        // pointer is well defined.
+        Some(unsafe { ptr::read(self.raw.ptr().add(offset)) })
     }
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        (self.remaining(), Some(self.remaining()))
     }
 }
 
@@ -150,73 +182,54 @@ impl<T, A: Allocator> FusedIterator for IntoIter<T, A> {}
 impl<T, A: Allocator> DoubleEndedIterator for IntoIter<T, A> {
     #[inline]
     fn next_back(&mut self) -> Option<T> {
-        if self.remaining == 0 {
+        if self.remaining() == 0 {
             return None;
         }
+        // The last live element sits just below the current back boundary.
+        // Compute its offset *before* recording the take so it addresses a
+        // live, initialized slot.
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "asserted self.remaining > 0"
+            reason = "remaining > 0 implies back_offset >= 1"
         )]
+        let offset = { self.back_offset() - 1 };
+        #[allow(clippy::arithmetic_side_effects, reason = "taken_back < len")]
         {
-            self.remaining -= 1;
+            self.taken_back += 1;
         }
-        let item = if size_of::<T>() == 0 {
-            // ZSTs occupy no memory; the front pointer is the only valid one to
-            // "read" from (it is dangling), and it never moves.
-            self.ptr
-        } else {
-            // Indexing `ptr` at `old_remaining` is out of bounds (like indexing an array
-            // at length), at so the live window is `[ptr, ptr[old_remaining])` or
-            // `[ptr, ptr[new_remaining]]`, or new_remaining indicating the tail.
-            // SAFETY: `ptr + remaining` is within the allocation and non-null,
-            // so wrapping it in a `NonNull` is valid.
-            unsafe { NonNull::new_unchecked(self.ptr.as_ptr().add(self.remaining)) }
-        };
-        // SAFETY: as in `next`, the slot is initialized and becomes the caller's.
-        Some(unsafe { ptr::read(item.as_ptr()) })
-    }
-}
-
-/// Owns the raw parts of an [`IntoIter`] being dropped and frees the backing
-/// block in its own `Drop`.
-///
-/// Dropping the unconsumed tail (`ptr::drop_in_place`) can panic. Without this
-/// guard a panic would unwind past the deallocation line and leak the block.
-/// Arming the guard *before* dropping the tail guarantees the free runs both on
-/// the happy path (guard falls out of scope normally) and on unwind (the guard's
-/// `Drop` runs during stack teardown). There is exactly one free site. This
-/// mirrors the `BoxDeallocGuard` used by [`crate::boxed::Box`].
-struct IntoIterDeallocGuard<'a, T, A: Allocator> {
-    start: NonNull<T>,
-    cap: usize,
-    alloc: &'a A,
-    _marker: PhantomData<T>,
-}
-
-impl<T, A: Allocator> Drop for IntoIterDeallocGuard<'_, T, A> {
-    fn drop(&mut self) {
-        unsafe { IntoIter::dealloc_block(self.start, self.cap, self.alloc) };
+        // SAFETY: as in `next`, `offset` is within the initialized region and
+        // the value becomes the caller's.
+        Some(unsafe { ptr::read(self.raw.ptr().add(offset)) })
     }
 }
 
 impl<T, A: Allocator> Drop for IntoIter<T, A> {
     fn drop(&mut self) {
-        // Arm the deallocation guard *before* dropping the tail. It will free
-        // the block whether or not `drop_in_place` panics. ZSTs have no backing
-        // allocation, so the guard becomes a no-op for them.
-        let _dealloc_guard = IntoIterDeallocGuard {
-            start: self.start,
-            cap: self.cap,
-            alloc: &*self.alloc,
-            _marker: PhantomData,
-        };
-        // Destroy only the unconsumed range `[ptr, ptr + remaining)`. Everything
-        // before `ptr` has already been moved out by `next`/`next_back` and
-        // belongs to the caller, so it must not be dropped again.
-        // SAFETY: `[ptr, ptr + remaining)` is within the initialized region of
-        // the buffer; for ZSTs this is a no-op drop over a dangling pointer.
-        unsafe {
-            ptr::drop_in_place(slice::from_raw_parts_mut(self.ptr.as_ptr(), self.remaining));
+        // Destroy the unconsumed tail. Every slot is either owned by the caller
+        // (already yielded via `next`/`next_back`) or still held here and must
+        // be dropped. Elements yielded from the front occupy `[0..consumed)`
+        // and from the back occupy `[len - taken_back..len)`; both have been
+        // moved out and belong to the caller. Everything in between —
+        // `[consumed .. len - taken_back)` — is still live and must be
+        // destroyed. That is a single contiguous run of length `remaining()`.
+        // It is guarded by `rem > 0` so an empty run never forms an OOB pointer
+        // (the overflow class noted in agents/BUGBOT.md).
+        //
+        // We must NOT gate on `size_of::<T>() != 0`: a zero-sized type can still
+        // carry `Drop` glue.
+        //
+        // SAFETY: the addressed slots lie within the initialized region and hold
+        // valid values; for ZSTs `drop_in_place` performs no memory access but
+        // still runs any `Drop` glue.
+        let rem = self.remaining();
+        if rem > 0 {
+            unsafe {
+                let front = self.raw.ptr().add(self.consumed);
+                ptr::drop_in_place(slice::from_raw_parts_mut(front, rem));
+            }
         }
+        // The owned `RawVec` field is dropped automatically after this body
+        // returns, freeing the backing block and dropping the allocator. No
+        // explicit free call or guard is needed: `RawVec::drop` handles both.
     }
 }

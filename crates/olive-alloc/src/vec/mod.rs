@@ -27,7 +27,7 @@ use core::cmp;
 use core::fmt;
 use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut, Index, IndexMut};
-use core::ptr;
+use core::ptr::{self, NonNull};
 use core::slice;
 
 use crate::alloc::{Allocator, Global};
@@ -36,6 +36,7 @@ use crate::raw_vec::RawVec;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::recovery::{ResumableSource, Resume};
+use olive_core::slice::{TrySliceRangeError, try_range};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
@@ -195,6 +196,112 @@ impl fmt::Display for TrySwapError {
 }
 
 impl core::error::Error for TrySwapError {}
+
+/// Error returned by [`Vec::try_split_off`] when the split index is out of
+/// bounds or the allocation for the right-hand half fails.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryVecSplitOffError {
+    /// The requested split offset exceeded the vector's length.
+    OutOfBounds {
+        /// The requested split offset.
+        index: usize,
+        /// The vector's current length at the time of the call.
+        len: usize,
+    },
+    /// A capacity reservation for the new vector failed (overflow or OOM).
+    Reserve(TryReserveError),
+}
+
+impl fmt::Debug for TryVecSplitOffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutOfBounds { index, len } => f
+                .debug_struct("TryVecSplitOffError::OutOfBounds")
+                .field("index", index)
+                .field("len", len)
+                .finish(),
+            Self::Reserve(e) => f
+                .debug_tuple("TryVecSplitOffError::Reserve")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryVecSplitOffError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutOfBounds { index, len } => write!(
+                f,
+                "cannot split off at index {index}: out of bounds (vector length is {len})"
+            ),
+            Self::Reserve(e) => write!(f, "split_off allocation failed: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryVecSplitOffError {}
+
+/// Error returned by [`Vec::try_extend_from_within`] when the range is invalid,
+/// resolving overflows, or the operation fails during reservation/cloning.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryVecExtendFromWithinError {
+    /// The resolved range exceeded the vector's length or was reversed.
+    InvalidRange {
+        /// The computed start of the range.
+        start: usize,
+        /// The computed end of the range (non-inclusive).
+        end: usize,
+        /// The vector's current length at the time of the call.
+        len: usize,
+    },
+    /// Resolving the range resulted in an integer overflow.
+    RangeOverflow,
+    /// A capacity reservation failed (overflow or OOM).
+    Reserve(TryReserveError),
+    /// Cloning an element into the extended region failed.
+    Clone(TryCloneError),
+}
+
+impl fmt::Debug for TryVecExtendFromWithinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => f
+                .debug_struct("TryVecExtendFromWithinError::InvalidRange")
+                .field("start", start)
+                .field("end", end)
+                .field("len", len)
+                .finish(),
+            Self::RangeOverflow => f
+                .debug_tuple("TryVecExtendFromWithinError::RangeOverflow")
+                .finish(),
+            Self::Reserve(e) => f
+                .debug_tuple("TryVecExtendFromWithinError::Reserve")
+                .field(e)
+                .finish(),
+            Self::Clone(e) => f
+                .debug_tuple("TryVecExtendFromWithinError::Clone")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryVecExtendFromWithinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRange { start, end, len } => write!(
+                f,
+                "invalid range {start}..{end} for extend_from_within (vector length is {len})"
+            ),
+            Self::RangeOverflow => write!(f, "range bounds overflowed"),
+            Self::Reserve(e) => write!(f, "extend_from_within allocation failed: {e}"),
+            Self::Clone(e) => write!(f, "element clone failed during extend_from_within: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryVecExtendFromWithinError {}
 
 /// Error returned by [`Vec::try_from_fn`] when constructing a vector from a
 /// fallible closure.
@@ -407,7 +514,7 @@ impl<T> Vec<T, Global> {
     /// Same requirements as [`Self::from_raw_parts`], except `ptr` is already
     /// known to be non-null.
     #[inline]
-    pub unsafe fn from_parts(ptr: ptr::NonNull<T>, length: usize, capacity: usize) -> Self {
+    pub unsafe fn from_parts(ptr: NonNull<T>, length: usize, capacity: usize) -> Self {
         unsafe { Self::from_parts_in(ptr, length, capacity, Global) }
     }
 
@@ -442,7 +549,7 @@ impl<T> Vec<T, Global> {
     ///
     /// [`from_parts`]: Self::from_parts
     #[must_use = "losing the pointer will leak memory"]
-    pub fn into_parts(self) -> (ptr::NonNull<T>, usize, usize) {
+    pub fn into_parts(self) -> (NonNull<T>, usize, usize) {
         let this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
@@ -700,12 +807,7 @@ impl<T, A: Allocator> Vec<T, A> {
     ///
     /// See [`Vec::from_raw_parts_in`] for the full list of invariants.
     #[inline]
-    pub unsafe fn from_parts_in(
-        ptr: ptr::NonNull<T>,
-        length: usize,
-        capacity: usize,
-        alloc: A,
-    ) -> Self {
+    pub unsafe fn from_parts_in(ptr: NonNull<T>, length: usize, capacity: usize, alloc: A) -> Self {
         debug_assert!(
             length <= capacity,
             "Vec::from_parts_in requires that length <= capacity"
@@ -743,7 +845,7 @@ impl<T, A: Allocator> Vec<T, A> {
     ///
     /// See [`Self::into_raw_parts_with_alloc`].
     #[must_use = "losing the pointer will leak memory"]
-    pub unsafe fn into_parts_with_alloc(self) -> (ptr::NonNull<T>, usize, usize, A) {
+    pub unsafe fn into_parts_with_alloc(self) -> (NonNull<T>, usize, usize, A) {
         let this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller.
         unsafe {
@@ -861,15 +963,11 @@ impl<T, A: Allocator> Vec<T, A> {
         if let Err(e) = self.try_shrink_to_fit() {
             return Err((self, e));
         }
-        // Prevent the outer `Drop` from running while we dismantle the fields.
-        let this = ManuallyDrop::new(self);
-        // SAFETY: after shrinking, `raw` holds exactly `self.len` initialized
-        // elements; `into_box` wraps them without dropping, and `assume_init`
-        // reinterprets the buffer as `[T]`. Mirrors std's `into_boxed_slice`.
+        // SAFETY: the buffer holds exactly `len` initialized elements.
         unsafe {
-            let buf = ptr::read(&this.raw);
-            let len = this.len;
-            Ok(buf.into_box(len).assume_init())
+            let (buf, len, _cap, alloc) = self.into_raw_parts_with_alloc();
+            let slice = ptr::slice_from_raw_parts_mut(buf, len);
+            Ok(Box::from_raw_in(slice, alloc))
         }
     }
 
@@ -922,13 +1020,10 @@ impl<T, A: Allocator> Vec<T, A> {
         if let Err(e) = self.try_shrink_to_fit() {
             return Err((self, TryVecIntoArrayError::Shrink(e)));
         }
-        // Prevent the outer `Drop` from running while we dismantle the fields.
-        let this = ManuallyDrop::new(self);
         // SAFETY: the buffer holds exactly `N` initialized elements allocated by `A`;
         // casting to `*mut [T; N]` is layout-compatible. Allocator is moved out.
         unsafe {
-            let raw_ptr = this.raw.ptr();
-            let alloc = ptr::read(this.raw.allocator());
+            let (raw_ptr, _len, _cap, alloc) = self.into_raw_parts_with_alloc();
             let array_ptr = raw_ptr.cast::<[T; N]>();
             Ok(Box::from_raw_in(array_ptr, alloc))
         }
@@ -1077,6 +1172,185 @@ impl<T, A: Allocator> Vec<T, A> {
             self.len = new_len;
             ptr::drop_in_place(tail);
         }
+    }
+
+    /// Removes a range of elements from the vector and returns them as an
+    /// iterator, shifting later elements to the left to fill the gap.
+    ///
+    /// This is the fallible-port analogue of `std`'s `Vec::drain`. The only
+    /// failure mode is validating the requested range: iteration itself never
+    /// allocates (it merely destroys and shifts elements), so once the drainer
+    /// is constructed it cannot fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrySliceRangeError`] if the resolved range is out of bounds or
+    /// reversed.
+    ///
+    /// # Leaking
+    ///
+    /// If [`mem::forget`](core::mem::forget) is called, all elements from the
+    /// start of `range` to the end of the vector, except the extracted elements,
+    /// are leaked.
+    pub fn try_drain<R: core::ops::RangeBounds<usize>>(
+        &mut self,
+        range: R,
+    ) -> Result<Drain<'_, T, A>, TrySliceRangeError> {
+        let len = self.len();
+        let r = try_range(range, ..len)?;
+        let start = r.start;
+        let end = r.end;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "start <= end (guaranteed by try_range)"
+        )]
+        let count = end - start;
+        // Cap the vector's logical length down to `start` *before* handing out
+        // the drainer. Once `next()` has yielded an element via `ptr::read`,
+        // that slot is uninitialized; if the vec still counted it in its length,
+        // a later drop of the vec (e.g. after the drainer is forgotten) would
+        // drop uninitialized memory. Capping excludes the whole drained range
+        // from the vec's live contents up front, so the vec can never touch the
+        // hole. This mirrors std's internal bookkeeping.
+        //
+        // SAFETY: `start <= len <= capacity()`, and every slot in `[0..start)`
+        // is an initialized value, so capping to `start` preserves the invariant
+        // that all live slots are valid.
+        unsafe {
+            self.set_len(start);
+        }
+        // SAFETY: `count == end - start` is the full resolved range length and
+        // `start + count == end <= len`; the first `len` slots are initialized.
+        // The vector already had its length capped
+        let drain = unsafe { Drain::new_from_parts(start, count, len, &raw mut *self) };
+        Ok(drain)
+    }
+
+    /// Splits the collection into two at index `at`, keeping the portion before
+    /// `at` in `self` and returning the portion from `at` onward as a new `Vec`.
+    ///
+    /// This is the fallible-port analogue of std's `Vec::split_off`. The only
+    /// failure modes are an out-of-bounds index or a failed allocation for the
+    /// right-hand half.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecSplitOffError::OutOfBounds`] if `at > len()`, or
+    /// [`TryVecSplitOffError::Reserve`] if allocating the new vector fails.
+    pub fn try_split_off(&mut self, at: usize) -> Result<Vec<T, A>, TryVecSplitOffError>
+    where
+        A: Clone,
+    {
+        let len = self.len;
+        if at > len {
+            return Err(TryVecSplitOffError::OutOfBounds { index: at, len });
+        }
+        let alloc = self.raw.allocator().clone();
+        // Fast path: splitting at the end produces an empty tail.
+        if at == len {
+            return Ok(Self {
+                raw: RawVec::new_in(alloc),
+                len: 0,
+            });
+        }
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted at <= len")]
+        let tail_len = len - at;
+        let mut out = Vec::<T, A>::try_with_capacity_in(tail_len, alloc)
+            .map_err(TryVecSplitOffError::Reserve)?;
+        // Mirror std: set both lengths first, then bitwise-copy the tail.
+        // `self`'s buffer beyond `at` is abandoned (not dropped) — `out` now
+        // exclusively owns those bits. This avoids double-drop for types with
+        // destructors.
+        // SAFETY: `at <= len <= capacity`, so reducing self's len is valid.
+        // `out` was just allocated with capacity >= `tail_len` and is empty,
+        // so writing `tail_len` elements into it and setting its length is
+        // within bounds. The source range `[at..len)` is initialized.
+        unsafe {
+            self.set_len(at);
+            out.set_len(tail_len);
+            ptr::copy_nonoverlapping(self.as_ptr().add(at), out.as_mut_ptr(), tail_len);
+        }
+        Ok(out)
+    }
+
+    /// Extends the vector with a number of copied elements from within itself.
+    ///
+    /// This is the fallible-port analogue of std's `Vec::extend_from_within`.
+    /// The range `indices` selects elements to clone and append to the end of
+    /// the vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecExtendFromWithinError`] if the range is invalid,
+    /// resolution overflows, capacity reservation fails, or an element clone
+    /// fails.
+    pub fn try_extend_from_within<R: core::ops::RangeBounds<usize>>(
+        &mut self,
+        indices: R,
+    ) -> Result<(), TryVecExtendFromWithinError>
+    where
+        T: TryClone,
+    {
+        let len = self.len;
+        let r = try_range(indices, ..len).map_err(|e| match e {
+            TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
+                TryVecExtendFromWithinError::RangeOverflow
+            }
+            TrySliceRangeError::StartExceedsEnd { start, end, len } => {
+                TryVecExtendFromWithinError::InvalidRange { start, end, len }
+            }
+            TrySliceRangeError::EndExceedsBound { start, end, len } => {
+                TryVecExtendFromWithinError::InvalidRange { start, end, len }
+            }
+        })?;
+        let start = r.start;
+        let end = r.end;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "start <= end (guaranteed by try_range)"
+        )]
+        let count = end - start;
+        if count == 0 {
+            return Ok(());
+        }
+        // Reserve first so that any reallocation happens before we read from
+        // the source range. After reserving, the data is intact at the same
+        // logical offsets.
+        self.try_reserve(count)
+            .map_err(TryVecExtendFromWithinError::Reserve)?;
+        // Clone each element from `[start..end)` into the newly reserved space
+        // at `[len..len+count)`. Since we reserved first, the destination does
+        // not overlap the source (`end <= len < new_len`).
+        let base = self.as_mut_ptr();
+        for i in 0..count {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "i < count, start+i < end <= len"
+            )]
+            let src_val = unsafe { &*base.add(start + i) };
+            let cloned = src_val
+                .try_clone()
+                .map_err(TryVecExtendFromWithinError::Clone)?;
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "len + i < len + count <= capacity (just reserved)"
+            )]
+            unsafe {
+                ptr::write(base.add(len + i), cloned);
+            }
+        }
+        // SAFETY: we just reserved `count` additional slots and wrote `count`
+        // initialized values into `[len..len+count)`, so the new length is valid.
+        unsafe {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "reserve succeeded so no overflow"
+            )]
+            {
+                self.set_len(len + count);
+            }
+        }
+        Ok(())
     }
 
     /// Sets the length of the vector, possibly uninitialized.
@@ -2029,7 +2303,9 @@ impl<T> TryFromIterator<T> for Vec<T, Global> {
     }
 }
 
+mod drain;
 mod into_iter;
+pub use drain::Drain;
 pub use into_iter::IntoIter;
 
 impl<T, A: Allocator> IntoIterator for Vec<T, A> {
