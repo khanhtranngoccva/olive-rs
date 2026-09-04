@@ -5,8 +5,10 @@
 //! no borrowed lifetime and drops cleanly when exhausted or discarded —
 //! nothing is leaked.
 
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+
 use super::String;
-use crate::alloc::{Allocator, Global};
+use crate::alloc::{Allocator, AllocatorTryClone, Global};
 use core::fmt;
 use core::iter::{DoubleEndedIterator, ExactSizeIterator, FusedIterator, Iterator};
 use core::ptr;
@@ -70,6 +72,20 @@ impl<A: Allocator> IntoChars<A> {
     }
 }
 
+// Manual impl rather than `#[derive(TryClone)]`: the derive would emit an impl
+// for every `A: Allocator`, but cloning the inner `String<A>` only succeeds when
+// its allocator is itself fallibly cloneable (`A: AllocatorTryClone`). Gating the
+// impl on that bound mirrors how `String<A>` implements `TryClone`.
+impl<A: AllocatorTryClone> TryClone for IntoChars<A> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            s: self.s.try_clone()?,
+            pos: self.pos.try_clone()?,
+            end: self.end.try_clone()?,
+        })
+    }
+}
+
 impl<A: Allocator> Iterator for IntoChars<A> {
     type Item = char;
 
@@ -88,7 +104,10 @@ impl<A: Allocator> Iterator for IntoChars<A> {
                 .next()
                 .unwrap_unchecked()
         };
-        #[allow(clippy::arithmetic_side_effects, reason = "ch.len_utf8 <= remaining len")]
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "ch.len_utf8 <= remaining len"
+        )]
         {
             self.pos += ch.len_utf8();
         }
@@ -111,7 +130,10 @@ impl<A: Allocator> DoubleEndedIterator for IntoChars<A> {
         // Decode the trailing character of the not-yet-emitted region.
         let tail = &self.s.as_str()[..self.end];
         let ch = tail.chars().last()?;
-        #[allow(clippy::arithmetic_side_effects, reason = "ch.len_utf8 <= unconsumed len")]
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "ch.len_utf8 <= unconsumed len"
+        )]
         {
             self.end -= ch.len_utf8();
         }

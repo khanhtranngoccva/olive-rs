@@ -30,3 +30,5 @@ pub mod vec;
 
 /// The fallible `ToOwned` analogue and its error type.
 pub use borrow::{TryToOwned, TryToOwnedError};
+/// The fallible `ToString` analogue, delegating to [`Display`](core::fmt::Display).
+pub use string::TryToString;

@@ -35,16 +35,16 @@
 //! via [`Deref`], so that [`String`] inherits all its methods.
 
 mod into_chars;
-pub use into_chars::IntoChars;
-
 use core::borrow::{Borrow, BorrowMut};
-use core::fmt::{self, Debug, Display};
+use core::fmt::{self, Debug, Display, Write};
 use core::hash;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
+pub use into_chars::IntoChars;
 
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::recovery::{ResumableSource, Resume};
+use olive_core::slice::{TrySliceRangeError, try_range};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::TryExtend;
@@ -829,79 +829,6 @@ impl<A: Allocator> String<A> {
         core::mem::forget(g);
     }
 
-    /// Retains only the characters for which `predicate` returns `true`,
-    /// using an auxiliary allocation to record surviving offsets. This variant
-    /// is **atomic**: if `predicate` panics, the string is restored to its
-    /// original contents (unlike [`retain`](Self::retain), which seals the gap
-    /// by appending the unchecked tail).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryReserveError`] if allocating the offset table fails.
-    // TODO: evaluate this
-    pub fn retain_atomic<F>(&mut self, mut predicate: F) -> Result<(), TryReserveError>
-    where
-        F: FnMut(char) -> bool,
-    {
-        let len = self.len();
-        if len == 0 {
-            return Ok(());
-        }
-
-        // First pass: collect byte offsets of characters that survive.
-        // Each entry is the byte offset of a kept character within `[0..len)`.
-        let mut offsets = Vec::<usize>::try_with_capacity_in(len / 4, Global)?;
-        let mut pos = 0usize;
-        while pos < len {
-            // SAFETY: pos < len, buffer is valid UTF-8.
-            #[allow(clippy::arithmetic_side_effects, reason = "pos < len")]
-            let rest =
-                unsafe { core::slice::from_raw_parts(self.buf.as_ptr().add(pos), len - pos) };
-            let ch = unsafe { core::str::from_utf8_unchecked(rest) }
-                .chars()
-                .next()
-                .unwrap_or_else(|| unreachable!("non-empty slice has a leading char"));
-            let w = ch.len_utf8();
-            if predicate(ch) {
-                offsets.try_push(pos)?;
-            }
-            #[allow(clippy::arithmetic_side_effects, reason = "pos + w <= len")]
-            {
-                pos += w;
-            }
-        }
-
-        // Second pass: compact in-place using the recorded offsets.
-        // Since we have the full list, a panic here cannot corrupt the string
-        // (no predicate calls remain), but we still use a guard for safety.
-        let base = self.buf.as_mut_ptr();
-        let mut write_pos = 0usize;
-        for &src_pos in offsets.as_slice() {
-            // Determine the width of the char at src_pos.
-            // SAFETY: src_pos is a valid char boundary within [0..len).
-            #[allow(clippy::arithmetic_side_effects, reason = "src_pos < len")]
-            let rest = unsafe { core::slice::from_raw_parts(base.add(src_pos), len - src_pos) };
-            let w = unsafe { core::str::from_utf8_unchecked(rest) }
-                .chars()
-                .next()
-                .unwrap()
-                .len_utf8();
-            if src_pos != write_pos {
-                // SAFETY: both positions are on char boundaries; forward copy.
-                unsafe {
-                    ptr::copy(base.add(src_pos), base.add(write_pos), w);
-                }
-            }
-            #[allow(clippy::arithmetic_side_effects, reason = "write_pos + w <= len")]
-            {
-                write_pos += w;
-            }
-        }
-        // SAFETY: write_pos is the sum of widths of all kept chars, all valid.
-        unsafe { self.buf.set_len(write_pos) };
-        Ok(())
-    }
-
     /// Splits the string into two at byte index `at`, keeping the portion
     /// before `at` in `self` and returning the portion from `at` onward as a
     /// new `String` allocated through the global allocator.
@@ -910,9 +837,9 @@ impl<A: Allocator> String<A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryStringSplitOffOrReserveError::Boundary`] if `at` is out of
+    /// Returns [`TryStringSplitOffError::NotCharBoundary`] if `at` is out of
     /// bounds or not on a character boundary, or
-    /// [`TryStringSplitOffOrReserveError::Reserve`] if the allocation for the
+    /// [`TryStringSplitOffError::Reserve`] if the allocation for the
     /// right-hand half fails.
     pub fn try_split_off(&mut self, at: usize) -> Result<String, TryStringSplitOffError> {
         self.try_split_off_in(at, Global)
@@ -924,9 +851,9 @@ impl<A: Allocator> String<A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryStringSplitOffOrReserveError::Boundary`] if `at` is out of
+    /// Returns [`TryStringSplitOffError::NotCharBoundary`] if `at` is out of
     /// bounds or not on a character boundary, or
-    /// [`TryStringSplitOffOrReserveError::Reserve`] if the allocation for the
+    /// [`TryStringSplitOffError::Reserve`] if the allocation for the
     /// right-hand half fails.
     pub fn try_split_off_in<A2: Allocator>(
         &mut self,
@@ -968,25 +895,25 @@ impl<A: Allocator> String<A> {
         &mut self,
         indices: R,
     ) -> Result<(), TryStringExtendFromWithinError> {
-        use core::ops::Bound;
         let len = self.len();
-        let ovf = TryStringExtendFromWithinError::RangeOverflow;
-        let start = match indices.start_bound() {
-            Bound::Included(&i) => i,
-            Bound::Excluded(&i) => i.checked_add(1).ok_or(ovf)?,
-            Bound::Unbounded => 0,
-        };
-        let end = match indices.end_bound() {
-            Bound::Included(&i) => i.checked_add(1).ok_or(ovf)?,
-            Bound::Excluded(&i) => i,
-            Bound::Unbounded => len,
-        };
-        if start > end || end > len {
-            return Err(TryStringExtendFromWithinError::InvalidRange { start, end, len });
-        }
+        // Resolve the bounds into a concrete range, surfacing overflow and
+        // ordering violations as distinct error variants.
+        let r = try_range(indices, ..len).map_err(|e| match e {
+            TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
+                TryStringExtendFromWithinError::RangeOverflow
+            }
+            TrySliceRangeError::StartExceedsEnd { start, end, len } => {
+                TryStringExtendFromWithinError::InvalidRange { start, end, len }
+            }
+            TrySliceRangeError::EndExceedsBound { start, end, len } => {
+                TryStringExtendFromWithinError::InvalidRange { start, end, len }
+            }
+        })?;
+        let start = r.start;
+        let end = r.end;
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "start <= end (checked above)"
+            reason = "start <= end (guaranteed by try_range)"
         )]
         let count = end - start;
         if count == 0 {
@@ -1036,22 +963,25 @@ impl<A: Allocator> String<A> {
         range: R,
         replacement: &str,
     ) -> Result<(), TryStringReplaceRangeError> {
-        use core::ops::Bound;
         let len = self.len();
-        let ovf = TryStringReplaceRangeError::RangeOverflow;
-        // FIXME: formalize it as olive_core::slice::try_range, returning
-        let start = match range.start_bound() {
-            Bound::Included(&i) => i,
-            Bound::Excluded(&i) => i.checked_add(1).ok_or(ovf)?,
-            Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&i) => i.checked_add(1).ok_or(ovf)?,
-            Bound::Excluded(&i) => i,
-            Bound::Unbounded => len,
-        };
-        if start > end || end > len || !self.is_char_boundary(start) || !self.is_char_boundary(end)
-        {
+        // Resolve the bounds into a concrete range, surfacing overflow and
+        // ordering violations as distinct error variants.
+        let r = try_range(range, ..len).map_err(|e| match e {
+            TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
+                TryStringReplaceRangeError::RangeOverflow
+            }
+            TrySliceRangeError::StartExceedsEnd { start, end, .. } => {
+                TryStringReplaceRangeError::InvalidRange { start, end, len }
+            }
+            TrySliceRangeError::EndExceedsBound { end, .. } => {
+                TryStringReplaceRangeError::InvalidRange { start: 0, end, len }
+            }
+        })?;
+        let start = r.start;
+        let end = r.end;
+        // The range is in-bounds and ordered; the only remaining validation is
+        // that both endpoints sit on character boundaries.
+        if !self.is_char_boundary(start) || !self.is_char_boundary(end) {
             return Err(TryStringReplaceRangeError::InvalidRange { start, end, len });
         }
         #[allow(
@@ -1072,7 +1002,7 @@ impl<A: Allocator> String<A> {
         let tail_len = len - end;
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "reserve succeeded so no overflow"
+            reason = "reserve succeeded, asserted start + added <= capacity, in bounds"
         )]
         let dest = start + added;
         if tail_len > 0 && dest != tail_start {
@@ -1430,6 +1360,13 @@ impl<A: Allocator> AsRef<str> for String<A> {
     }
 }
 
+impl<A: Allocator> AsMut<str> for String<A> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut str {
+        self
+    }
+}
+
 impl<A: Allocator> AsRef<[u8]> for String<A> {
     #[inline]
     fn as_ref(&self) -> &[u8] {
@@ -1451,9 +1388,83 @@ impl<A: Allocator> BorrowMut<str> for String<A> {
     }
 }
 
+/// A fallible analogue of [`ToString`](stock_alloc::string::ToString),
+/// delegating to [`Display`] but returning a [`Result`] instead of
+/// panicking or aborting on allocation failure.
+///
+/// # Error type
+///
+/// Both methods return [`fmt::Error`], *not* [`TryReserveError`]. That is
+/// deliberate and honest: rendering is driven by [`core::fmt::write`], which
+/// funnels every possible failure, including the [`String`] allocation failures,
+/// into the same opaque unit [`fmt::Error`]. There is no way at this layer
+/// to distinguish those causes, so we do not pretend there is by mapping them onto a
+/// fabricated [`TryReserveError`].
+///
+/// If you need to know whether your buffer specifically ran out of
+/// memory, build the string yourself with [`try_push_str`](String::try_push_str)
+/// / [`try_reserve`](String::try_reserve), which surface the precise [`TryReserveError`].
+pub trait TryToString: Display {
+    /// Renders the receiver via [`Display`] into a new [`String`] backed by the
+    /// global allocator ([`Global`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`fmt::Error`] if the render does not complete (see the trait
+    /// docs for why the cause is not recoverable here). The receiver is left
+    /// untouched; on failure the partially-filled buffer is dropped.
+    fn try_to_string(&self) -> Result<String<Global>, fmt::Error> {
+        self.try_to_string_in(Global)
+    }
+
+    /// Renders the receiver via [`Display`] into a new [`String`] backed by
+    /// `alloc`.
+    ///
+    /// This is the explicit-allocator counterpart of [`try_to_string`](Self::try_to_string):
+    /// same rendering, caller-chosen destination allocator. Rendering is driven
+    /// by [`fmt::Write`] on the freshly-built buffer, so it works for any
+    /// [`Display`] value, not just strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`fmt::Error`] if the render does not complete (see the trait
+    /// docs for why the cause is not recoverable here). On failure the
+    /// partially-filled buffer is dropped and the receiver is left untouched.
+    fn try_to_string_in<A2: Allocator>(&self, alloc: A2) -> Result<String<A2>, fmt::Error> {
+        let mut out = String::<A2>::new_in(alloc);
+        // `write_fmt` calls back into `fmt::Write::write_str` for each emitted
+        // fragment. Any failure — our buffer OOMing, the `Display` impl's own
+        // allocations failing, or a panic in `fmt` — arrives as the same opaque
+        // unit `fmt::Error`; we return it as-is rather than inventing a more
+        // specific cause we cannot actually observe.
+        out.write_fmt(core::format_args!("{self}"))?;
+        Ok(out)
+    }
+}
+
+// Blanket impl: every `Display` type can render itself into an owned Olive
+// `String`. This mirrors std's `impl<T: Display> ToString for T`, made fallible.
+impl<T: Display + ?Sized> TryToString for T {}
+
 impl<A: Allocator> Display for String<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self.deref(), f)
+    }
+}
+
+impl<A: Allocator> Write for String<A> {
+    /// Makes [`String`] usable as a fallible formatting sink.
+    ///
+    /// This is the olive analogue of std's `impl fmt::Write for String`, except that
+    /// a failed growth surfaces as [`fmt::Error`] rather than panicking. It is what
+    /// lets [`TryToString`] render *any* [`Display`] value into an owned string via
+    /// [`write_fmt`](fmt::Write::write_fmt): the formatter calls back into
+    /// [`write_str`](Self::write_str) for each emitted fragment, and a reservation
+    /// failure aborts the render cleanly instead of unwinding.
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        // Allocation failure maps to `fmt::Error`; the caller observes it as a
+        // failed render and discards the partially-filled buffer.
+        self.push_str_inner(s).map_err(|_| fmt::Error {})
     }
 }
 
@@ -1489,6 +1500,68 @@ impl<A: Allocator> Ord for String<A> {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.deref().cmp(other.deref())
+    }
+}
+
+// Cross-type comparisons, mirroring std's `String` vs `&str` / `Box<str>` impls.
+// These are reflexive over content only (never allocator identity).
+
+impl<A: Allocator> PartialEq<str> for String<A> {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        self.deref() == other
+    }
+}
+
+impl<A: Allocator> PartialEq<String<A>> for str {
+    #[inline]
+    fn eq(&self, other: &String<A>) -> bool {
+        self == other.deref()
+    }
+}
+
+impl<A: Allocator> PartialEq<&str> for String<A> {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        self.deref() == *other
+    }
+}
+
+impl<A: Allocator> PartialEq<String<A>> for &str {
+    #[inline]
+    fn eq(&self, other: &String<A>) -> bool {
+        *self == other.deref()
+    }
+}
+
+impl<A: Allocator> PartialEq<Box<str>> for String<A> {
+    #[inline]
+    fn eq(&self, other: &Box<str>) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl<A: Allocator> PartialEq<String<A>> for Box<str> {
+    #[inline]
+    fn eq(&self, other: &String<A>) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl<A: Allocator> PartialEq<&Box<str>> for String<A> {
+    #[inline]
+    fn eq(&self, other: &&Box<str>) -> bool {
+        // Route through the owned `String == Box<str>` impl; the reference
+        // coerces to a borrowed `Box<str>`.
+        *self == **other
+    }
+}
+
+impl<A: Allocator> PartialEq<String<A>> for &Box<str> {
+    #[inline]
+    fn eq(&self, other: &String<A>) -> bool {
+        // Symmetric route through the same owned impl.
+        *other == **self
     }
 }
 
@@ -1934,6 +2007,33 @@ impl<A: Allocator> TryFrom<String<A>> for Box<str, A> {
     }
 }
 
+/// Fallible conversion from a borrowed `&str` into an owned [`String`].
+///
+/// Equivalent to [`String::try_from_str`]; surfaced as a trait impl so that
+/// generic code can write `String::try_from(some_str)?`.
+impl<'a> TryFrom<&'a str> for String {
+    type Error = TryReserveError;
+
+    #[inline]
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        Self::try_from_str(s)
+    }
+}
+
+impl<A: Allocator> TryFrom<Vec<u8, A>> for String<A> {
+    type Error = FromUtf8Error<A>;
+
+    /// Fallible conversion from a byte vector into a [`String`], validating UTF-8.
+    ///
+    /// On success the [`Vec<u8>`] is moved into the new [`String`] with no copy or
+    /// re-allocation. On failure the offending bytes are returned inside the error
+    /// so the caller can inspect or recover them.
+    #[inline]
+    fn try_from(v: Vec<u8, A>) -> Result<Self, Self::Error> {
+        Self::from_utf8_in(v)
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Fallible trait impls
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2211,6 +2311,68 @@ mod tests {
         let mut m = std::collections::HashMap::new();
         m.insert(a.try_clone().unwrap(), 1);
         assert_eq!(m.get("apple"), Some(&1));
+    }
+
+    // ── TryToString ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_to_string_matches_display() {
+        let s = mk("héllo wörld ✓");
+        assert_eq!(s.try_to_string().unwrap().deref(), "héllo wörld ✓");
+    }
+
+    #[test]
+    fn try_to_string_empty() {
+        let s = String::new();
+        assert_eq!(s.try_to_string().unwrap().deref(), "");
+    }
+
+    #[test]
+    fn try_to_string_in_custom_allocator() {
+        let alloc = CountingAllocator::new();
+        let s = mk("payload");
+        // Pass a reference: `CountingAllocator` is not `Copy`, but its counters
+        // live behind interior mutability, so the string's stored `&alloc`
+        // observes the same instance we hold here.
+        let out: String<&CountingAllocator> = s.try_to_string_in(&alloc).unwrap();
+        assert_eq!(out.deref(), "payload");
+        // The output buffer was allocated through our counting allocator.
+        assert!(alloc.allocations() >= 1);
+    }
+
+    #[test]
+    fn try_to_string_oom_returns_fmt_error() {
+        let s = mk("data");
+        // A failing allocator must surface an error, not panic. Because rendering
+        // goes through `core::fmt::write`, the failure arrives as the opaque unit
+        // `fmt::Error` — there is no cause to inspect here, only that it failed.
+        let _err: fmt::Error = s.try_to_string_in(FailAlloc).unwrap_err();
+    }
+
+    /// The blanket `impl<T: Display> TryToString for T` means any `Display` type
+    /// — not just `String` — can render itself into an owned Olive string.
+    #[test]
+    fn try_to_string_blanket_for_non_string_display() {
+        // Primitives implement `Display` via std's blanket; our trait follows.
+        let n: i32 = -42;
+        assert_eq!(n.try_to_string().unwrap().deref(), "-42");
+
+        // A custom `Display` type renders through its own formatter.
+        struct Pair(i32, i32);
+        impl Display for Pair {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "({},{})", self.0, self.1)
+            }
+        }
+        let p = Pair(7, 8);
+        assert_eq!(p.try_to_string().unwrap().deref(), "(7,8)");
+    }
+
+    #[test]
+    fn try_to_string_does_not_mutate_receiver() {
+        let s = mk("source");
+        let _ = s.try_to_string().unwrap();
+        assert_eq!(s.deref(), "source");
     }
 
     #[test]
@@ -2550,5 +2712,100 @@ mod tests {
         // Construct an out-of-order range without triggering clippy::reversed_empty_ranges.
         let r = core::ops::Range { start: 2, end: 1 };
         assert!(s.try_replace_range(r, "x").is_err());
+    }
+
+    // ── cross-type comparison & AsMut<str> ────────────────────────────────────
+
+    #[test]
+    fn eq_string_vs_str_both_directions() {
+        let s = mk("hello");
+        assert_eq!(&s, "hello");
+        assert_ne!(&s, "world");
+        assert_eq!("hello", &s);
+        assert_ne!("world", &s);
+    }
+
+    #[test]
+    fn eq_string_vs_ref_str() {
+        let s = mk("hi");
+        let lit: &str = "hi";
+        assert_eq!(&s, lit);
+        assert_eq!(lit, &s);
+    }
+
+    #[test]
+    fn eq_string_vs_boxed_str_both_directions() {
+        let s = mk("boxed-eq");
+        let b: Box<str> = Box::try_clone_from_ref("boxed-eq").unwrap();
+        assert_eq!(&s, &b);
+        assert_eq!(&b, &s);
+        assert_ne!(&s, &Box::try_clone_from_ref("nope").unwrap());
+    }
+
+    #[test]
+    fn eq_string_vs_ref_boxed_str() {
+        let s = mk("rb");
+        let b: Box<str> = Box::try_clone_from_ref("rb").unwrap();
+        let rb: &Box<str> = &b;
+        assert_eq!(&s, rb);
+        assert_eq!(rb, &s);
+    }
+
+    #[test]
+    fn as_mut_str_returns_correct_length_and_content() {
+        let mut s = mk("hello");
+        let m: &mut str = s.as_mut();
+        assert_eq!(m.len(), 5);
+        // The first byte of the mutable view matches the string's content.
+        assert_eq!(m.as_bytes()[0], b'h');
+    }
+
+    #[test]
+    fn as_mut_str_multibyte_len() {
+        let mut s = mk("aéb");
+        let m: &mut str = s.as_mut();
+        // 'a'(1) + 'é'(2) + 'b'(1) = 4 bytes.
+        assert_eq!(m.len(), 4);
+    }
+
+    // ── TryFrom impls ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_from_ref_str_ok() {
+        let s: String = String::try_from("hello").unwrap();
+        assert_eq!(s.deref(), "hello");
+    }
+
+    #[test]
+    fn try_from_ref_str_empty() {
+        let s: String = String::try_from("").unwrap();
+        assert_eq!(s.deref(), "");
+    }
+
+    #[test]
+    fn try_from_vec_u8_valid_utf8_moves_buffer() {
+        // 'é' is U+00E9 -> UTF-8 bytes 0xC3 (195) 0xA9 (169).
+        let mut bytes = Vec::<u8>::new();
+        for b in [b'h', 195u8, 169, b'l', b'l', b'o'] {
+            bytes.try_push(b).unwrap();
+        }
+        let s: String = String::try_from(bytes).unwrap();
+        assert_eq!(s.deref(), "héllo");
+    }
+
+    #[test]
+    fn try_from_vec_u8_invalid_returns_bytes() {
+        // 0xFF is not valid UTF-8.
+        let mut bad = Vec::<u8>::new();
+        bad.try_push(0xFF).unwrap();
+        bad.try_push(0xFE).unwrap();
+        let err = String::try_from(bad).unwrap_err();
+        assert_eq!(err.into_bytes().as_slice(), &[0xFF, 0xFE]);
+    }
+
+    #[test]
+    fn try_from_vec_u8_empty() {
+        let s: String = String::try_from(Vec::<u8>::new()).unwrap();
+        assert_eq!(s.deref(), "");
     }
 }

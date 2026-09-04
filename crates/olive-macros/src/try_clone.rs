@@ -17,10 +17,31 @@ const TRAIT_PATH: &str = "::olive_core::try_traits::try_clone::TryClone";
 /// Absolute path to the error type as seen from generated code.
 const ERROR_PATH: &str = "::olive_core::try_traits::try_clone::TryCloneError";
 
+/// Add a `TryClone` bound to every type parameter, mirroring how
+/// `#[derive(Clone)]` adds a `Clone` bound to each type parameter of the impl.
+fn add_try_clone_bounds(mut generics: syn::Generics, trait_path: &syn::Path) -> syn::Generics {
+    for param in generics.type_params_mut() {
+        let bound = syn::TypeParamBound::Trait(syn::TraitBound {
+            paren_token: None,
+            modifier: syn::TraitBoundModifier::None,
+            lifetimes: None,
+            path: trait_path.clone(),
+        });
+        param.bounds.push(bound);
+    }
+    generics
+}
+
 pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
+    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
+
+    // Mirror `derive(Clone)`: constrain every type parameter with `TryClone`.
+    let bounded_generics = add_try_clone_bounds(input.generics.clone(), &trait_path);
+    let (impl_generics, ty_generics, where_clause) = bounded_generics.split_for_impl();
 
     // Every field must be cloneable via `TryClone`; we express that bound by
     // simply calling `.try_clone()` on each field and letting the compiler's
@@ -117,9 +138,6 @@ pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
         }
     };
 
-    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
-    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
-
     let expanded = quote! {
         impl #impl_generics #trait_path for #name #ty_generics #where_clause {
             #[inline]
@@ -146,7 +164,10 @@ pub(crate) fn try_clone_tuples(input: TokenStream) -> TokenStream {
 
     for arity in 1..=max {
         let type_params: Vec<_> = (0..arity).map(|i| quote::format_ident!("T{i}")).collect();
-        let bounds: Vec<_> = type_params.iter().map(|t| quote!(#t: #trait_path)).collect();
+        let bounds: Vec<_> = type_params
+            .iter()
+            .map(|t| quote!(#t: #trait_path))
+            .collect();
 
         let types_joined: proc_macro2::TokenStream = {
             let mut ts = proc_macro2::TokenStream::new();

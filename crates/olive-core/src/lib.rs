@@ -27,18 +27,21 @@
 //!
 //! # Mirroring `core`
 //!
-//! Everything in the standard `core` crate is glob-re-exported at the crate root
-//! via [`pub use core::*;`](#re-exports). That means `olive_core::option`,
-//! `olive_core::slice`, `olive_core::fmt`, … all resolve exactly as their
-//! `core::` counterparts do. Olive-specific additions are layered on top without
-//! hiding any of them.
+//! Everything in the standard `core` crate is glob-re-exported at the crate root, and inner
+//! modules also have their own glob exports to allow every `core` item to be accessible.
+//! Olive-specific additions are layered on top without hiding any of them.
 //!
-//! # Naming convention
+//! # Naming convention and fallibility concerns
 //!
-//! A method that can fail is prefixed `try_` (e.g. `try_reserve`,
-//! `try_extend`). Infallible operations keep their plain names (however, they are generally avoided).
-//! Trait methods inherit the name they override; free functions and inherent methods that are
-//! fallible carry the `try_` prefix.
+//! - A method that can fail whose std or other common counterparts appear "infallible" but
+//!   panic is usually prefixed `try_` (e.g. `try_reserve`, `try_extend`).
+//! - Panics in Rust are meant for logic bugs and is best with a message.
+//!   Therefore, most items in this crate in particular,
+//!   and the Olive framework in general, try not to hide any of their failure modes.
+//!   This allows implementors to handle hidden errors or panic with a highly descriptive
+//!   message. Unfortunately, this does not apply to syntactic methods like indexing
+//!   because it would introduce too many discrepancies.
+//! - Trait methods inherit the name they override.
 //!
 //! # ``no_std`` compatibility
 //!
@@ -89,6 +92,8 @@ pub mod num;
 pub mod ops;
 /// Iterator recovery primitives: [`Resume`](recovery::Resume) and the [`Stall`](recovery::Stall) trait.
 pub mod recovery;
+/// Re-exports of [`core::slice`] plus Olive's range helpers.
+pub mod slice;
 /// Foundational fallible traits.
 pub mod try_traits;
 

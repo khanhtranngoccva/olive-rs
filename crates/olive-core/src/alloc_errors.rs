@@ -73,6 +73,9 @@ impl TryReserveErrorKind {
 /// `String::reserve`, and friends raise on out-of-memory. Unlike those, the
 /// value is returned to the caller so the program can react (free memory, back
 /// off, retry, or degrade gracefully).
+///
+/// The error is hoisted here because the core traits should be aware of 
+/// this error.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TryReserveError {
     kind: TryReserveErrorKind,
