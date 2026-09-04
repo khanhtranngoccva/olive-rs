@@ -1565,6 +1565,71 @@ fn drain_double_ended_mixed() {
     assert_eq!(v.as_slice(), &[0, 4]);
 }
 
+/// Regression: a partially-consumed drain's `Drop` must destroy the hole at
+/// `original_start + consumed`, not `original_start + (original_count - remaining)`.
+///
+/// The naive formula `start + (count - remaining)` derives the offset from
+/// `remaining` alone, implicitly assuming the hole always starts at index 0
+/// within the drained range. It ignores how many were consumed from the FRONT
+/// (`consumed`) — equivalently, it assumes the right edge of the hole is always
+/// at `start + count`, ignoring items taken from the RIGHT (`taken_back`).
+/// Whenever `taken_back` is nonzero, the computed offset
+/// lands outside the true hole `[start+consumed .. start+count-taken_back)`:
+/// it drops an already-yielded (moved-out) element at the right and
+/// skips a still-live one at the left.
+///
+/// This test exercises BOTH directions simultaneously: `next()` × 2 (front) and
+/// `next_back()` × 1 (back), so any formula that mishandles either side fails.
+/// Each payload records itself in a shared sink when dropped, letting us assert
+/// exactly which elements the drainer destroyed versus handed to the caller.
+#[test]
+fn drain_interleaved_drop_destroys_correct_hole() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // Shared sink. Every `Rec` holds an `Option<Rc<_>>` clone; `disarm()` pulls
+    // that clone out so the destructor won't record the element. Because the
+    // reference is simply moved (not forgotten), every strong ref is eventually
+    // released by a normal drop — nothing leaks.
+    let sink: Rc<RefCell<std::vec::Vec<u32>>> = Rc::new(RefCell::new(std::vec::Vec::new()));
+
+    struct Rec(u32, Option<Rc<RefCell<std::vec::Vec<u32>>>>);
+    impl Rec {
+        /// Detach the sink reference so this element's `Drop` will NOT record
+        /// itself. Returns the payload for inspection.
+        fn disarm(mut self) -> u32 {
+            self.1.take(); // drop our Rc clone; destructor now sees None
+            self.0
+        }
+    }
+    impl Drop for Rec {
+        fn drop(&mut self) {
+            if let Some(s) = self.1.take() {
+                s.borrow_mut().push(self.0);
+            }
+        }
+    }
+
+    let mut v: Vec<Rec> = Vec::new();
+    for i in 0..6u32 {
+        v.try_push(Rec(i, Some(Rc::clone(&sink)))).unwrap();
+    }
+
+    let mut d = v.try_drain(1..5).unwrap();
+    // Disarm each yielded element: pull its payload out and detach its sink
+    // clone, so only the drainer's own step-1 destruction reaches the sink.
+    assert_eq!(d.next().expect("first drain element").disarm(), 1);
+    assert_eq!(d.next().expect("second drain element").disarm(), 2);
+    assert_eq!(d.next_back().expect("back drain element").disarm(), 4);
+    drop(d);
+
+    // The drainer must have destroyed exactly the single unconsumed hole
+    // element, payload 3. Nothing else in the drained range may be touched.
+    assert_eq!(*sink.borrow(), std::vec![3u32]);
+    // Compaction removed the whole range: only payloads 0 and 5 survive.
+    assert_eq!(v.len(), 2);
+}
+
 #[test]
 fn drain_zst() {
     let mut v: Vec<()> = Vec::new();

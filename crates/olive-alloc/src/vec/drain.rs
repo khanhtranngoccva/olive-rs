@@ -269,21 +269,16 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         let original_start = self.original_start;
         let original_count = self.original_count;
         let original_len = self.original_len;
+        let consumed = self.consumed;
         let remaining = self.remaining();
 
-        // `try_drain` capped the vector's length down to `start` at
-        // construction, so `vec.len()` here equals `original_start`: the drained
-        // range is a hole the vec no longer counts, which is what keeps the
-        // (partially uninitialized) hole invisible to the vec's own drop path.
-        // We now finish the removal using the stored `original_len` to locate
-        // the surviving tail.
-        //
         // Buffer layout (offsets from the base pointer):
-        //   [prefix:  0..original_start)                    <- in vec.len(), survives
-        //   [yielded: original_start..original_start+cons)  <- moved out (uninit bits)
-        //   [hole:    original_start+cons..original_end)    <- never yielded, must drop
-        //   [suffix:  original_end..original_len)           <- beyond vec.len(), shifts left
-        // where cons = original_count - remaining (elements already yielded)
+        //   [prefix:           0..original_start)                              <- in vec.len(), survives
+        //   [yielded left:     original_start..original_start+cons)            <- moved out (uninit bits)
+        //   [hole:             original_start+cons..original_end-taken_back)   <- never yielded, must drop
+        //   [yielded right:    original_end-taken_back..original_end)          <- moved out (uninit bits)
+        //   [suffix:           original_end..original_len)                     <- beyond vec.len(), shifts left
+        // where cons + taken_back + remaining = original_count
         // and original_end = original_start + original_count.
         //
         // Steps:
@@ -299,8 +294,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         // the vector coherent. Arming the guard *before* step 1 guarantees the
         // compaction runs both on the happy path (guard falls out of scope
         // normally) and on unwind (the guard's `Drop` runs during stack
-        // teardown). This mirrors the `IntoIterDeallocGuard` used by
-        // [`crate::vec::IntoIter`].
+        // teardown).
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "original_count <= original_len"
@@ -327,20 +321,9 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         };
 
         // Step 1: destroy the unconsumed remainder of the drain range.
-        // These `remaining` elements sit at offset `original_start +
-        // (original_count - remaining)` and were never handed to the caller, so
-        // they must be dropped. The already-yielded elements have had their
-        // values moved out via `ptr::read`; we must NOT drop them again.
-        // Guarded by `remaining > 0` so we never form a pointer into an empty
-        // region (avoids the OOB-pointer-at-tail overflow noted in BUGBOT).
-        // SAFETY: the addressed slots lie within the initialized region and
-        // hold valid values. For ZSTs this is a no-op.
         if remaining > 0 && size_of::<T>() != 0 {
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "remaining <= original_count"
-            )]
-            let hole_offset = original_start + (original_count - remaining);
+            #[allow(clippy::arithmetic_side_effects, reason = "consumed <= original_count")]
+            let hole_offset = original_start + consumed;
             unsafe {
                 let p = base.add(hole_offset);
                 ptr::drop_in_place(slice::from_raw_parts_mut(p, remaining));
@@ -357,17 +340,6 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
 /// Finishes a drain's compaction — shifting the surviving suffix left and
 /// restoring the vector's length — even if the preceding element destruction
 /// unwinds.
-///
-/// A drain's `Drop` destroys the unconsumed hole and then compacts the buffer:
-/// it shifts the suffix left over the drained gap and extends the length to
-/// include it. Because destroying the hole runs `T` destructors, it can panic
-/// partway; abandoning the compaction in that case would strand the vector at
-/// its capped `original_start` with the suffix left orphaned beyond the live
-/// range — a coherence hazard. So the compaction lives in this guard, armed
-/// *before* the destruction, guaranteeing it runs exactly once on whichever
-/// path completes first. There is exactly one shift site and one length-update
-/// site per outcome. This mirrors the `IntoIterDeallocGuard` used by
-/// [`crate::vec::IntoIter`].
 struct DrainCompactGuard<'a, T, A: Allocator> {
     /// Exclusive reference to the owning vector being compacted.
     vec: &'a mut super::Vec<T, A>,
@@ -388,15 +360,10 @@ struct DrainCompactGuard<'a, T, A: Allocator> {
 impl<T, A: Allocator> Drop for DrainCompactGuard<'_, T, A> {
     fn drop(&mut self) {
         // Step 2: shift the suffix left by the drained count.
-        // The suffix starts at `base + suffix_src_offset` and, after the shift,
-        // starts at `base + original_start`. We use `ptr::copy` (not
-        // `copy_nonoverlapping`) because when `original_start == 0` the source
-        // and destination overlap. Guarded by `suffix_len > 0` so that an empty
-        // suffix sitting at the very end of the buffer never forms an OOB
-        // pointer (the exact overflow class described in BUGBOT).
         // SAFETY: both pointers are within the allocation and aligned;
         // `ptr::copy` correctly handles the overlapping case (leftward shift).
-        // For ZSTs this is a no-op.
+        // For ZSTs this is a no-op. OOB pointer is prevented with a suffix_len
+        // guard.
         if self.suffix_len > 0 && size_of::<T>() != 0 {
             unsafe {
                 let dst = self.base.add(self.original_start);
@@ -406,8 +373,7 @@ impl<T, A: Allocator> Drop for DrainCompactGuard<'_, T, A> {
         }
 
         // Step 3: extend the length to include the compacted suffix.
-        // Idempotent, so re-running it after a successful completion is
-        // harmless. SAFETY: every slot in `[0..final_len)` is initialized (the
+        // SAFETY: every slot in `[0..final_len)` is initialized (the
         // untouched prefix plus the relocated suffix) and `final_len <=
         // capacity()`, satisfying `set_len`'s preconditions.
         unsafe {
