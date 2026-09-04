@@ -1,0 +1,303 @@
+//! Shared test helpers for the `olive-alloc` crate.
+//!
+//! These utilities replace per-test-file static atomics with per-test
+//! `Rc<RefCell<_>>` instances, eliminating cross-test interference when tests
+//! run in parallel threads.
+
+extern crate std;
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::vec::Vec;
+
+use core::alloc::Layout;
+use core::ptr::NonNull;
+use olive_core::alloc::{AllocError, Allocator};
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+
+/// A per-test drop counter. Each test constructs its own instance so there is
+/// no cross-test interference from parallel execution.
+#[derive(Debug, Default)]
+pub struct DropCounter {
+    count: RefCell<usize>,
+}
+
+impl DropCounter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Increments the counter (call from a `Drop` impl via the shared `Rc`).
+    pub fn record_drop(&self) {
+        *self.count.borrow_mut() += 1;
+    }
+
+    /// Returns the current drop count.
+    pub fn get(&self) -> usize {
+        *self.count.borrow()
+    }
+}
+
+/// A per-test panic armer. Starts disarmed; the test arms it before triggering
+/// the code path under test and can disarm it afterwards.
+#[derive(Debug, Default)]
+pub struct PanicArmer {
+    armed: RefCell<bool>,
+}
+
+impl PanicArmer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn arm(&self) {
+        *self.armed.borrow_mut() = true;
+    }
+
+    pub fn disarm(&self) {
+        *self.armed.borrow_mut() = false;
+    }
+
+    pub fn is_armed(&self) -> bool {
+        *self.armed.borrow()
+    }
+}
+
+/// A per-test clone budget shared by all instances of [`BudgetedFlaky`].
+/// Counts down from a configured threshold; when it reaches zero, clones fail.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CloneBudget {
+    remaining: RefCell<u32>,
+}
+
+impl CloneBudget {
+    pub fn new(remaining: u32) -> Self {
+        Self {
+            remaining: RefCell::new(remaining),
+        }
+    }
+
+    /// Attempts to consume one unit of budget. Returns `true` if a clone is
+    /// allowed, `false` if the budget is exhausted.
+    pub fn try_consume(&self) -> bool {
+        let mut r = self.remaining.borrow_mut();
+        if *r == 0 {
+            false
+        } else {
+            *r -= 1;
+            true
+        }
+    }
+}
+
+/// A value whose `try_clone` succeeds while the shared budget has remaining
+/// units, then fails forever. Per-test isolation via `Rc<CloneBudget>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetedFlaky {
+    pub(crate) budget: Rc<CloneBudget>,
+}
+
+impl TryClone for BudgetedFlaky {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if self.budget.try_consume() {
+            Ok(BudgetedFlaky {
+                budget: self.budget.clone(),
+            })
+        } else {
+            Err(TryCloneError::Other("budget exhausted"))
+        }
+    }
+}
+
+/// A per-test ledger tracking individual payload ids by count. On construction
+/// an id is registered as "live" (`live[id] == true`); on drop its count is
+/// incremented and it is marked no longer live. Because drops are counted
+/// rather than merely logged, the ledger detects all three failure classes a
+/// container bug could introduce after a caught panic or mid-operation abort:
+/// 1. Leaks — an id still marked live when it should have been dropped.
+/// 2. Double-frees — an id whose drop count exceeds one.
+/// 3. Wrong totals — the sum of drop counts differs from expectation.
+///
+/// Ids are allocated monotonically via [`Ledger::allocate`] so the set of ids
+/// ever created is exactly `0..total_allocated()`, which lets
+/// [`Ledger::all_dropped_once`] check every id without callers enumerating them.
+#[derive(Debug)]
+pub struct Ledger {
+    live: RefCell<HashSet<u32>>,
+    drop_counts: RefCell<HashMap<u32, usize>>,
+    next_id: RefCell<u32>,
+}
+
+impl Ledger {
+    pub fn new() -> Self {
+        Self {
+            live: RefCell::new(HashSet::new()),
+            drop_counts: RefCell::new(HashMap::new()),
+            next_id: RefCell::new(0u32),
+        }
+    }
+
+    /// Allocates and returns a fresh unique id.
+    pub fn allocate(&self) -> u32 {
+        let mut next = self.next_id.borrow_mut();
+        let id = *next;
+        *next += 1;
+        id
+    }
+
+    /// Total number of ids handed out by [`Self::allocate`] so far. The set of
+    /// all created ids is therefore exactly `0..total_allocated()`.
+    pub fn total_allocated(&self) -> u32 {
+        *self.next_id.borrow()
+    }
+
+    /// Registers an id as currently alive.
+    pub fn register(&self, id: u32) {
+        self.live.borrow_mut().insert(id);
+    }
+
+    /// Records that `id` was dropped: bumps its drop count and clears its live
+    /// flag. Called from `Drop` impls. Calling this twice for the same id is
+    /// what makes double-frees observable (the count goes to 2+).
+    pub fn unregister(&self, id: u32) {
+        *self.drop_counts.borrow_mut().entry(id).or_insert(0) += 1;
+        self.live.borrow_mut().remove(&id);
+    }
+
+    /// Number of times `id` has been dropped (0 if never).
+    pub fn drop_count(&self, id: u32) -> usize {
+        self.drop_counts.borrow().get(&id).copied().unwrap_or(0)
+    }
+
+    /// Map of every id that has been dropped at least once, to its count.
+    pub fn drop_counts(&self) -> HashMap<u32, usize> {
+        self.drop_counts.borrow().clone()
+    }
+
+    /// Snapshot of currently-live ids (non-empty ⇒ leak).
+    pub fn live_ids(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.live.borrow().iter().copied().collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Ids that were allocated but never dropped (a subset of the live set,
+    /// excluding any that also dropped — impossible here since dropping clears
+    /// live, but kept explicit for clarity). Empty ⇒ no leaks.
+    pub fn leaked_ids(&self) -> Vec<u32> {
+        self.live_ids()
+    }
+
+    /// Ids dropped more than once. Empty ⇒ no double-free.
+    pub fn double_dropped(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self
+            .drop_counts
+            .borrow()
+            .iter()
+            .filter(|(_, c)| **c > 1)
+            .map(|(id, _)| *id)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// True iff every id in `expected` was dropped exactly once and nothing
+    /// else was dropped. Handy for the common "these N elements must each die
+    /// exactly once" assertion.
+    pub fn all_dropped_once(&self, expected: impl IntoIterator<Item = u32>) -> bool {
+        let counts = self.drop_counts.borrow();
+        let n_expected: usize = expected.into_iter().count();
+        if counts.len() != n_expected {
+            return false;
+        }
+        for (_, c) in counts.iter() {
+            if *c != 1 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// A pass-through allocator whose own `Drop` is recorded by a shared counter, so
+/// a test can verify the allocator instance was destroyed exactly once (neither
+/// leaked nor double-dropped), e.g. after being moved into a container and back
+/// out. Delegates all memory operations to `Global`. Per-test isolation via the
+/// `Rc` shared with the test body.
+#[derive(Debug, Clone)]
+pub struct LocalCountingAlloc {
+    drops: Rc<DropCounter>,
+}
+
+impl LocalCountingAlloc {
+    /// Builds a counting allocator sharing one drop counter with the test.
+    pub fn new(drops: Rc<DropCounter>) -> Self {
+        Self { drops }
+    }
+}
+
+// SAFETY: delegates all operations to `Global`; no additional invariants.
+unsafe impl Allocator for LocalCountingAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        crate::alloc::Global.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+    }
+}
+
+impl Drop for LocalCountingAlloc {
+    fn drop(&mut self) {
+        self.drops.record_drop();
+    }
+}
+
+/// An allocator whose every allocation fails. Used to exercise OOM paths.
+#[derive(Debug, Default)]
+pub struct FailAlloc;
+
+// SAFETY: never hands out memory, so there is nothing to free on deallocate.
+unsafe impl Allocator for FailAlloc {
+    fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        Err(AllocError)
+    }
+    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+}
+
+/// A value whose `try_clone` succeeds while its internal counter is below
+/// `threshold`, incrementing it each successful clone, then fails forever once
+/// the counter reaches `threshold`. Parametrized as `(start, threshold)` so a
+/// test can place exactly where in a sequence of clones the failure lands: an
+/// element seeded with `start` will fail to clone after `threshold - start`
+/// further successful clones. Lets us simulate a mid-operation clone failure at
+/// a deterministic point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlakyClone {
+    pub count: u32,
+    pub threshold: u32,
+}
+
+impl FlakyClone {
+    /// Shorthand constructor for the common case of starting at 0.
+    pub const fn new(threshold: u32) -> Self {
+        Self {
+            count: 0,
+            threshold,
+        }
+    }
+}
+
+impl TryClone for FlakyClone {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if self.count >= self.threshold {
+            Err(TryCloneError::Other("flaky"))
+        } else {
+            Ok(FlakyClone {
+                count: self.count + 1,
+                threshold: self.threshold,
+            })
+        }
+    }
+}

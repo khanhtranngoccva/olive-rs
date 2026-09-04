@@ -5,7 +5,7 @@
 
 extern crate std;
 
-use core::ptr::NonNull;
+use core::alloc::Layout;
 
 use olive_core::try_traits::try_clone::TryCloneError;
 use olive_core::try_traits::try_collect::TryCollect;
@@ -13,77 +13,11 @@ use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::*;
-use crate::alloc::{AllocError, Layout};
+use crate::test_helpers::{
+    CloneBudget, DropCounter, FailAlloc, FlakyClone, Ledger, LocalCountingAlloc, PanicArmer,
+};
 use std::format;
-
-// ---------------------------------------------------------------------------
-// Test doubles
-// ---------------------------------------------------------------------------
-
-/// An allocator whose every allocation fails. Used to exercise OOM paths.
-#[derive(Default)]
-struct FailAlloc;
-
-unsafe impl Allocator for FailAlloc {
-    fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        Err(AllocError)
-    }
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-}
-
-/// A value whose clone succeeds until it has been cloned `fail_after` times,
-/// then fails forever. Lets us simulate a mid-operation clone failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Flaky(u32);
-
-impl TryClone for Flaky {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        if self.0 >= 2 {
-            Err(TryCloneError::Other("flaky"))
-        } else {
-            Ok(Flaky(self.0 + 1))
-        }
-    }
-}
-
-/// Atomic clone counter shared by all instances of [`CountingFlaky`]. Counts
-/// down from a configured threshold; when it reaches zero, clones fail.
-static CLONE_REMAINING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// A unit value that counts every successful clone globally (via atomic).
-/// Clones succeed while the remaining count is above zero; once exhausted, all
-/// subsequent clones fail. This lets us simulate "the Nth clone in a batch
-/// fails" without depending on per-instance state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CountingFlaky;
-
-impl CountingFlaky {
-    /// Sets the number of successful clones allowed before failure.
-    fn set_remaining(n: u32) {
-        CLONE_REMAINING.store(n, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-impl TryClone for CountingFlaky {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        use std::sync::atomic::Ordering;
-        loop {
-            let cur = CLONE_REMAINING.load(Ordering::SeqCst);
-            if cur == 0 {
-                return Err(TryCloneError::Other("counting flaky exhausted"));
-            }
-            match CLONE_REMAINING.compare_exchange_weak(
-                cur,
-                cur - 1,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(CountingFlaky),
-                Err(_) => continue,
-            }
-        }
-    }
-}
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -503,39 +437,137 @@ fn from_iter_in_fail_alloc_reports_reserve() {
 // Clone-failure rollback
 // ---------------------------------------------------------------------------
 
+/// A payload that registers a fresh id on construction and unregisters it on
+/// drop, so the shared [`Ledger`] can track exactly which instances are alive.
+/// Its `try_clone` succeeds while a shared [`CloneBudget`] has room (each clone
+/// gets its own new id), then fails — letting a test drive a deterministic
+/// mid-operation clone failure while still observing every transient instance.
+struct TrackedPayload {
+    id: u32,
+    ledger: Rc<Ledger>,
+    budget: Rc<CloneBudget>,
+}
+
+impl Drop for TrackedPayload {
+    fn drop(&mut self) {
+        self.ledger.unregister(self.id);
+    }
+}
+
+impl TryClone for TrackedPayload {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if !self.budget.try_consume() {
+            return Err(TryCloneError::Other("budget exhausted"));
+        }
+        let id = self.ledger.allocate();
+        self.ledger.register(id);
+        Ok(TrackedPayload {
+            id,
+            ledger: self.ledger.clone(),
+            budget: self.budget.clone(),
+        })
+    }
+}
+
 #[test]
 fn resize_rollbacks_partial_on_clone_failure() {
-    // Allow exactly 2 successful clones; the 3rd will fail.
-    CountingFlaky::set_remaining(2);
-    let mut v: Vec<CountingFlaky> = Vec::new();
-    v.try_push(CountingFlaky).unwrap();
-    // Growing from len 1 to len 4 requires 3 clones of the source value.
-    // First 2 succeed, 3rd fails → rollback to original length.
-    let e = v
-        .try_resize(4, &CountingFlaky)
-        .expect_err("clone should fail");
+    let ledger = Rc::new(Ledger::new());
+    // Budget of 2: the standalone clone below consumes 1, leaving 1 for the
+    // resize loop — so the loop appends one element then fails on the next.
+    let budget = Rc::new(CloneBudget::new(2));
+
+    // Seed one live payload (id 0).
+    let seed_id = ledger.allocate();
+    ledger.register(seed_id);
+    let mut v: Vec<TrackedPayload> = Vec::new();
+    v.try_push(TrackedPayload {
+        id: seed_id,
+        ledger: ledger.clone(),
+        budget: budget.clone(),
+    })
+    .unwrap();
+
+    // Clone the seed out so we can hand it to try_resize by reference without
+    // fighting the &mut self borrow. This is a real clone (id 1) that lives in
+    // `src` until end of scope.
+    let src = v.as_slice()[0].try_clone().expect("seed clone ok");
+
+    // Growing from len 1 to len 4 needs 3 more clones. With 1 unit of budget
+    // left, the first append succeeds (id 2), the second fails → rollback drops
+    // the single transient clone (id 2) and restores len == 1.
+    let e = v.try_resize(4, &src).expect_err("clone should fail");
     assert!(matches!(e, TryVecWithCloneError::Clone(_)));
-    // Rolled back to original length.
+
+    // Rolled back to original length: only the seed survives in the vec.
     assert_eq!(v.len(), 1);
-    assert_eq!(v.as_slice()[0], CountingFlaky);
+    // The lone transient clone (id 2) was destroyed during rollback. The only
+    // ids still alive are 0 (seed, in v) and 1 (src, a local) — both expected.
+    // No double-free, and exactly the transient clone has been dropped so far.
+    assert_eq!(ledger.live_ids(), [0, 1]);
+    assert!(ledger.double_dropped().is_empty());
+    assert_eq!(ledger.drop_count(2), 1, "the one appended clone must be dropped once");
+    assert_eq!(ledger.total_allocated(), 3);
+
+    // Tear down: `src` (id 1) and the vec's seed (id 0) drop → all three gone.
+    drop(src);
+    drop(v);
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.all_dropped_once(0..3));
 }
 
 #[test]
 fn extend_from_slice_rolls_back_on_clone_failure() {
-    let mut v: Vec<Flaky> = Vec::new();
-    v.try_push(Flaky(0)).unwrap();
-    // Build a source slice whose third element fails to clone.
-    let mut fv: Vec<Flaky> = Vec::new();
-    fv.try_push(Flaky(0)).unwrap();
-    fv.try_push(Flaky(1)).unwrap();
-    fv.try_push(Flaky(2)).unwrap(); // This one will fail to clone.
+    let ledger = Rc::new(Ledger::new());
+    let budget = Rc::new(CloneBudget::new(2));
+
+    // One live seed in the destination (id 0).
+    let seed_id = ledger.allocate();
+    ledger.register(seed_id);
+    let mut v: Vec<TrackedPayload> = Vec::new();
+    v.try_push(TrackedPayload {
+        id: seed_id,
+        ledger: ledger.clone(),
+        budget: budget.clone(),
+    })
+    .unwrap();
+
+    // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
+    // order; the budget allows exactly two successful clones (of ids 1 and 2),
+    // then the third clone (of id 3) fails → rollback discards the two appends.
+    let mut fv: Vec<TrackedPayload> = Vec::new();
+    for _ in 0..3 {
+        let id = ledger.allocate();
+        ledger.register(id);
+        fv.try_push(TrackedPayload {
+            id,
+            ledger: ledger.clone(),
+            budget: budget.clone(),
+        })
+        .unwrap();
+    }
+
     let e = v
         .try_extend_from_slice_with_rollback(fv.as_slice())
         .expect_err("clone fail");
     assert!(matches!(e, TryVecWithCloneError::Clone(_)));
-    // Only the original element remains.
+
+    // Destination rolled back to just its seed.
     assert_eq!(v.len(), 1);
-    assert_eq!(v.as_slice()[0], Flaky(0));
+    // The two transient copies of source ids 1 and 2 were created as NEW ids
+    // (4 and 5) and dropped during rollback. Still alive at this point: id 0
+    // (seed, in v) and ids 1, 2, 3 (the sources, in fv). No double-free, and
+    // exactly the two transients have been dropped.
+    assert_eq!(ledger.live_ids(), [0, 1, 2, 3]);
+    assert!(ledger.double_dropped().is_empty());
+    assert_eq!(ledger.total_allocated(), 6);
+    assert_eq!(ledger.drop_count(4), 1, "transient copy of source[0] dropped once");
+    assert_eq!(ledger.drop_count(5), 1, "transient copy of source[1] dropped once");
+
+    // Tear down both vecs: seed (0) + sources (1,2,3) all drop → 5 more, total 7.
+    drop(fv);
+    drop(v);
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.all_dropped_once(0..6));
 }
 
 // ---------------------------------------------------------------------------
@@ -604,11 +636,11 @@ fn try_extend_from_slice_trait_success() {
 
 #[test]
 fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
-    let mut v: Vec<Flaky> = Vec::new();
-    let mut src: Vec<Flaky> = Vec::new();
-    src.try_push(Flaky(0)).unwrap();
-    src.try_push(Flaky(1)).unwrap();
-    src.try_push(Flaky(2)).unwrap(); // fails to clone
+    let mut v: Vec<FlakyClone> = Vec::new();
+    let mut src: Vec<FlakyClone> = Vec::new();
+    src.try_push(FlakyClone::new(2)).unwrap();
+    src.try_push(FlakyClone { count: 1, threshold: 2 }).unwrap();
+    src.try_push(FlakyClone { count: 2, threshold: 2 }).unwrap(); // fails to clone
     let (rest, e) = v
         .try_extend_from_slice(src.as_slice())
         .expect_err("clone fail");
@@ -686,33 +718,51 @@ fn into_iter_size_hint() {
 /// `Vec`) re-dropped every already-yielded element — a double-free. Here we
 /// yield two of five, then drop the iterator; exactly three drops should occur
 /// (the unconsumed tail), and the two yielded values are dropped when their
-/// bindings go out of scope at the end of the block.
+/// bindings go out of scope at the end of the block. The ledger records which
+/// specific ids were dropped so we can prove no id is ever dropped twice.
 #[test]
 fn into_iter_drop_mid_way_drops_only_tail() {
-    static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    struct CountDrop;
-    impl Drop for CountDrop {
+    let ledger = Rc::new(Ledger::new());
+
+    struct Tracked {
+        id: u32,
+        ledger: Rc<Ledger>,
+    }
+    impl Drop for Tracked {
         fn drop(&mut self) {
-            DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.ledger.unregister(self.id);
         }
     }
-    DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
 
     // Yield two elements, then drop the iterator while three remain.
     {
         let mut v = Vec::new();
-        for _ in 0..5 {
-            v.try_push(CountDrop).unwrap();
+        for i in 0..5u32 {
+            ledger.register(i);
+            v.try_push(Tracked {
+                id: i,
+                ledger: ledger.clone(),
+            })
+            .unwrap();
         }
         let mut it = v.into_iter();
-        let a = it.next().unwrap();
-        let b = it.next().unwrap();
-        drop(it); // drops the remaining 3
-        drop(a); // +1
-        drop(b); // +1
+        let a = it.next().unwrap(); // id 0
+        let b = it.next().unwrap(); // id 1
+        // Dropping the iterator must destroy only the unconsumed tail (ids 2,3,4).
+        drop(it);
+        // At this point only ids 0 and 1 (held in a/b) remain alive.
+        assert_eq!(ledger.live_ids(), [0, 1]);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.drop_count(2), 1);
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        drop(a); // id 0
+        drop(b); // id 1
     }
-    // 3 (tail) + 2 (yielded) = 5 total, each exactly once.
-    assert_eq!(DROPPED.load(std::sync::atomic::Ordering::SeqCst), 5);
+    // All five dropped exactly once: 3 (tail) + 2 (yielded). No leaks, no
+    // double-frees.
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.all_dropped_once(0..5));
 }
 
 // Regression test for the stored-head-pointer OOB bug (see agents/BUGBOT.md):
@@ -833,51 +883,22 @@ fn into_iter_zst_as_slice_length_matches_len() {
 // then assert the count is exactly one after the iterator goes out of scope.
 #[test]
 fn into_iter_drops_allocator_exactly_once() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static ALLOC_DROPS: AtomicUsize = AtomicUsize::new(0);
-
-    /// A pass-through allocator that counts how many instances are dropped.
-    /// Not `Copy`: it carries a `Drop` impl, so each clone is a distinct
-    /// instance that must itself be destroyed (and counted).
-    #[derive(Clone)]
-    struct CountingAlloc;
-
-    unsafe impl Allocator for CountingAlloc {
-        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-            Global.allocate(layout)
-        }
-        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-            unsafe { Global.deallocate(ptr, layout) }
-        }
+    let counter = Rc::new(DropCounter::new());
+    let alloc = LocalCountingAlloc::new(counter.clone());
+    let mut v: Vec<i32, LocalCountingAlloc> = Vec::new_in(alloc);
+    for i in 0..5i32 {
+        v.try_push(i).unwrap();
     }
-
-    impl Drop for CountingAlloc {
-        fn drop(&mut self) {
-            ALLOC_DROPS.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    ALLOC_DROPS.store(0, Ordering::SeqCst);
-
-    // Build a vec on the counting allocator, consume partway, then drop the
-    // iterator with elements still outstanding.
-    {
-        let mut v: Vec<i32, CountingAlloc> = Vec::new_in(CountingAlloc);
-        for i in 0..5i32 {
-            v.try_push(i).unwrap();
-        }
-        let mut it = v.into_iter();
-        assert_eq!(it.next(), Some(0));
-        assert_eq!(it.next(), Some(1));
-        // Drop with three elements still held; the owned RawVec (and hence the
-        // allocator) must be released here.
-        drop(it);
-    }
+    let mut it = v.into_iter();
+    assert_eq!(it.next(), Some(0));
+    assert_eq!(it.next(), Some(1));
+    // Drop with three elements still held; the owned RawVec (and hence the
+    // allocator) must be released here.
+    drop(it);
 
     // Exactly one allocator instance lived inside the iterator and was dropped
     // when the iterator was. No leak (count > 0), no double-free (count == 1).
-    assert_eq!(ALLOC_DROPS.load(Ordering::SeqCst), 1);
+    assert_eq!(counter.get(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,108 +1121,145 @@ fn into_raw_parts_roundtrip() {
 
 #[test]
 fn drop_runs_each_element_once() {
-    static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    struct CountDrop;
-    impl Drop for CountDrop {
+    let ledger = Rc::new(Ledger::new());
+
+    struct Tracked {
+        id: u32,
+        ledger: Rc<Ledger>,
+    }
+    impl Drop for Tracked {
         fn drop(&mut self) {
-            DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.ledger.unregister(self.id);
         }
     }
-    DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
+
     {
         let mut v = Vec::new();
-        for _ in 0..5 {
-            v.try_push(CountDrop).unwrap();
+        for i in 0..5u32 {
+            ledger.register(i);
+            v.try_push(Tracked {
+                id: i,
+                ledger: ledger.clone(),
+            })
+            .unwrap();
         }
-        v.truncate(3); // drops 2
-    } // drops remaining 3
-    assert_eq!(DROPPED.load(std::sync::atomic::Ordering::SeqCst), 5);
+        // truncate(3) destroys the tail (ids 3 and 4).
+        v.truncate(3);
+        assert_eq!(ledger.live_ids(), [0, 1, 2]);
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+    } // dropping the vec destroys ids 0, 1, 2
+    // All five dropped exactly once; no leaks, no double-frees.
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.all_dropped_once(0..5));
 }
 
 /// Regression test: `dedup_by` must leave the buffer in a consistent state if
 /// the predicate panics mid-loop. Before the drop-guard fix, a panic after some
 /// duplicates had been dropped would leak the tail and/or double-free the
-/// already-dropped slots when the Vec was unwound.
+/// already-dropped slots when the Vec was unwound. The ledger records each
+/// element's id so we can prove, regardless of where the panic lands, that every
+/// element is dropped exactly once (duplicates destroyed during dedup plus the
+/// survivors destroyed on unwind) with neither leak nor double-free.
 #[test]
 fn dedup_by_panic_is_safe() {
-    static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    struct CountDrop(u8);
-    impl Drop for CountDrop {
+    let ledger = Rc::new(Ledger::new());
+
+    struct Tracked(u8, Rc<Ledger>);
+    impl Drop for Tracked {
         fn drop(&mut self) {
-            DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.1.unregister(self.0 as u32);
         }
     }
-    DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut v = Vec::new();
-        for i in 0..6u8 {
-            v.try_push(CountDrop(i)).unwrap();
-        }
-        // Panic on the comparison involving element index 4 (the 5th element),
-        // which is mid-gap-fill so some duplicates have already been dropped.
-        let mut calls = 0usize;
-        v.dedup_by(|a, b| {
-            calls += 1;
-            if calls == 3 {
-                panic!("forced panic mid-dedup");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+        let l = ledger.clone();
+        move || {
+            let mut v = Vec::new();
+            for i in 0..6u8 {
+                l.register(i as u32);
+                v.try_push(Tracked(i, l.clone())).unwrap();
             }
-            a.0 == b.0
-        });
+            // Panic on the third predicate call, mid-gap-fill, so some duplicate
+            // elements have already been destroyed by the time we unwind.
+            let mut calls = 0usize;
+            v.dedup_by(|a, b| {
+                calls += 1;
+                if calls == 3 {
+                    panic!("forced panic mid-dedup");
+                }
+                a.0 == b.0
+            });
+        }
     }));
 
     assert!(result.is_err(), "expected the predicate to panic");
-    // Whatever subset survived, every surviving element must be dropped exactly
-    // once when the Vec is unwound — no leaks, no double-frees. The exact count
-    // depends on how far the loop got before the panic; we only require that it
-    // is positive (at least one element remained) and <= 6 (no double-count).
-    let dropped = DROPPED.load(std::sync::atomic::Ordering::SeqCst);
-    assert!(
-        (1..=6).contains(&dropped),
-        "unexpected drop count: {dropped}"
-    );
+    // After the catch, the partially-deduplicated Vec has been unwound. Every
+    // one of the six elements must have been destroyed exactly once — whether
+    // it died as a duplicate inside dedup or as a survivor on unwind. No leaks,
+    // no double-frees.
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.double_dropped().is_empty());
+    assert!(ledger.all_dropped_once(0..6));
 }
 
 /// Regression test: if a destructor in the truncated tail panics, `truncate`
 /// must have already shrunk `len` before dropping, so unwinding the Vec cannot
 /// drop (double-free) those elements again. Before the fix, `truncate` dropped
 /// each element *then* decremented, so a panicking drop left the length still
-/// counting the element and the unwind would free it twice.
+/// counting the element and the unwind would free it twice. The ledger tracks
+/// each element's id so we can prove every one is destroyed exactly once even
+/// though one destructor panics mid-truncation.
 #[test]
 fn truncate_panicking_drop_is_safe() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    static DROPPED: AtomicUsize = AtomicUsize::new(0);
-    static PANIC_ONCE: AtomicBool = AtomicBool::new(true);
+    let ledger = Rc::new(Ledger::new());
+    let armer = Rc::new(PanicArmer::new());
 
-    /// Counts its drop; panics exactly once, the first time it runs.
-    struct PanicDrop;
+    /// Panics exactly once, the first time it runs while armed; records its id.
+    struct PanicDrop {
+        id: u32,
+        ledger: Rc<Ledger>,
+        armer: Rc<PanicArmer>,
+    }
     impl Drop for PanicDrop {
         fn drop(&mut self) {
-            DROPPED.fetch_add(1, Ordering::SeqCst);
-            if PANIC_ONCE.swap(false, Ordering::SeqCst) {
+            self.ledger.unregister(self.id);
+            if self.armer.is_armed() {
+                self.armer.disarm();
                 panic!("forced panic in drop");
             }
         }
     }
 
-    DROPPED.store(0, Ordering::SeqCst);
-    PANIC_ONCE.store(true, Ordering::SeqCst);
+    armer.arm();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut v = Vec::new();
-        for _ in 0..4 {
-            v.try_push(PanicDrop).unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+        let l = ledger.clone();
+        let a = armer.clone();
+        move || {
+            let mut v = Vec::new();
+            for i in 0..4u32 {
+                l.register(i);
+                v.try_push(PanicDrop {
+                    id: i,
+                    ledger: l.clone(),
+                    armer: a.clone(),
+                })
+                .unwrap();
+            }
+            // Truncate off the last two (ids 2 and 3); the first one dropped
+            // (id 3) panics, which disarms the armer for any later drops.
+            v.truncate(2);
         }
-        // Truncate off the last two; the first one dropped will panic.
-        v.truncate(2);
     }));
 
     assert!(result.is_err(), "expected the drop to panic");
-    // The two truncated elements were dropped during `truncate` (one panicked),
-    // and the two surviving elements are dropped on unwind. Total must be
-    // exactly 4 — no double-free of the panicked element, no leak.
-    let dropped = DROPPED.load(Ordering::SeqCst);
-    assert_eq!(dropped, 4, "expected exactly 4 drops, got {dropped}");
+    // The two truncated elements were dropped during `truncate` (id 3 panicked),
+    // and the two survivors (ids 0 and 1) are dropped on unwind. Every element
+    // destroyed exactly once — no double-free of the panicked element, no leak.
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.double_dropped().is_empty());
+    assert!(ledger.all_dropped_once(0..4));
 }
 
 // ---------------------------------------------------------------------------
@@ -1822,38 +1880,59 @@ fn drain_exhausted_from_back_at_tail_is_safe() {
 // the prefix. The unconsumed hole and the suffix leak, matching std's
 // documented behaviour for `mem::forget` on a `Drain`. Crucially there is no
 // double-drop and no UB from dropping uninitialized memory.
+//
+// We pull one element from each end (`next` and `next_back`) so both directions
+// of the drain are exercised before the forget. The ledger records each element
+// id so we can name precisely which ones dropped and which leaked.
+//
+// Ignored under Miri: `mem::forget` deliberately leaks four elements, which
+// Miri reports as unreachable-but-still-referenced memory at exit.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
-    static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let ledger = Rc::new(Ledger::new());
+
     #[allow(dead_code)]
-    struct Tracked(u32);
+    struct Tracked(u32, Rc<Ledger>);
     impl Drop for Tracked {
         fn drop(&mut self) {
-            DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.1.unregister(self.0);
         }
     }
-    DROP_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+
     let mut v: Vec<Tracked> = Vec::new();
     for i in 0..6u32 {
-        v.try_push(Tracked(i)).unwrap();
+        ledger.register(i);
+        v.try_push(Tracked(i, ledger.clone())).unwrap();
     }
-    // Drain [1..4): elements 1, 2, 3 live in the hole. Consume only element 1.
-    // (The vec is capped to len == 1 at this point, but we can't observe that
-    // while `d` holds the mutable borrow; the drop-count assertion below proves
+    // Drain [1..4): elements 1, 2, 3 live in the hole. Pull one from each end:
+    // element 1 via `next`, element 3 via `next_back`, leaving element 2 as the
+    // sole unconsumed hole member. (The vec is capped to len == 1 here, but we
+    // can't observe that while `d` borrows it; the ledger assertions below prove
     // the prefix is the only part the vec still owns.)
     let mut d = v.try_drain(1..4).unwrap();
-    // Take exactly one element out of the range; forget the rest of the drainer.
-    let taken = d.next().expect("first drain element");
-    assert_eq!(taken.0, 1);
+    let front = d.next().expect("front drain element");
+    assert_eq!(front.0, 1);
+    let back = d.next_back().expect("back drain element");
+    assert_eq!(back.0, 3);
+    // Forget the rest of the drainer: its remaining hole (element 2) and the
+    // suffix (4, 5) are abandoned by both owners.
     core::mem::forget(d);
-    // The vec still holds only the prefix (element 0). Dropping it drops
-    // exactly one element. Element 1 was moved out (caller-owned). Elements
-    // 2, 3 (unconsumed hole) and 4, 5 (suffix) were abandoned by both owners
-    // and leak — the accepted cost of `mem::forget`.
-    drop(v);
-    drop(taken);
-    // Total drops: 1 (prefix, from vec) + 1 (`taken`) = 2. Four elements leak.
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 2);
+    // Only the prefix (id 0) is owned by the vec now; ids 1 and 3 are caller-
+    // owned locals. Nothing has dropped yet.
+    assert!(ledger.drop_counts().is_empty());
+    drop(v); // drops id 0 (the prefix) — and nothing else
+    assert_eq!(ledger.live_ids(), [1, 2, 3, 4, 5]);
+    assert_eq!(ledger.drop_count(0), 1, "only the prefix may be dropped by the vec");
+    drop(front); // id 1
+    drop(back); // id 3
+    // Final tally: ids 0, 1, 3 dropped exactly once. Ids 2, 4, 5 leaked (the
+    // accepted cost of mem::forget). No double-free anywhere.
+    assert!(ledger.double_dropped().is_empty());
+    assert_eq!(ledger.leaked_ids(), [2, 4, 5]);
+    assert_eq!(ledger.drop_count(0), 1);
+    assert_eq!(ledger.drop_count(1), 1);
+    assert_eq!(ledger.drop_count(3), 1);
 }
 
 // A fully-consumed drain has no unconsumed hole, so forgetting it after
@@ -1862,18 +1941,19 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
 // drain compacts the vec correctly and drops every element exactly once.
 #[test]
 fn drain_fully_collected_compacts_and_drops_once() {
-    static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let counter = Rc::new(DropCounter::new());
+
     #[allow(dead_code)]
-    struct Tracked(u32);
+    struct Tracked(u32, Rc<DropCounter>);
     impl Drop for Tracked {
         fn drop(&mut self) {
-            DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.1.record_drop();
         }
     }
-    DROP_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+
     let mut v: Vec<Tracked> = Vec::new();
     for i in 0..5u32 {
-        v.try_push(Tracked(i)).unwrap();
+        v.try_push(Tracked(i, counter.clone())).unwrap();
     }
     // Collect the whole drained range; the temporary Drain drops at end of stmt
     // and compacts the vec back to [0, 3, 4].
@@ -1885,38 +1965,48 @@ fn drain_fully_collected_compacts_and_drops_once() {
     assert_eq!(v.as_slice()[1].0, 3);
     assert_eq!(v.as_slice()[2].0, 4);
     // Nothing dropped yet: 1,2 alive in `collected`, 0,3,4 alive in v.
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert_eq!(counter.get(), 0);
     drop(collected);
     // 1, 2 drop now.
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 2);
+    assert_eq!(counter.get(), 2);
     drop(v);
     // 0, 3, 4 drop as well -> total 5. Every element dropped exactly once.
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 5);
+    assert_eq!(counter.get(), 5);
 }
 
 // Regression test for the drain compaction guard: step 1 of a drain's `Drop`
-// destroys the unconsumed hole via `drop_in_place`, which runs `T` destructors
-// and can therefore panic. If it panics mid-way, the remaining destructions are
-// abandoned (≈ `mem::forget` on the rest of the hole), but the compaction —
-// shifting the suffix left and restoring the length — must STILL run so the vec
-// is not stranded at its capped `original_start` with an orphaned suffix. This
-// verifies that by making a destructor panic and asserting the recovered vec's
-// length and contents are coherent.
+// destroys the unconsumed hole with a single fat-slice `drop_in_place`, which
+// runs every `T` destructor in the hole and can therefore panic. Because the
+// compiler lowers a fat-slice drop to a per-element sequence inside ONE function
+// body, the unwinder runs each *remaining* destructor as an unwind landing pad
+// on that same frame before leaving it — so even when one destructor panics
+// mid-hole, the other hole elements ARE still dropped (verified below by the
+// drop counter). What the unwind does NOT do is run code placed after the
+// `drop_in_place` call in the same `Drop` body, which is why the compaction
+// (shifting the suffix left and restoring the length) lives in a separate guard
+// whose `Drop` runs unconditionally. This test asserts both properties: the
+// recovered vec's length/contents are coherent AND every hole element was
+// dropped exactly once.
 #[test]
 fn drain_panic_in_destructor_still_compacts() {
-    static PANIC_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let armer = Rc::new(PanicArmer::new());
+    let counter = Rc::new(DropCounter::new());
+
     #[allow(dead_code)]
-    struct Panicky(u32);
+    struct Panicky(u32, Rc<PanicArmer>, Rc<DropCounter>);
     impl Drop for Panicky {
         fn drop(&mut self) {
-            if PANIC_ARMED.load(std::sync::atomic::Ordering::SeqCst) && self.0 == 2 {
+            self.2.record_drop();
+            if self.1.is_armed() && self.0 == 2 {
                 panic!("boom");
             }
         }
     }
+
     let mut v: Vec<Panicky> = Vec::new();
     for i in 0..6u32 {
-        v.try_push(Panicky(i)).unwrap();
+        v.try_push(Panicky(i, armer.clone(), counter.clone()))
+            .unwrap();
     }
     // Drain [1..4): elements 1, 2, 3 live in the hole; consume only element 1
     // so 2 and 3 remain to be destroyed in step 1. Arm the panic before the
@@ -1924,8 +2014,8 @@ fn drain_panic_in_destructor_still_compacts() {
     let mut d = v.try_drain(1..4).unwrap();
     let taken = d.next().expect("first drain element");
     assert_eq!(taken.0, 1);
-    PANIC_ARMED.store(true, std::sync::atomic::Ordering::SeqCst);
-    let panicked = std::panic::catch_unwind(|| drop(d));
+    armer.arm();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(d)));
     assert!(panicked.is_err(), "expected the destructor to panic");
     // The unwind ran the compaction guard: the suffix (4, 5) was shifted left
     // over the drained gap and the length restored past the prefix. So the vec
@@ -1934,12 +2024,25 @@ fn drain_panic_in_destructor_still_compacts() {
     assert_eq!(v.as_slice()[0].0, 0);
     assert_eq!(v.as_slice()[1].0, 4);
     assert_eq!(v.as_slice()[2].0, 5);
-    // Element 2's destructor fired (and panicked); 3's was abandoned by the
-    // unwind (leaked, matching `mem::forget`). Disarm before dropping the rest
-    // so the catch above isn't re-triggered.
-    PANIC_ARMED.store(false, std::sync::atomic::Ordering::SeqCst);
-    drop(taken);
-    drop(v);
+    // Both hole elements (2 and 3) were destroyed by the fat-slice teardown,
+    // even though #2's destructor panicked: the unwinder ran #3's destructor as
+    // a landing pad on the same frame. So the counter already reflects 2 drops
+    // from the hole, plus nothing else yet (element 1 is held in `taken`, and
+    // 0, 4, 5 are still alive in `v`).
+    assert_eq!(
+        counter.get(),
+        2,
+        "both hole elements must be dropped despite the panic"
+    );
+    // Disarm before dropping the rest so the catch above isn't re-triggered.
+    armer.disarm();
+    drop(taken); // element 1 -> 3
+    drop(v); // elements 0, 4, 5 -> 6 total
+    assert_eq!(
+        counter.get(),
+        6,
+        "every element dropped exactly once overall"
+    );
 }
 
 // ─── try_split_off ────────────────────────────────────────────────────────
@@ -2002,28 +2105,37 @@ fn split_off_out_of_bounds_errors() {
 
 #[test]
 fn split_off_moves_all_elements_exactly_once() {
-    // Use a type whose Drop can be counted to verify no double-free or leak.
-    static DROP_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    // Track each element by id so we can prove the split moved ownership without
+    // dropping anything, and that each element is destroyed exactly once when
+    // its owning vec finally goes away — no double-free, no leak.
+    let ledger = Rc::new(Ledger::new());
+
     #[allow(dead_code)]
-    struct Tracked(u32);
+    struct Tracked(u32, Rc<Ledger>);
     impl Drop for Tracked {
         fn drop(&mut self) {
-            DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.1.unregister(self.0);
         }
     }
-    DROP_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+
     let mut v: Vec<Tracked> = Vec::new();
     for i in 0..6u32 {
-        v.try_push(Tracked(i)).unwrap();
+        ledger.register(i);
+        v.try_push(Tracked(i, ledger.clone())).unwrap();
     }
     let right = v.try_split_off(3).unwrap();
     assert_eq!(v.len(), 3);
     assert_eq!(right.len(), 3);
-    // No drops yet — all 6 elements are alive across both vectors.
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 0);
-    drop(v);
-    drop(right);
-    assert_eq!(DROP_COUNT.load(std::sync::atomic::Ordering::Relaxed), 6);
+    // The split only moved pointers; nothing was dropped. All six ids still live.
+    assert!(ledger.drop_counts().is_empty());
+    assert_eq!(ledger.live_ids(), [0, 1, 2, 3, 4, 5]);
+    drop(v); // drops ids 0, 1, 2
+    assert_eq!(ledger.live_ids(), [3, 4, 5]);
+    assert!(ledger.double_dropped().is_empty());
+    drop(right); // drops ids 3, 4, 5
+    // Every element dropped exactly once; nothing leaked.
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.all_dropped_once(0..6));
 }
 
 #[test]
@@ -2134,4 +2246,84 @@ fn extend_from_within_grows_capacity() {
     // Again: [99, 99] → [99, 99, 99, 99]
     v.try_extend_from_within(..).unwrap();
     assert_eq!(v.as_slice(), &[99, 99, 99, 99]);
+}
+
+/// Regression test: if `try_clone` panics mid-loop (after some elements have
+/// already been appended), the rollback guard must truncate the vector back to
+/// its original length so every appended element is dropped exactly once when
+/// the Vec unwinds — no leaks, no double-frees. Before the guard fix, a panic
+/// after a partial append would leak the already-cloned tail.
+///
+/// Uses the shared [`Ledger`] helper to track individual payload ids, enabling
+/// precise verification of both leaks and double-frees.
+#[test]
+fn extend_from_within_panic_is_safe() {
+    struct Payload {
+        id: u32,
+        ledger: Rc<Ledger>,
+    }
+
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.ledger.unregister(self.id);
+        }
+    }
+
+    impl TryClone for Payload {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            let id = self.ledger.allocate();
+            self.ledger.register(id);
+            // Panic starting from the 3rd successful clone (id >= 5 means ids
+            // 4 and 5 were the two prior successes). This drives the loop past
+            // at least one successful append before unwinding.
+            if id >= 5 {
+                // Undo the registration: no Payload survives this call.
+                self.ledger.unregister(id);
+                panic!("forced panic in try_clone");
+            }
+            Ok(Payload {
+                id,
+                ledger: self.ledger.clone(),
+            })
+        }
+    }
+
+    let ledger = Rc::new(Ledger::new());
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+        let l = ledger.clone();
+        move || {
+            let mut v = Vec::new();
+            // Push 4 initial payloads (ids 0–3).
+            for _ in 0..4 {
+                let id = l.allocate();
+                l.register(id);
+                v.try_push(Payload {
+                    id,
+                    ledger: l.clone(),
+                })
+                .unwrap();
+            }
+            // Range 0..4: clones source elements 0–3. Clone calls produce ids
+            // 4, 5, 6, …. Id 4 succeeds (append #1), id 5 succeeds (append
+            // #2), id 6 triggers the panic. Two appends are outstanding when
+            // we unwind through the rollback guard.
+            let _ = v.try_extend_from_within(0..4);
+        }
+    }));
+
+    assert!(result.is_err(), "expected try_clone to panic");
+
+    // After the catch, all Payloads constructed inside the closure have been
+    // destroyed. The counter-based ledger verifies all three invariants at once:
+    // no leaks (nothing still live), no double-frees (no id dropped twice), and
+    // an exact total of 6 drops (4 originals + 2 successful clones; the two that
+    // aborted in `try_clone` never became Payloads).
+    assert!(ledger.leaked_ids().is_empty());
+    assert!(ledger.double_dropped().is_empty());
+    // Exactly 6 ids were ever allocated (4 originals + 2 successful clones); the
+    // third clone call panicked before allocating an id, so no Payload survived it.
+    assert_eq!(ledger.total_allocated(), 6);
+    // Every one of those 6 dropped exactly once.
+    assert!(ledger.all_dropped_once(0..6));
 }

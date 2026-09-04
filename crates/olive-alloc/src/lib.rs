@@ -28,6 +28,9 @@ mod raw_vec;
 pub mod string;
 pub mod vec;
 
+#[cfg(test)]
+mod test_helpers;
+
 /// The fallible `ToOwned` analogue and its error type.
 pub use borrow::{TryToOwned, TryToOwnedError};
 /// The fallible `ToString` analogue, delegating to [`Display`](core::fmt::Display).
