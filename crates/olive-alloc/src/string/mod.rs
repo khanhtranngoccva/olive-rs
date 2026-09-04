@@ -2118,6 +2118,9 @@ impl<'a> TryFromIterator<&'a str> for String {
     }
 }
 
+pub mod add;
+pub use add::Concat;
+
 #[cfg(test)]
 mod tests {
     extern crate std;

@@ -31,15 +31,16 @@ For later patches (commits):
 - [ ] TryStrExt::try_to_lowercase
 - [ ] Leave TryStrExt::try_to_casefold_unnormalized as TODO (nightly, low priority)
 - [ ] Leave TryStrExt::word_to_titlecase as TODO (nightly, low priority)
-- [ ] Method to_chainable_add for String (returns Ok with dormant TryReserveError err variant)
-- [ ] impl Add:
-    - [ ] LHS can be String or Result<String, TryReserveError>
-    - [ ] RHS can be &str, String, or Result<String, TryReserveError>
-    - [ ] Returns Result<String, TryReserveError>
-- [ ] impl AddAssign:
-    - [ ] LHS must be Result<String, TryReserveError>
-    - [ ] RHS can be &str, String, or Result<String, TryReserveError>
-    - [ ] Returns Result<String, TryReserveError>
+- [x] Concat newtype (`string/add.rs`) — results-as-templates builder:
+    - [x] `Concat<A>` wraps `Result<String<A>, TryReserveError>`; call `.finish()` to extract
+    - [x] `String<A> + Rhs: AsRef<str>` → `Concat<A>` (first step transitions into Concat-world)
+    - [x] `Concat<A> + Rhs: AsRef<str>` → `Concat<A>` (chain continues)
+    - [x] `Concat<A> + Concat<A>` → `Concat<A>` (merge two builders)
+    - [x] `Concat<A> += Rhs: AsRef<str>` (in-place, sticky error on OOM)
+    - [x] `From<String<A>>` and `From<Result<String<A>, TryReserveError>>` for ergonomic construction
+    - [x] 22 unit tests covering basic ops, chaining, multibyte, OOM, sticky errors, Debug
+
+NOTE: Orphan rule prevents `impl core::ops::Add/AddAssign for Result<String, E>`. Solved by introducing the `Concat` newtype as a local type — it IS the receiver, so standard `Add`/`AddAssign` impls work directly. RHS bound is simply `AsRef<str>`, which covers `&str`, `String<A>`, `&String<A>`, and any future interned string types automatically. No custom marker trait needed since `char` is not part of the SDK's concatenation story. Just write `my_string + "literal"` to get a `Concat`, then chain freely and call `.finish()` when done.
 
 ## Iterator (TryIteratorExt)
 - try_cloned() -> returns an iterator `TryCloned` that yields `TryCloneError`, needs 
