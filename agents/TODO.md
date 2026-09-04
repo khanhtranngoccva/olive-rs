@@ -6,7 +6,7 @@ notes repo appears later, migrate this file there to avoid codebase pollution.
 
 ## Strings
 FIXME: missing or faulty:
-- [ ] drain
+- [x] drain
 - [x] try_extend_from_within
 - [x] into_chars
 - [x] try_remove (only has one error mode - not on char boundary)
@@ -41,6 +41,9 @@ For later patches (commits):
     - [ ] RHS can be &str, String, or Result<String, TryReserveError>
     - [ ] Returns Result<String, TryReserveError>
 
+## Iterator (TryIteratorExt)
+- try_cloned() -> returns an iterator `TryCloned` that yields `TryCloneError`, needs 
+
 ## Vec
 FIXME: missing or faulty (checked against stable `std::vec::Vec`; items with a `try_` counterpart already in place are noted so they aren't duplicated):
 
@@ -52,10 +55,5 @@ FIXME: missing or faulty (checked against stable `std::vec::Vec`; items with a `
 
 ### Iterator impls (own files, mirroring std's layout)
 Per the codebase convention (see `vec/into_iter.rs` + `string/into_chars.rs`: each iterator type lives in its own file, declared `mod <name>;` and re-exported `pub use <name>::<Type>;`), the iterator struct and its `Iterator`/`Drop`/etc. impls belong in a dedicated file — only the thin `try_drain` constructor method lives in `vec/mod.rs`.
-- [x] `vec/drain.rs` — DONE. `Drain<'a, T, A>` with full iterator impls + corrected Drop (destroys unconsumed remainder, shifts suffix via `ptr::copy`, adjusts len by `original_count`).
-- [x] ~~append~~ — already present as `try_append(other: &mut Self) -> Result<(), TryReserveError>` (vec/mod.rs:1601). No action.
-- [x] ~~insert~~ — already present as `try_insert` / `try_insert_give_back` / `try_insert_mut(_give_back)` (vec/mod.rs:557–593). No action.
-- [x] ~~remove / swap_remove~~ — already present as `try_remove` / `try_swap_remove` (vec/mod.rs:1106, 1139). No action.
-- [x] ~~resize / reserve* / shrink_* / into_boxed_slice / into_array~~ — all already have `try_` variants (see vec/mod.rs). No action.
 - [ ] Verify `retain` / `retain_mut` seal-on-panic parity with String's `RetainGuard` — confirm the guard covers the closure-panic path so the vec is left logically consistent (length restored, dropped elements deallocated exactly once). Add a regression test that panics mid-retention and asserts no double-free / length corruption under Miri.
-- [ ] Later patch: `TryExtendFromSlice` coverage audit — `impl TryExtendFromSlice<'s, T> for Vec<T, A>` exists (vec/mod.rs:1965); confirm it composes correctly with `try_from_iter_in` and that the `'s` lifetime doesn't leak into the error type. Low priority.
+- [ ] Later patch: `TryExtendFromSlice` coverage audit.

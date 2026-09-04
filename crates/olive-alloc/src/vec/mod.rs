@@ -1248,23 +1248,18 @@ impl<T, A: Allocator> Vec<T, A> {
         let alloc = self.raw.allocator().clone();
         // Fast path: splitting at the end produces an empty tail.
         if at == len {
-            return Ok(Self {
-                raw: RawVec::new_in(alloc),
-                len: 0,
-            });
+            return Ok(Self::new_in(alloc));
         }
         #[allow(clippy::arithmetic_side_effects, reason = "asserted at <= len")]
         let tail_len = len - at;
         let mut out = Vec::<T, A>::try_with_capacity_in(tail_len, alloc)
             .map_err(TryVecSplitOffError::Reserve)?;
         // Mirror std: set both lengths first, then bitwise-copy the tail.
-        // `self`'s buffer beyond `at` is abandoned (not dropped) — `out` now
-        // exclusively owns those bits. This avoids double-drop for types with
-        // destructors.
-        // SAFETY: `at <= len <= capacity`, so reducing self's len is valid.
+        // SAFETY: `at < len <= capacity`, so reducing self's len is valid.
         // `out` was just allocated with capacity >= `tail_len` and is empty,
         // so writing `tail_len` elements into it and setting its length is
         // within bounds. The source range `[at..len)` is initialized.
+        // Additionally, at < len, so no OOB or pointer overflow.
         unsafe {
             self.set_len(at);
             out.set_len(tail_len);
@@ -1278,6 +1273,9 @@ impl<T, A: Allocator> Vec<T, A> {
     /// This is the fallible-port analogue of std's `Vec::extend_from_within`.
     /// The range `indices` selects elements to clone and append to the end of
     /// the vector.
+    ///
+    /// If a clone fails mid-way, the vector is truncated back to its length at
+    /// the start of the call so no partially-appended elements remain.
     ///
     /// # Errors
     ///
@@ -1313,43 +1311,25 @@ impl<T, A: Allocator> Vec<T, A> {
         if count == 0 {
             return Ok(());
         }
-        // Reserve first so that any reallocation happens before we read from
-        // the source range. After reserving, the data is intact at the same
-        // logical offsets.
+        // Reserve up front so the vector never allocates during the hot path push.
         self.try_reserve(count)
             .map_err(TryVecExtendFromWithinError::Reserve)?;
-        // Clone each element from `[start..end)` into the newly reserved space
-        // at `[len..len+count)`. Since we reserved first, the destination does
-        // not overlap the source (`end <= len < new_len`).
-        let base = self.as_mut_ptr();
+        // If any clone or push fails mid-loop (or the body panics), the guard
+        // truncates back to `len`, dropping every appended element exactly once.
+        let guard = RollbackGuard(&raw mut *self, len);
         for i in 0..count {
             #[allow(
                 clippy::arithmetic_side_effects,
                 reason = "i < count, start+i < end <= len"
             )]
-            let src_val = unsafe { &*base.add(start + i) };
+            let src_val = &self[start + i];
             let cloned = src_val
                 .try_clone()
                 .map_err(TryVecExtendFromWithinError::Clone)?;
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "len + i < len + count <= capacity (just reserved)"
-            )]
-            unsafe {
-                ptr::write(base.add(len + i), cloned);
-            }
+            // SAFETY: we reserved enough space.
+            unsafe { self.force_push(cloned) };
         }
-        // SAFETY: we just reserved `count` additional slots and wrote `count`
-        // initialized values into `[len..len+count)`, so the new length is valid.
-        unsafe {
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "reserve succeeded so no overflow"
-            )]
-            {
-                self.set_len(len + count);
-            }
-        }
+        core::mem::forget(guard);
         Ok(())
     }
 
