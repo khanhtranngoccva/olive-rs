@@ -53,11 +53,6 @@ unsafe impl<T: Sync, A: Allocator + Sync> Sync for IntoIter<T, A> {}
 impl<T, A: Allocator> IntoIter<T, A> {
     /// Constructs an iterator from the raw parts of a consumed `Vec`.
     ///
-    /// No pointer arithmetic is performed here: the caller passes the already-
-    /// validated integer bounds and the owning base pointer, and all element
-    /// pointers are derived lazily (and only while a live element provably
-    /// exists).
-    ///
     /// # Safety
     ///
     /// `start` must be the base of a valid allocation of at least `cap`
@@ -205,22 +200,10 @@ impl<T, A: Allocator> DoubleEndedIterator for IntoIter<T, A> {
 
 impl<T, A: Allocator> Drop for IntoIter<T, A> {
     fn drop(&mut self) {
-        // Destroy the unconsumed tail. Every slot is either owned by the caller
-        // (already yielded via `next`/`next_back`) or still held here and must
-        // be dropped. Elements yielded from the front occupy `[0..consumed)`
-        // and from the back occupy `[len - taken_back..len)`; both have been
-        // moved out and belong to the caller. Everything in between —
-        // `[consumed .. len - taken_back)` — is still live and must be
-        // destroyed. That is a single contiguous run of length `remaining()`.
-        // It is guarded by `rem > 0` so an empty run never forms an OOB pointer
-        // (the overflow class noted in agents/BUGBOT.md).
-        //
-        // We must NOT gate on `size_of::<T>() != 0`: a zero-sized type can still
-        // carry `Drop` glue.
-        //
+        // Destroy the unconsumed tail.
         // SAFETY: the addressed slots lie within the initialized region and hold
         // valid values; for ZSTs `drop_in_place` performs no memory access but
-        // still runs any `Drop` glue.
+        // still runs any `Drop` glue. To avoid OOB overflow, only drop when rem > 0
         let rem = self.remaining();
         if rem > 0 {
             unsafe {
