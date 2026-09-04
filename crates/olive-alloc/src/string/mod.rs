@@ -696,16 +696,18 @@ impl<A: Allocator> String<A> {
         // Scan forward to find the first character that should be removed.
         // Characters before it are all kept, so no critical section needed yet.
         let mut read_pos = 0usize;
+        // Candidate char to be potentially removed.
+        let mut candidate_char;
         loop {
             // SAFETY: read_pos < len (guarded below).
             #[allow(clippy::arithmetic_side_effects, reason = "read_pos < len")]
             let rest = unsafe { core::slice::from_raw_parts(base.add(read_pos), len - read_pos) };
-            let ch = unsafe { core::str::from_utf8_unchecked(rest) }
+            candidate_char = unsafe { core::str::from_utf8_unchecked(rest) }
                 .chars()
                 .next()
                 .unwrap_or_else(|| unreachable!("non-empty slice has a leading char"));
-            let w = ch.len_utf8();
-            if !predicate(ch) {
+            let w = candidate_char.len_utf8();
+            if !predicate(candidate_char) {
                 break;
             }
             #[allow(clippy::arithmetic_side_effects, reason = "read_pos + w <= len")]
@@ -734,7 +736,7 @@ impl<A: Allocator> String<A> {
             fn drop(&mut self) {
                 #[allow(clippy::arithmetic_side_effects, reason = "read <= original_len")]
                 let remaining = self.original_len - self.read;
-                // Need to check to prevent OOB pointer.
+                // SAFETY: Need to check to prevent OOB pointer.
                 if remaining > 0 {
                     // SAFETY: The unchecked tail `[read..original_len)` consists
                     // of whole characters. Shifting it left to position `write`
@@ -771,16 +773,7 @@ impl<A: Allocator> String<A> {
 
         // Process the first rejected character: advance `read` past it.
         // We don't copy anything for it (it's dropped).
-        // SAFETY: read_pos < len (established above).
-        #[allow(clippy::arithmetic_side_effects, reason = "read_pos < len")]
-        let first_width = {
-            let rest = unsafe { core::slice::from_raw_parts(base.add(read_pos), len - read_pos) };
-            unsafe { core::str::from_utf8_unchecked(rest) }
-                .chars()
-                .next()
-                .unwrap()
-                .len_utf8()
-        };
+        let first_width = candidate_char.len_utf8();
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "read_pos + first_width <= len"
