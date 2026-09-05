@@ -1663,7 +1663,13 @@ fn drain_interleaved_drop_destroys_correct_hole() {
     impl Drop for Rec {
         fn drop(&mut self) {
             if let Some(s) = self.1.take() {
-                s.borrow_mut().push(self.0);
+                // Call the *inherent* `RefCell::borrow_mut` by fully-qualified
+                // path rather than method sugar. Sugar on `s.borrow_mut()` walks
+                // the deref chain into `Vec<u32>` and hits an ambiguous
+                // `BorrowMut` target (the blanket `BorrowMut<T> for T` vs. our
+                // new `Vec: BorrowMut<[T]>`). Naming the concrete `&RefCell`
+                // receiver picks the inherent method with no trait lookup.
+                RefCell::<std::vec::Vec<u32>>::borrow_mut(&s).push(self.0);
             }
         }
     }
@@ -1683,7 +1689,11 @@ fn drain_interleaved_drop_destroys_correct_hole() {
 
     // The drainer must have destroyed exactly the single unconsumed hole
     // element, payload 3. Nothing else in the drained range may be touched.
-    assert_eq!(*sink.borrow(), std::vec![3u32]);
+    // Same inherent-method trick as above: call `RefCell::borrow` by fully-
+    // qualified path on the concrete `&RefCell` receiver to dodge the ambiguous
+    // `core::borrow::Borrow` trait resolution.
+    let recorded = RefCell::<std::vec::Vec<u32>>::borrow(&sink);
+    assert_eq!(*recorded, std::vec![3u32]);
     // Compaction removed the whole range: only payloads 0 and 5 survive.
     assert_eq!(v.len(), 2);
 }

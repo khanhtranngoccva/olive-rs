@@ -3,9 +3,10 @@
 //! This modules declares the [`TryToOwned`] trait, which fallibly converts
 //! borrowed references to owned types.
 
-extern crate alloc;
-use core::{borrow::Borrow, fmt};
-
+use crate::string::String;
+use crate::vec::{TryVecWithCloneError, Vec};
+use core::borrow::Borrow;
+use core::fmt;
 use olive_core::alloc_errors::{AllocError, TryReserveError};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
@@ -57,17 +58,15 @@ impl From<AllocError> for TryToOwnedError {
     }
 }
 
-/// Lift a [`TryCloneError`] into the identically-shaped [`TryToOwnedError`].
-///
-/// The two error enums carry the same variants (`Reserve`, `Alloc`, `Other`);
-/// this lifts a clone failure into a to-owned failure without coupling the two
-/// unrelated traits through a shared `From` impl. All payload types are `Copy`,
-/// so the mapping reads through a reference.
-fn clone_err_to_owned(err: &TryCloneError) -> TryToOwnedError {
-    match err {
-        TryCloneError::Reserve(e) => TryToOwnedError::Reserve(*e),
-        TryCloneError::Alloc(e) => TryToOwnedError::Alloc(*e),
-        TryCloneError::Other(msg) => TryToOwnedError::Other(msg),
+impl From<TryCloneError> for TryToOwnedError {
+    /// Lifts a [`TryCloneError`] into an identically-shaped [`TryToOwnedError`].
+    #[inline]
+    fn from(err: TryCloneError) -> Self {
+        match err {
+            TryCloneError::Reserve(e) => Self::Reserve(e),
+            TryCloneError::Alloc(e) => Self::Alloc(e),
+            TryCloneError::Other(msg) => Self::Other(msg),
+        }
     }
 }
 
@@ -88,16 +87,42 @@ pub trait TryToOwned {
     fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError>;
 }
 
-/// Blanket impl mirroring std's `impl<T: Clone> ToOwned for T`: any type that can
-/// be fallibly cloned can be fallibly turned into its owned form, which is
-/// itself. The `Owned = Self` associated value satisfies the `Borrow<Self>` bound
-/// via std's reflexive `impl<T: ?Sized> Borrow<T> for T`.
 impl<T: TryClone> TryToOwned for T {
     type Owned = Self;
 
     #[inline]
     fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError> {
-        self.try_clone().map_err(|e| clone_err_to_owned(&e))
+        Ok(self.try_clone()?)
+    }
+}
+
+/// Turns a borrowed `&str` into an owned [`String`](crate::string::String).
+impl TryToOwned for str {
+    type Owned = String;
+
+    /// # Errors
+    ///
+    /// Returns [`TryToOwnedError`] if allocating or copying the string bytes fails.
+    #[inline]
+    fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError> {
+        Ok(String::try_from_str(self)?)
+    }
+}
+
+impl<T: TryClone> TryToOwned for [T] {
+    type Owned = Vec<T>;
+
+    /// Turns a borrowed `&[T]` into an owned [`Vec<T>`], cloning each element.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryToOwnedError`] if allocating the buffer or cloning any element fails.
+    #[inline]
+    fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError> {
+        Vec::try_from(self).map_err(|e| match e {
+            TryVecWithCloneError::Reserve(e) => e.into(),
+            TryVecWithCloneError::Clone(e) => e.into(),
+        })
     }
 }
 

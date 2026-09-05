@@ -17,6 +17,8 @@
 //! can hold values whose own construction can fail (nested collections, boxes,
 //! …) without ever panicking or aborting.
 
+use core::borrow::Borrow;
+use core::borrow::BorrowMut;
 // This module performs a great deal of index arithmetic on `len`/`capacity`, so
 // `clippy::arithmetic_side_effects` (denied crate-wide on non-test builds) is
 // suppressed *per site* rather than at the module level. Each allow carries a
@@ -540,7 +542,7 @@ impl<T> Vec<T, Global> {
     /// Decomposes a `Vec<T>` into its constituent parts: a non-null pointer, a
     /// length, and a capacity.
     ///
-    /// This is the [`NonNull`](core::ptr::NonNull) counterpart of [`Self::into_raw_parts`].
+    /// This is the [`NonNull`] counterpart of [`Self::into_raw_parts`].
     ///
     /// After calling this function, the caller is responsible for the memory
     /// previously managed by the `Vec`. Most often, one does this by converting
@@ -2108,6 +2110,18 @@ impl<T> Default for Vec<T, Global> {
     #[inline]
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<T, A: Allocator> Borrow<[T]> for Vec<T, A> {
+    fn borrow(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T, A: Allocator> BorrowMut<[T]> for Vec<T, A> {
+    fn borrow_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
     }
 }
 
