@@ -9,3 +9,7 @@ pub mod cow;
 pub mod try_to_owned;
 pub use cow::Cow;
 pub use try_to_owned::{TryToOwned, TryToOwnedError};
+
+// Re-exports of Borrow and BorrowMut to match std.
+pub use olive_core::borrow::Borrow;
+pub use olive_core::borrow::BorrowMut;

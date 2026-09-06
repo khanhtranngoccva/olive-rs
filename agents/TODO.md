@@ -4,6 +4,15 @@ Working notes for the Olive re-port. Kept out of `docs/` on purpose: this is a
 scratchpad for decisions and follow-ups, not shipped documentation. If a proper
 notes repo appears later, migrate this file there to avoid codebase pollution.
 
+## Allocator-attached references
+- Rationale: References do not encode where it is accessed from. Sometimes it is mandatory that the reference is accessed from the correct allocator.
+An IRQL >= 2 function by definition in Windows cannot access paged pool, so if a normal reference is passed to it the reviewer cannot statically 
+verify for invalid IRQL >= 2 accesses. (basically typed provenance)
+- Composition: a reference and a PhantomData of the original allocator
+- Abilities: Deref, DerefMut, AsRef, AsRefMut, et cetera.
+- Caveat: a raw reference without provenance cannot be upgraded to one with provenance without `unsafe`. Data structures with allocators can expose methods 
+that construct references with allocator provenance.
+
 ## Strings
 FIXME: missing or faulty:
 - [x] drain

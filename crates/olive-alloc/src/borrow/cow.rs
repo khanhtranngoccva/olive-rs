@@ -13,6 +13,7 @@
 
 use core::borrow::Borrow;
 use core::fmt;
+use core::hash;
 use core::ops::Deref;
 
 use olive_core::prelude::*;
@@ -150,8 +151,8 @@ impl<'b, B: ?Sized + TryToOwned> Cow<'b, B> {
 }
 
 // Two `Cow`s are comparable whenever their *borrowed* element types are mutually
-// comparable. This single generic impl is the whole story for `Cow == Cow`:
-// setting `A = B` recovers same-type comparison, and any `A` whose element type
+// comparable. This single generic impl covers everything for `Cow == Cow`:
+// setting `A = B` gives same-type comparison, and any `A` whose element type
 // compares against `B` gives cross-type comparison (e.g. `Cow<str>` vs a
 // `Cow` whose owned form borrows as something `str`-comparable). Both sides are
 // dereffed down to their `&A` / `&B` targets and handed to the leaf comparison,
@@ -207,6 +208,44 @@ where
 // `Eq` is the marker half of that comparison: it holds exactly when the element
 // type is an equivalence relation over itself.
 impl<B: ?Sized> Eq for Cow<'_, B> where B: Eq + TryToOwned {}
+
+// Total ordering for a `Cow` delegates through `Deref` to the element type's
+// `Ord`. Same-type only.
+#[allow(clippy::needless_lifetimes, reason = "explicit descriptive lifetime")]
+impl<'b, B> Ord for Cow<'b, B>
+where
+    B: Ord + TryToOwned + ?Sized,
+{
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        Ord::cmp(&**self, &**other)
+    }
+}
+
+// Partial ordering for a `Cow` delegates through `Deref` to the element type's
+// `PartialOrd`. Same-type only, mirroring std's
+// `impl<B: PartialOrd + ToOwned> PartialOrd for Cow<'a, B>`.
+#[allow(clippy::needless_lifetimes, reason = "explicit descriptive lifetime")]
+impl<'b, B: ?Sized> PartialOrd for Cow<'b, B>
+where
+    B: PartialOrd + TryToOwned,
+{
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        PartialOrd::partial_cmp(&**self, &**other)
+    }
+}
+
+// Hashing a `Cow` hashes its *contents*, not which arm holds them.
+impl<B: ?Sized> hash::Hash for Cow<'_, B>
+where
+    B: hash::Hash + TryToOwned,
+{
+    #[inline]
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        hash::Hash::hash(&**self, state)
+    }
+}
 
 // Cow is Send only when both variants are Send.
 unsafe impl<B> Send for Cow<'_, B>
@@ -437,7 +476,11 @@ mod tests {
         let b: Cow<str> = Cow::Owned(mk("same"));
         assert!(a == b);
         assert!(b == a);
-        assert!(!(a != b));
+        #[allow(clippy::nonminimal_bool, reason = "test invariant where not(ne) == eq")]
+        {
+            assert!(!(a != b));
+            assert!(!(b != a));
+        }
 
         let c: Cow<str> = Cow::Borrowed("diff");
         assert!(a != c);
@@ -464,7 +507,38 @@ mod tests {
         let b: Cow<str> = Cow::Owned(mk("dup"));
         assert!(a == b);
         assert!(b == a);
-        assert!(!(a != b));
+        #[allow(clippy::nonminimal_bool, reason = "test invariant where not(ne) == eq")]
+        {
+            assert!(!(a != b));
+            assert!(!(b != a));
+        }
+    }
+
+    // `Hash` must be consistent with `Eq`: two equal `Cow`s hash identically,
+    // regardless of which arm (borrowed vs owned) holds them. This is the
+    // invariant that lets a `Cow` key into a `HashMap` interchangeably with an
+    // owned or borrowed value of the same content.
+    #[test]
+    fn cow_hash_consistent_with_eq() {
+        use core::hash::{Hash, Hasher};
+        type H = std::collections::hash_map::DefaultHasher;
+
+        let borrowed: Cow<str> = Cow::Borrowed("payload");
+        let owned: Cow<str> = Cow::Owned(mk("payload"));
+        assert_eq!(borrowed, owned);
+
+        // Same contents ⇒ same hash, across arms.
+        let mut h1 = H::new();
+        borrowed.hash(&mut h1);
+        let mut h2 = H::new();
+        owned.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+
+        // Different contents ⇒ (overwhelmingly likely) different hash.
+        let other: Cow<str> = Cow::Borrowed("different");
+        let mut h3 = H::new();
+        other.hash(&mut h3);
+        assert_ne!(h1.finish(), h3.finish());
     }
 
     #[test]

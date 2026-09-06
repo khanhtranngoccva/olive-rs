@@ -34,10 +34,12 @@
 //! All content is guaranteed to be valid UTF-8; the public API exposes it as `&str`
 //! via [`Deref`], so that [`String`] inherits all its methods.
 
+mod cmp;
 mod into_chars;
 use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{self, Debug, Display, Write};
-use core::hash;
+use core::hash::Hash;
+use core::hash::Hasher;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 pub use into_chars::IntoChars;
@@ -1381,6 +1383,8 @@ impl<A: Allocator> BorrowMut<str> for String<A> {
     }
 }
 
+// Cross-type comparison impls (PartialEq, Eq, PartialOrd, Ord) live in cmp.rs.
+
 /// A fallible analogue of [`ToString`](stock_alloc::string::ToString),
 /// delegating to [`Display`] but returning a [`Result`] instead of
 /// panicking or aborting on allocation failure.
@@ -1445,6 +1449,12 @@ impl<A: Allocator> Display for String<A> {
     }
 }
 
+impl<A: Allocator> Hash for String<A> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.deref().hash(state)
+    }
+}
+
 impl<A: Allocator> Write for String<A> {
     /// Makes [`String`] usable as a fallible formatting sink.
     ///
@@ -1464,97 +1474,6 @@ impl<A: Allocator> Write for String<A> {
 impl<A: Allocator> Debug for String<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Debug::fmt(self.deref(), f)
-    }
-}
-
-impl<A: Allocator> hash::Hash for String<A> {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.deref().hash(state)
-    }
-}
-
-impl<A: Allocator> PartialEq for String<A> {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
-    }
-}
-
-impl<A: Allocator> Eq for String<A> {}
-
-impl<A: Allocator> PartialOrd for String<A> {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<A: Allocator> Ord for String<A> {
-    #[inline]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.deref().cmp(other.deref())
-    }
-}
-
-// Cross-type comparisons, mirroring std's `String` vs `&str` / `Box<str>` impls.
-// These are reflexive over content only (never allocator identity).
-
-impl<A: Allocator> PartialEq<str> for String<A> {
-    #[inline]
-    fn eq(&self, other: &str) -> bool {
-        self.deref() == other
-    }
-}
-
-impl<A: Allocator> PartialEq<String<A>> for str {
-    #[inline]
-    fn eq(&self, other: &String<A>) -> bool {
-        self == other.deref()
-    }
-}
-
-impl<A: Allocator> PartialEq<&str> for String<A> {
-    #[inline]
-    fn eq(&self, other: &&str) -> bool {
-        self.deref() == *other
-    }
-}
-
-impl<A: Allocator> PartialEq<String<A>> for &str {
-    #[inline]
-    fn eq(&self, other: &String<A>) -> bool {
-        *self == other.deref()
-    }
-}
-
-impl<A: Allocator> PartialEq<Box<str>> for String<A> {
-    #[inline]
-    fn eq(&self, other: &Box<str>) -> bool {
-        self.deref() == other.deref()
-    }
-}
-
-impl<A: Allocator> PartialEq<String<A>> for Box<str> {
-    #[inline]
-    fn eq(&self, other: &String<A>) -> bool {
-        self.deref() == other.deref()
-    }
-}
-
-impl<A: Allocator> PartialEq<&Box<str>> for String<A> {
-    #[inline]
-    fn eq(&self, other: &&Box<str>) -> bool {
-        // Route through the owned `String == Box<str>` impl; the reference
-        // coerces to a borrowed `Box<str>`.
-        *self == **other
-    }
-}
-
-impl<A: Allocator> PartialEq<String<A>> for &Box<str> {
-    #[inline]
-    fn eq(&self, other: &String<A>) -> bool {
-        // Symmetric route through the same owned impl.
-        *other == **self
     }
 }
 
