@@ -10,7 +10,7 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use super::String;
 use crate::alloc::{Allocator, AllocatorTryClone, Global};
 use core::fmt;
-use core::iter::{DoubleEndedIterator, ExactSizeIterator, FusedIterator, Iterator};
+use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::ptr;
 
 /// An owning iterator over the characters of a consumed [`String`](super::String).
@@ -140,8 +140,6 @@ impl<A: Allocator> DoubleEndedIterator for IntoChars<A> {
         Some(ch)
     }
 }
-
-impl<A: Allocator> ExactSizeIterator for IntoChars<A> {}
 
 // Once `pos == end` the iterator yields nothing further, so it is fused.
 impl<A: Allocator> FusedIterator for IntoChars<A> {}

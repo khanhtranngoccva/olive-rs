@@ -58,10 +58,7 @@ NOTE: Orphan rule prevents `impl core::ops::Add/AddAssign for Result<String, E>`
 FIXME: missing or faulty (checked against stable `std::vec::Vec`; items with a `try_` counterpart already in place are noted so they aren't duplicated):
 
 ### Fallible constructors/methods
-- [x] try_drain — DONE. `vec/mod.rs` + `vec/drain.rs`. 13 unit tests.
 - [x] ~~try_splice~~ — SKIPPED (deferred indefinitely). No meaningful parity with std's `Vec::splice` is achievable: std's `Splice::drop` writes *back* into the live vector by pushing any unconsumed replacement items, i.e. its `Drop` impl performs an allocation. Our fallible port cannot express a fallible `Drop` (it can't return a `Result`), so the only honest options for an unconsumed tail are silent leak or panic-in-drop — both violate the "allocation failure is recoverable, never fatal" invariant the crate is built on. Any reimplementation that avoids the write-back drop forfeits std-parity anyway. If revisited, the likely shape is a non-iterator API (e.g. `try_replace_range(range, items)` returning the removed elements as a `Vec<T, A>`, mirroring `String::try_replace_range`) rather than a `Splice` iterator.
-- [x] try_split_off — DONE. Requires `A: Clone`. Uses `set_len` (not `truncate`) + `copy_nonoverlapping` matching std's bitwise-transfer semantics. 7 unit tests.
-- [x] try_extend_from_within — DONE. Requires `T: TryClone`. Reserves first, then clones elements one-by-one into the reserved tail. 7 unit tests.
 
 ### Iterator impls (own files, mirroring std's layout)
 Per the codebase convention (see `vec/into_iter.rs` + `string/into_chars.rs`: each iterator type lives in its own file, declared `mod <name>;` and re-exported `pub use <name>::<Type>;`), the iterator struct and its `Iterator`/`Drop`/etc. impls belong in a dedicated file — only the thin `try_drain` constructor method lives in `vec/mod.rs`.
