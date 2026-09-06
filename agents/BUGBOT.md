@@ -16,3 +16,8 @@ This is a non-exhaustive document/playbook to instruct LLM-based bugbots to sear
 ## Unintentional leak/no-drop bugs
 - The `ManuallyDrop` object suppresses the drop glue. Caution is necessary to make sure these values are eventually hydrated for `Drop` at some point.
     - An actual bug was found and fixed in `IntoIter` where a reference is taken from `self.alloc` to deallocate, but does not call `ManuallyDrop::take()` to hydrate and drop the allocator.
+
+## Trait implementation bugs
+- A structure or enum or item implements a trait that breaks its invariants. 
+    - For example, there was a bug where `IntoChars` implemented `ExactSizeIterator` by mistake.
+    - `PartialEq` and `PartialOrd` are especially prone to breaking invariants and implementations *usually* need to follow guidelines. Exceptions include types that act identically like its inner type.
