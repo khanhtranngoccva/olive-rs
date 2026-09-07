@@ -2,7 +2,7 @@
 //!
 
 extern crate alloc as stock_alloc;
-pub use core::alloc::Layout;
+pub use core::alloc::{Layout, LayoutError};
 use core::ptr;
 pub use core::ptr::NonNull;
 pub use olive_core::alloc::AllocError;

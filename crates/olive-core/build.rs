@@ -18,13 +18,14 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(unstable_features)");
 
     // Miri guard (enforced at build time, not via compile_error! in source):
-    // The stable `with_addr` relocation path in `ptr::PointerExt` is
-    // provenance-unsound under Miri's strict model, so running this crate under
-    // a *genuine* Miri invocation REQUIRES `unstable_features`. We detect a real
-    // Miri run here (via MIRI_SYSROOT / the miri driver) rather than relying on
-    // cfg(miri), because rust-analyzer sets cfg(miri) by default during analysis
-    // while leaving unstable_features unset — a source-level compile_error!
-    // would therefore fire spuriously inside the IDE.
+    // The stable `stable_graft` path in `ptr::PointerExt` constructs pointers by
+    // writing raw address words into `MaybeUninit` slots. This fallback approach
+    // does not run under Miri. Running this crate under a *genuine* Miri invocation
+    // therefore requires `unstable_features` to enable use of `with_metadata_of`.
+    // We detect a real Miri run here (via MIRI_SYSROOT / the miri driver) rather
+    // than relying on cfg(miri), because rust-analyzer sets cfg(miri) by default
+    // during analysis while leaving unstable_features unset — a source-level
+    // compile_error! would therefore fire spuriously inside the IDE.
     if olive_build::is_miri() && !unstable {
         eprintln!(
             "error: {crate_name} cannot be compiled under Miri without unstable features enabled. \

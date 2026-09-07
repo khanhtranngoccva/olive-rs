@@ -17,5 +17,8 @@ olive-core = { workspace = true }
 [build-dependencies]
 olive-build = { workspace = true }
 
+[dev-dependencies]
+static_assertions = "1"
+
 [lints]
 workspace = true

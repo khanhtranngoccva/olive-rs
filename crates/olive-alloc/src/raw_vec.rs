@@ -899,7 +899,8 @@ mod tests {
             }
         }
         fn zeroed_calls(&self) -> usize {
-            self.zeroed_calls.load(core::sync::atomic::Ordering::Acquire)
+            self.zeroed_calls
+                .load(core::sync::atomic::Ordering::Acquire)
         }
     }
     unsafe impl Allocator for ZeroProbe {
@@ -912,7 +913,8 @@ mod tests {
         }
         fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
             if layout.size() != 0 {
-                self.zeroed_calls.fetch_add(1, core::sync::atomic::Ordering::Release);
+                self.zeroed_calls
+                    .fetch_add(1, core::sync::atomic::Ordering::Release);
             }
             Global.allocate_zeroed(layout)
         }
@@ -923,9 +925,12 @@ mod tests {
         // Pass a *reference* to the probe so the buffer stores a
         // `&ZeroProbe`; we keep the original handle to read the counter after.
         let probe = ZeroProbe::new();
-        let v = RawVec::<u8, _>::try_with_capacity_zeroed_in(32, &probe)
-            .expect("zeroed alloc ok");
-        assert_eq!(probe.zeroed_calls(), 1, "should have called allocate_zeroed once");
+        let v = RawVec::<u8, _>::try_with_capacity_zeroed_in(32, &probe).expect("zeroed alloc ok");
+        assert_eq!(
+            probe.zeroed_calls(),
+            1,
+            "should have called allocate_zeroed once"
+        );
         unsafe {
             for i in 0..32 {
                 assert_eq!(v.ptr().add(i).read(), 0);

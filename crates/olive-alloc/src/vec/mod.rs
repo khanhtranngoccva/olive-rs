@@ -533,9 +533,14 @@ impl<T> Vec<T, Global> {
     /// [`from_raw_parts`]: Self::from_raw_parts
     #[must_use = "losing the pointer will leak memory"]
     pub fn into_raw_parts(self) -> (*mut T, usize, usize) {
+        // Mirrors std's `Vec::into_raw_parts`: wrap in `ManuallyDrop` so that a
+        // panic during unwinding cannot cause the implicit drop at scope end to
+        // free the buffer after we have already handed ownership to the caller.
         let mut this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
+        // We still want to extract the allocator for consistency even if it is a ZST.
+        let _alloc = unsafe { ptr::read(&this.allocator()) };
         (this.as_mut_ptr(), this.len(), this.capacity())
     }
 
@@ -552,9 +557,14 @@ impl<T> Vec<T, Global> {
     /// [`from_parts`]: Self::from_parts
     #[must_use = "losing the pointer will leak memory"]
     pub fn into_parts(self) -> (NonNull<T>, usize, usize) {
+        // Mirrors std's `Vec::into_parts`: wrap in `ManuallyDrop` so that a
+        // panic during unwinding cannot cause the implicit drop at scope end to
+        // free the buffer after we have already handed ownership to the caller.
         let this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
+        // We still want to extract the allocator for consistency even if it is a ZST.
+        let _alloc = unsafe { ptr::read(&this.allocator()) };
         (this.raw.non_null(), this.len(), this.capacity())
     }
 }

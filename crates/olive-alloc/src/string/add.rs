@@ -367,6 +367,10 @@ mod tests {
     fn debug_err_shows_error() {
         let c: Concat = Concat::from(Err(TryReserveError::new_capacity_overflow()));
         let dbg = format!("{:?}", c);
-        assert!(dbg.contains("CapacityOverflow") || dbg.contains("capacity"), "got: {}", dbg);
+        assert!(
+            dbg.contains("CapacityOverflow") || dbg.contains("capacity"),
+            "got: {}",
+            dbg
+        );
     }
 }

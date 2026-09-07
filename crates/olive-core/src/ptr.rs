@@ -71,14 +71,14 @@ pub trait PointerExt<T: ?Sized>: Sized {
     ///   *this* pointer's data word and provenance and grafts on `old`'s
     ///   metadata. Because provenance comes from the destination allocation,
     ///   the result is sound under Miri. This is the path we want under Miri.
-    /// - **Stable path** (`unstable_features` inactive): uses `with_addr`, which
-    ///   keeps *`old`*'s provenance and substitutes `self`'s raw address. When
-    ///   `self` addresses a *different* allocation than `old`, the resulting
-    ///   pointer carries `old`'s provenance over an out-of-range address, which
-    ///   Miri rejects. On real hardware this works without problems, but it is technically
-    ///   provenance-unsound, so we forbid running it under Miri.
+    /// - **Stable path** (`unstable_features` inactive): reconstructs the fat
+    ///   pointer byte-by-byte via XOR-mask identification of the data-word
+    ///   region. The resulting pointer carries no provenance tag recognizable
+    ///   by Miri, so dereferencing it will trigger a provenance violation. We
+    ///   therefore forbid running this path under Miri. However, this approach is
+    ///   tested to work for Rust's default backend
     ///
-    /// To prevent silently exercising the unsound branch, the crate's build script 
+    /// To prevent silently exercising the unsound branch, the crate's build script
     /// refuses to compile under a genuine `cargo miri` invocation
     /// unless `unstable_features` is active, forcing every real Miri build onto
     /// the sound branch above.
@@ -86,28 +86,102 @@ pub trait PointerExt<T: ?Sized>: Sized {
     unsafe fn cast_with_metadata<U: ?Sized>(self, old: *const U) -> Self::CastedWithMetadata<U>;
 }
 
+/// The inner implementation of calculating the address field of an arbitrary thin or 
+/// fat pointer.
+/// 
+/// This implementation is ideally called exactly once per type per compilation cycle.
+const fn address_word_offset_inner<S: ?Sized>() -> usize
+where
+    *const S: Sized,
+{
+    // Strategy: a zero-initialized fat pointer has data=0 and metadata=0.
+    // Applying `wrapping_byte_sub(1)` wraps the data word from 0 to !0 (all
+    // ones) while metadata remains 0. The first byte position where the two
+    // values differ marks the start of the data word.
+    use core::mem::{MaybeUninit, size_of_val};
+    let template: MaybeUninit<*const S> = MaybeUninit::zeroed();
+    let zeroes = unsafe { template.assume_init() };
+    // wrapping_byte_sub(1): data word 0→!0, metadata unaffected.
+    let ones = zeroes.wrapping_byte_sub(1);
+    let size = size_of_val(&zeroes);
+    let z = (&raw const zeroes).cast::<u8>();
+    let o = (&raw const ones).cast::<u8>();
+
+    let mut i = 0;
+    while i < size && unsafe { *z.add(i) } == unsafe { *o.add(i) } {
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted i < size")]
+        {
+            i += 1;
+        }
+    }
+    assert!(i < size, "could not locate data word");
+    i
+}
+
+/// Determine at compile time the byte offset of the data (address) component
+/// within a fat pointer to `S`. The data word is always exactly `size_of::<usize>()`
+/// bytes wide; this function locates where it begins.
+#[must_use]
+pub const fn address_word_offset<S: ?Sized>() -> usize
+where
+    *const S: Sized,
+{
+    // Invoke the inner function here. This allows the offset
+    // to be computed and stored once for the whole type.
+    const { address_word_offset_inner::<S>() }
+}
+
+#[cfg(not(unstable_features))]
+#[inline(always)]
+fn stable_graft<D: ?Sized, U: ?Sized>(dest: *const D, src: *const U) -> *const U {
+    use core::mem::{MaybeUninit, size_of};
+
+    // Fast path: thin pointer. No metadata exists; just emit `dest`'s address.
+    if size_of::<*const U>() == size_of::<usize>() {
+        let mut out: MaybeUninit<*const U> = MaybeUninit::uninit();
+        unsafe {
+            *out.as_mut_ptr().cast::<usize>() = dest.addr();
+        }
+        return unsafe { out.assume_init() };
+    }
+
+    // Fat pointer path: bulk-copy `src`, overwrite the data word at the
+    // compile-time-determined offset with `dest`'s address.
+    let data_offset = const { address_word_offset::<U>() };
+
+    // Bulk-copy the entire source pointer (all metadata bytes preserved
+    // regardless of width or position), then overwrite the data word.
+    let mut out: MaybeUninit<*const U> = MaybeUninit::uninit();
+    unsafe {
+        out.as_mut_ptr().write(src);
+        // Since this write tampers with the pointer's internal contents directly,
+        // the pointer no longer holds any compiler provenance data and it 
+        // correctly interferes with the compiler's provenance optimization.
+        // Calling with_addr() does not achieve the same effect
+        #[allow(
+            clippy::cast_ptr_alignment,
+            reason = "out is a valid location to store the pointer, data_offset is the valid offset 
+            pointing to the data field and pre-determined by the compiler"
+        )]
+        {
+            *out.as_mut_ptr().byte_add(data_offset).cast::<usize>() = dest.addr();
+        }
+    }
+    unsafe { out.assume_init() }
+}
+
 impl<T: ?Sized> PointerExt<T> for *const T {
     type CastedWithMetadata<U: ?Sized> = *const U;
 
     #[inline]
     unsafe fn cast_with_metadata<U: ?Sized>(self, old: *const U) -> Self::CastedWithMetadata<U> {
-        // Unstable path: `with_metadata_of` keeps *our* (destination) data word and provenance
-        // and grafts on `old`'s metadata. Provenance derives from the destination
-        // allocation, so this is sound under Miri's strict model. A compile-time
-        // guard guarantees Miri builds always take this branch (see the trait
-        // docs), so the provenance-unsound fallback below never runs under Miri.
         #[cfg(unstable_features)]
         {
             self.with_metadata_of(old)
         }
-        // Stable path: `with_addr` keeps `old`'s provenance but substitutes our
-        // raw address. When `self` addresses a different allocation than `old`,
-        // the result carries out-of-range provenance — technically unsound, and
-        // rejected by Miri. Hence the guard forbids Miri without
-        // `unstable_features`. Correct on real hardware for well-formed inputs.
         #[cfg(not(unstable_features))]
         {
-            old.with_addr(self.addr())
+            stable_graft(self, old)
         }
     }
 }
@@ -117,24 +191,14 @@ impl<T: ?Sized> PointerExt<T> for *mut T {
 
     #[inline]
     unsafe fn cast_with_metadata<U: ?Sized>(self, old: *const U) -> Self::CastedWithMetadata<U> {
-        // Unstable path: `with_metadata_of` keeps *our* (destination) data word and provenance
-        // and grafts on `old`'s metadata. Provenance derives from the destination
-        // allocation, so this is sound under Miri's strict model. A compile-time
-        // guard guarantees Miri builds always take this branch (see the trait
-        // docs), so the provenance-unsound fallback below never runs under Miri.
         #[cfg(unstable_features)]
         {
             self.with_metadata_of(old)
         }
-        // Stable path: `with_addr` keeps `old`'s provenance but substitutes our
-        // raw address, then `.cast_mut()` recovers mutability. When `self`
-        // addresses a different allocation than `old`, the result carries
-        // out-of-range provenance — technically unsound, and rejected by Miri.
-        // Hence the guard forbids Miri without `unstable_features`. Correct on
-        // real hardware for well-formed inputs.
         #[cfg(not(unstable_features))]
         {
-            old.with_addr(self.addr()).cast_mut()
+            let result: *const U = stable_graft(self.cast_const(), old);
+            result.cast_mut()
         }
     }
 }
@@ -182,6 +246,62 @@ mod tests {
         let fat = unsafe { (&mut dest as *mut i32).cast_with_metadata(src as *const i32) };
         // SAFETY: `fat` points at the initialized `dest`.
         assert_eq!(unsafe { *fat }, 7);
+    }
+
+    /// Verify that writes through a grafted fat pointer are observable in
+    /// memory. This guards against LLVM eliding stores when the grafted
+    /// pointer's data word originates from a different allocation than its
+    /// metadata source (the provenance-elision bug fixed by the byte-level
+    /// reconstruction in `stable_graft`).
+    #[test]
+    fn write_through_grafted_fat_pointer_is_observable() {
+        // A repr(C) struct mimicking RcInner<T>: two usize counters followed
+        // by an unsized payload.
+        #[repr(C)]
+        struct Inner<T: ?Sized> {
+            strong: usize,
+            weak: usize,
+            value: T,
+        }
+
+        // Destination: a concrete Inner on the stack. Its payload field is a
+        // 4-byte array that we'll treat as a `[u8]` slice via grafting.
+        let mut dest = Inner {
+            strong: 0,
+            weak: 0,
+            value: [0u8; 4],
+        };
+
+        // Source: a separate slice at a different address. Its length metadata
+        // (4) is what gets grafted onto the destination pointer.
+        let src_data: [u8; 4] = [10, 20, 30, 40];
+        let src: &[u8] = &src_data[..];
+
+        // Thin pointer to `dest.value` (a `[u8; 4]`), cast to `*mut u8` so we
+        // can graft slice metadata onto it.
+        let payload_base: *mut u8 = (&raw mut dest.value).cast::<u8>();
+
+        // Graft `src`'s length (4) onto `payload_base` → fat `*mut [u8]`.
+        // The resulting pointer's data word points at `dest.value` (stack
+        // allocation A) while its metadata came from `src` (allocation B).
+        // This cross-allocation mismatch is exactly what triggers LLVM's
+        // provenance-based store elision if the implementation is wrong.
+        //
+        // SAFETY: `payload_base` points at `dest.value` (valid, aligned, 4
+        // bytes available); `src` is a valid 4-element slice.
+        let grafted: *mut [u8] = unsafe { payload_base.cast_with_metadata(src as *const [u8]) };
+
+        // Write through the grafted fat pointer. If LLVM elides this store
+        // (believing the pointer targets `src`'s allocation rather than
+        // `dest`'s), the assertion below will catch it.
+        unsafe {
+            let s: &mut [u8] = &mut *grafted;
+            s.copy_from_slice(&[10, 20, 30, 40]);
+        }
+
+        // Read back through the original stack variable (independent
+        // provenance path) to confirm the write landed in memory.
+        assert_eq!(dest.value, [10, 20, 30, 40], "payload not written");
     }
 
     #[test]

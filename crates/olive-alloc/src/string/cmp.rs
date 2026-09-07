@@ -830,11 +830,11 @@ mod tests {
         use super::*;
 
         // Strictly ascending by codepoint order
-        const V0: &str = "";              // str          (empty)
-        const V1: &str = "\t\n\r";        // &str         (control chars)
-        const V2: &str = " ";             // Box<str>     (single space)
-        const V3: &str = "héllo";         // String       (multibyte mid)
-        const V4: &str = "héllo world";   // Cow::Borrowed (shared prefix, longer)
+        const V0: &str = ""; // str          (empty)
+        const V1: &str = "\t\n\r"; // &str         (control chars)
+        const V2: &str = " "; // Box<str>     (single space)
+        const V3: &str = "héllo"; // String       (multibyte mid)
+        const V4: &str = "héllo world"; // Cow::Borrowed (shared prefix, longer)
         const V5: &str = "🌍 héllo world!"; // Cow::Owned  (special char + longest)
 
         /// Build all six ranked values.
@@ -860,13 +860,13 @@ mod tests {
 
         /// Helper: assert `lhs.partial_cmp(rhs) == Some(Less)` and the dual.
         #[track_caller]
-        fn assert_less(
-            lhs_result: Option<Ordering>,
-            rhs_result: Option<Ordering>,
-            label: &str,
-        ) {
+        fn assert_less(lhs_result: Option<Ordering>, rhs_result: Option<Ordering>, label: &str) {
             assert_eq!(lhs_result, Some(Ordering::Less), "{label}: expected Less");
-            assert_eq!(rhs_result, Some(Ordering::Greater), "{label}: expected Greater (dual)");
+            assert_eq!(
+                rhs_result,
+                Some(Ordering::Greater),
+                "{label}: expected Greater (dual)"
+            );
         }
 
         /// All C(6,2) = 15 pairs, ascending direction.
@@ -979,7 +979,6 @@ mod tests {
                 "V4(Cow::Borrowed) < V5(Cow::Owned)",
             );
         }
-
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1003,11 +1002,11 @@ mod tests {
 
         // Same six values as Batch 4, assigned in reverse to representations:
         //   W0 < W1 < W2 < W3 < W4 < W5
-        const W0: &str = "";               // Cow::Owned  (empty, lowest)
-        const W1: &str = "\t\n\r";         // Cow::Borrowed
-        const W2: &str = " ";              // String
-        const W3: &str = "héllo";          // Box<str>
-        const W4: &str = "héllo world";    // &str
+        const W0: &str = ""; // Cow::Owned  (empty, lowest)
+        const W1: &str = "\t\n\r"; // Cow::Borrowed
+        const W2: &str = " "; // String
+        const W3: &str = "héllo"; // Box<str>
+        const W4: &str = "héllo world"; // &str
         const W5: &str = "🌍 héllo world!"; // str         (astral, highest)
 
         struct RankedDesc {
@@ -1031,13 +1030,17 @@ mod tests {
         }
 
         #[track_caller]
-        fn assert_greater(
-            lhs_result: Option<Ordering>,
-            rhs_result: Option<Ordering>,
-            label: &str,
-        ) {
-            assert_eq!(lhs_result, Some(Ordering::Greater), "{label}: expected Greater");
-            assert_eq!(rhs_result, Some(Ordering::Less), "{label}: expected Less (dual)");
+        fn assert_greater(lhs_result: Option<Ordering>, rhs_result: Option<Ordering>, label: &str) {
+            assert_eq!(
+                lhs_result,
+                Some(Ordering::Greater),
+                "{label}: expected Greater"
+            );
+            assert_eq!(
+                rhs_result,
+                Some(Ordering::Less),
+                "{label}: expected Less (dual)"
+            );
         }
 
         /// All C(6,2) = 15 pairs, descending direction (higher-rank rep > lower-rank rep).
@@ -1150,7 +1153,6 @@ mod tests {
                 "W1(Cow::Borrowed) > W0(Cow::Owned)",
             );
         }
-
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -1172,7 +1174,10 @@ mod tests {
         assert_eq!(content, s);
         assert_ne!(s, "héllo \u{1F601} foreign");
         assert_eq!(s.partial_cmp(content), Some(Ordering::Equal));
-        assert_eq!(s.partial_cmp("\u{1F601} héllo foreign"), Some(Ordering::Less));
+        assert_eq!(
+            s.partial_cmp("\u{1F601} héllo foreign"),
+            Some(Ordering::Less)
+        );
 
         let r: &str = content;
         assert_eq!(s, r);

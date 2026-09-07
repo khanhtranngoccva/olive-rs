@@ -41,7 +41,7 @@ use core::ptr::NonNull;
 // Borrow the stable layout API from `core` instead of reimplementing it.
 pub use crate::alloc_errors::AllocError;
 use crate::try_traits::try_clone::TryClone;
-pub use core::alloc::Layout;
+pub use core::alloc::{Layout, LayoutError};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Allocator
@@ -521,21 +521,78 @@ const fn base_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
 }
 
 /// Extension methods for [`Layout`] to provide compatibility.
+///
+/// Because Rust traits cannot currently declare `const fn` members, the
+/// const-evaluable variants are provided as free functions below
+/// ([`layout_dangling_pointer`] and [`layout_padding_need_for`]). They accept
+/// a `Layout` by value and can be called from `const` contexts.
 pub trait LayoutExt {
     /// Creates a [`NonNull`] that is dangling, but well-aligned for this Layout.
     /// Note that the address of the returned pointer may potentially be that of a valid pointer,
-    /// which means this must not be used as a “not yet initialized” sentinel value.
+    /// which means this must not be used as a "not yet initialized" sentinel value.
     ///
     /// Types that lazily allocate must track initialization by some other means.
     ///
     /// This is the MSRV-compatible equivalent of `Layout::dangling_ptr`.
     fn dangling_pointer(&self) -> NonNull<u8>;
+
+    /// The number of padding bytes required after a block laid out with `self`
+    /// before a field requiring alignment `align` may begin at an offset that is
+    /// a multiple of `align`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `align` is zero or not a power of two — i.e. not a valid
+    /// alignment — mirroring the precondition every `Layout` constructor
+    /// enforces.
+    fn padding_need_for(&self, align: usize) -> usize;
 }
 
 impl LayoutExt for Layout {
     fn dangling_pointer(&self) -> NonNull<u8> {
-        unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(self.align())) }
+        layout_dangling_pointer(*self)
     }
+
+    fn padding_need_for(&self, align: usize) -> usize {
+        layout_padding_need_for(*self, align)
+    }
+}
+
+/// Const-evaluable variant of [`LayoutExt::dangling_pointer`].
+///
+/// Creates a [`NonNull`] that is dangling, but well-aligned for `layout`.
+/// Usable in `const` contexts where the trait method cannot be called.
+#[must_use]
+#[inline]
+pub const fn layout_dangling_pointer(layout: Layout) -> NonNull<u8> {
+    unsafe { NonNull::new_unchecked(core::ptr::without_provenance_mut(layout.align())) }
+}
+
+/// Const-evaluable variant of [`LayoutExt::padding_need_for`].
+///
+/// Returns the number of padding bytes required after a block laid out with
+/// `layout` before a field requiring alignment `align` may begin at an offset
+/// that is a multiple of `align`.
+///
+/// # Panics
+///
+/// Panics if `align` is zero or not a power of two.
+#[must_use]
+#[inline]
+pub const fn layout_padding_need_for(layout: Layout, align: usize) -> usize {
+    assert!(align.is_power_of_two(), "alignment must be a power of two");
+    // layout.size % align, but since align is a power of 2,
+    // binary AND with align - 1 is equivalent (strips non-modulo bytes).
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "alignment is positive due to being a power of two"
+    )]
+    let rem = layout.size() & (align - 1);
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "asserted rem < align (remainder"
+    )]
+    if rem == 0 { 0 } else { align - rem }
 }
 
 #[cfg(test)]
@@ -564,5 +621,39 @@ mod tests {
         // process (same global allocator, no double-linking surprises).
         let v: std::vec::Vec<i32> = (0..1000).collect();
         assert_eq!(v.iter().sum::<i32>(), (0..1000).sum::<i32>());
+    }
+
+    #[test]
+    fn padding_need_for_rounds_up_to_alignment() {
+        // A 16-byte header followed by an 8-aligned field needs no gap.
+        let l16 = Layout::from_size_align(16, 16).expect("valid");
+        assert_eq!(l16.padding_need_for(8), 0);
+        // A 24-byte header followed by a 16-aligned field needs 8 bytes of pad.
+        let l24 = Layout::from_size_align(24, 8).expect("valid");
+        assert_eq!(l24.padding_need_for(16), 8);
+        // Alignment smaller than or equal to the size remainder still rounds up.
+        let l5 = Layout::from_size_align(5, 1).expect("valid");
+        assert_eq!(l5.padding_need_for(8), 3);
+    }
+
+    #[test]
+    fn padding_need_for_agrees_with_extend_offset() {
+        // The helper must reproduce exactly the offset `Layout::extend` reports
+        // for placing the second layout after the first — that is the invariant
+        // `Rc::data_offset` relies on.
+        let header = Layout::new::<[usize; 2]>();
+        for align in [1usize, 2, 4, 8, 16, 32] {
+            let value = Layout::from_size_align(7, align).expect("valid");
+            let (_, offset) = header.extend(value).expect("extend ok");
+            let expected = header.size() + header.padding_need_for(align);
+            assert_eq!(offset, expected, "mismatch at alignment {align}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "not a power of two")]
+    fn padding_need_for_rejects_invalid_alignment() {
+        let l = Layout::new::<u8>();
+        let _ = l.padding_need_for(3);
     }
 }

@@ -25,6 +25,7 @@ pub mod alloc;
 pub mod borrow;
 pub mod boxed;
 mod raw_vec;
+pub mod rc;
 pub mod string;
 pub mod vec;
 

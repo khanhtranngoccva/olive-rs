@@ -505,7 +505,11 @@ fn resize_rollbacks_partial_on_clone_failure() {
     // No double-free, and exactly the transient clone has been dropped so far.
     assert_eq!(ledger.live_ids(), [0, 1]);
     assert!(ledger.double_dropped().is_empty());
-    assert_eq!(ledger.drop_count(2), 1, "the one appended clone must be dropped once");
+    assert_eq!(
+        ledger.drop_count(2),
+        1,
+        "the one appended clone must be dropped once"
+    );
     assert_eq!(ledger.total_allocated(), 3);
 
     // Tear down: `src` (id 1) and the vec's seed (id 0) drop → all three gone.
@@ -560,8 +564,16 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     assert_eq!(ledger.live_ids(), [0, 1, 2, 3]);
     assert!(ledger.double_dropped().is_empty());
     assert_eq!(ledger.total_allocated(), 6);
-    assert_eq!(ledger.drop_count(4), 1, "transient copy of source[0] dropped once");
-    assert_eq!(ledger.drop_count(5), 1, "transient copy of source[1] dropped once");
+    assert_eq!(
+        ledger.drop_count(4),
+        1,
+        "transient copy of source[0] dropped once"
+    );
+    assert_eq!(
+        ledger.drop_count(5),
+        1,
+        "transient copy of source[1] dropped once"
+    );
 
     // Tear down both vecs: seed (0) + sources (1,2,3) all drop → 5 more, total 7.
     drop(fv);
@@ -639,8 +651,16 @@ fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
     let mut v: Vec<FlakyClone> = Vec::new();
     let mut src: Vec<FlakyClone> = Vec::new();
     src.try_push(FlakyClone::new(2)).unwrap();
-    src.try_push(FlakyClone { count: 1, threshold: 2 }).unwrap();
-    src.try_push(FlakyClone { count: 2, threshold: 2 }).unwrap(); // fails to clone
+    src.try_push(FlakyClone {
+        count: 1,
+        threshold: 2,
+    })
+    .unwrap();
+    src.try_push(FlakyClone {
+        count: 2,
+        threshold: 2,
+    })
+    .unwrap(); // fails to clone
     let (rest, e) = v
         .try_extend_from_slice(src.as_slice())
         .expect_err("clone fail");
@@ -1933,7 +1953,11 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     assert!(ledger.drop_counts().is_empty());
     drop(v); // drops id 0 (the prefix) — and nothing else
     assert_eq!(ledger.live_ids(), [1, 2, 3, 4, 5]);
-    assert_eq!(ledger.drop_count(0), 1, "only the prefix may be dropped by the vec");
+    assert_eq!(
+        ledger.drop_count(0),
+        1,
+        "only the prefix may be dropped by the vec"
+    );
     drop(front); // id 1
     drop(back); // id 3
     // Final tally: ids 0, 1, 3 dropped exactly once. Ids 2, 4, 5 leaked (the

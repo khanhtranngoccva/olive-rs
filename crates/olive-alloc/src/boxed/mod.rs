@@ -442,6 +442,8 @@ impl<T: ?Sized> Box<T, Global> {
         // a suitable retag.
         // It would be wrong for `into_raw_with_allocator` to do the same as that would induce
         // uniqueness assumptions (from the `&mut`) that we only want with the default allocator.
+        // We still want to extract the allocator for consistency even if it is a ZST.
+        let _alloc = unsafe { ptr::read(&b.alloc) };
         (&mut **b) as *mut T
     }
 

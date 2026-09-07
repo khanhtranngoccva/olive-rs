@@ -17,6 +17,13 @@ This is a non-exhaustive document/playbook to instruct LLM-based bugbots to sear
 - The `ManuallyDrop` object suppresses the drop glue. Caution is necessary to make sure these values are eventually hydrated for `Drop` at some point.
     - An actual bug was found and fixed in `IntoIter` where a reference is taken from `self.alloc` to deallocate, but does not call `ManuallyDrop::take()` to hydrate and drop the allocator.
 
+## Double drop bugs
+- `ptr::read` usually implies move syntax. Do not move values that are not wrapped with `ManuallyDrop`. 
+    - The `Rc`'s `Drop` implementation moves the allocator under the original allocator while constructing a `Weak` reference, and causes a double drop. The fix was done by using references.
+
+## Uninitialized fields
+- When initializing an uninitialized structure and (through a raw pointer or through `MaybeUninit`), it is tempting to call `assume_init_*` or dereference the pointer into a reference and write to that reference using as_mut(). This causes a `Drop` to be invoked on an uninitialized value.
+
 ## Trait implementation bugs
 - A structure or enum or item implements a trait that breaks its invariants. 
     - For example, there was a bug where `IntoChars` implemented `ExactSizeIterator` by mistake.
