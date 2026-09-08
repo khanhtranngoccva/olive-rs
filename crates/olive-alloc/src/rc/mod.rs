@@ -110,7 +110,7 @@ impl core::error::Error for TryRcError {
 /// Error returned by fallible reference-count operations that only mutate a
 /// counter.
 ///
-/// Indicates a logic error (unbalanced inc/dec) or adversarial misuse of the 
+/// Indicates a logic error (unbalanced inc/dec) or adversarial misuse of the
 /// raw pointer APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TryRcOutOfBoundsError;
@@ -434,6 +434,7 @@ unsafe fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
 /// - `p` must point to a valid `RcInner<T>` allocation block.
 /// - The reference count fields must be initialized.
 /// - The `T` value does not have to be initialized.
+/// - `p` must have strong == 1.
 #[inline]
 unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
     unsafe { &raw mut (*p).value }
@@ -1518,9 +1519,7 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - `ptr` must point to a block allocated by the global allocator.
     /// - The `Rc` must be valid - the strong count must not be 0.
     #[inline]
-    pub unsafe fn increment_strong_count(
-        ptr: *const T,
-    ) -> Result<(), TryRcOutOfBoundsError> {
+    pub unsafe fn increment_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation.
         unsafe { Self::increment_strong_count_in(ptr, &Global) }
     }
@@ -1542,9 +1541,7 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - This method can be called to release the Rc and backing storage, similar to
     ///   calling [`Rc<T>::from_raw`] and dropping the value.
     #[inline]
-    pub unsafe fn decrement_strong_count(
-        ptr: *const T,
-    ) -> Result<(), TryRcOutOfBoundsError> {
+    pub unsafe fn decrement_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
         // the global allocator.
         unsafe { Self::decrement_strong_count_in(ptr, &Global) }

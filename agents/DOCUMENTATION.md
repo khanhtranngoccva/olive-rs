@@ -12,6 +12,9 @@ doc, because it actively misleads the next implementor.
 
 ## Rules
 
+- **Must be marked LLM-generated** if any added or edited chunk is LLM-generated.
+  This is a non-negotiable criterion. See the Marking LLM-generated documentation 
+  for details
 - **Concise by default.** Say what the contract is and why, not how the function
   is mechanically implemented. Do not narrate the obvious. If removing a comment
   would leave a reader confused about *behavior or safety*, keep it; if it only

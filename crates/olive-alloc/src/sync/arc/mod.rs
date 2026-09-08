@@ -33,11 +33,13 @@
 //!
 //! # Status
 //!
-//! This module currently contains only the struct declarations, the shared
-//! internal header, and their `Drop` implementations — the minimal
-//! always-compiling skeleton. Constructors, `Deref`, `Clone`/`TryClone`, and
-//! the conversion methods will land in later incremental steps, each keeping
-//! the tree compiling and tested.
+//! This module currently contains the struct declarations, the shared internal
+//! header, their `Drop` implementations, and the refcount accessors. The
+//! fallible constructors (both the global-allocator and allocator-generic
+//! forms) live in the child [`construction`](self::construction) module,
+//! along with the uninit→init bridge. `Deref`, `Clone`/`TryClone`,
+//! weak-reference handling, and the raw-pointer reconstitution methods will
+//! land in later incremental steps, each keeping the tree compiling and tested.
 
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -50,6 +52,9 @@ use core::sync::atomic::{
 use crate::alloc::{Allocator, Global, Layout};
 use olive_core::alloc::LayoutExt;
 use olive_core::ptr::{self as ptr_ext, NonNull};
+
+/// Fallible node-construction methods and the uninit→init bridge.
+mod construction;
 
 // ---------------------------------------------------------------------------
 // Shared internals
@@ -188,9 +193,33 @@ unsafe fn ptr_get_data<T: ?Sized>(p: *const ArcInner<T>) -> *const T {
 /// - `p` must point to a valid `ArcInner<T>` allocation block.
 /// - The reference count fields must be initialized.
 /// - The `T` value does not have to be initialized.
+/// - `p` must have strong == 1.
 #[inline]
 unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut ArcInner<T>) -> *mut T {
     unsafe { &raw mut (*p).value }
+}
+
+/// Initializes the two reference-count headers of a freshly-allocated
+/// `ArcInner<T>` block to `(strong = 1, weak = 1)`.
+///
+/// The allocation is fresh (uninitialized), so the counters are seeded with a
+/// plain [`ptr::write`] of [`AtomicUsize::new(1)`] through a raw-mut reference
+/// projected off each field — rather than calling `.store()` on an atomic that
+/// has not yet been initialized, which would be undefined behavior. This mirrors
+/// the standard library's approach for seeding `RcInner`/`ArcInner` headers.
+///
+/// # Safety
+///
+/// - `p` must point to a valid, aligned `ArcInner<T>` allocation block whose
+///   header fields have not yet been initialized.
+/// - No other thread may observe the block until this function returns; the
+///   writes establish the initial counter state before the block escapes.
+#[inline]
+pub(super) unsafe fn initialize_arcinner<T: ?Sized>(p: *mut ArcInner<T>) {
+    unsafe {
+        ptr::write(&raw mut (*p).strong, AtomicUsize::new(1));
+        ptr::write(&raw mut (*p).weak, AtomicUsize::new(1));
+    }
 }
 
 /// Builds the dangling inner pointer stored by [`Weak::new`].
@@ -270,8 +299,8 @@ impl<T: ?Sized, A: Allocator> Drop for Arc<T, A> {
         // This fence is needed to prevent reordering of use of the data and
         // deletion of the data. Because it is marked `Release`, the decreasing
         // of the reference count synchronizes with this `Acquire` fence. This
-        // means that use of the data in another thread happens before decreasing 
-        // the reference count, which happens before this fence, which happens 
+        // means that use of the data in another thread happens before decreasing
+        // the reference count, which happens before this fence, which happens
         // before the deletion of the data.
         atomic::fence(Acquire);
 
@@ -293,6 +322,21 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
         // `ArcInner` structure itself is `Sync` if the inner data is `Sync` as
         // well, so we're ok loaning out an immutable pointer to these contents.
         unsafe { self.ptr.as_ref() }
+    }
+
+    /// Returns the number of strong [`Arc`] pointers to this allocation.
+    // FIXME: move to query.rs
+    #[inline]
+    pub fn strong_count(this: &Self) -> usize {
+        Self::inner(this).strong()
+    }
+
+    /// Returns the number of weak (`Weak`) pointers to this allocation,
+    /// excluding the implicit weak reference held by each strong pointer.
+    // FIXME: move to query.rs
+    #[inline]
+    pub fn weak_count(this: &Self) -> usize {
+        Self::inner(this).weak().saturating_sub(1)
     }
 
     /// Destroys the value and conditionally frees the block after the last
@@ -360,7 +404,7 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
         // deallocate the data entirely.
         if inner.weak.fetch_sub(1, Release) == 1 {
             // This fence pairs with the `Release` on the decrements above: it
-            // orders our prior writes (including the counter) before the deallocation, 
+            // orders our prior writes (including the counter) before the deallocation,
             // mirroring the standard library's `acquire!` macro.
             atomic::fence(Acquire);
 
