@@ -52,6 +52,10 @@ split file adjacent to the implementation it verifies (`vec/mod.rs` ↔
 `vec/tests.rs`). See [`INCREMENTAL.md`](./INCREMENTAL.md) for how this shapes the
 order in which a type lands.
 
+**Tests that require some methods that have not yet landed**: TODO directives must be added so 
+that future code can change it. Do not fix these TODO directives if these methods have not 
+landed yet.
+
 ## Regression discipline
 
 Whenever a bug or a bug *class* is found and fixed, add a regression test that

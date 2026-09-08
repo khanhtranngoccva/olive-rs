@@ -34,12 +34,14 @@
 //! # Status
 //!
 //! This module currently contains the struct declarations, the shared internal
-//! header, their `Drop` implementations, and the refcount accessors. The
-//! fallible constructors (both the global-allocator and allocator-generic
-//! forms) live in the child [`construction`](self::construction) module,
-//! along with the uninit→init bridge. `Deref`, `Clone`/`TryClone`,
-//! weak-reference handling, and the raw-pointer reconstitution methods will
-//! land in later incremental steps, each keeping the tree compiling and tested.
+//! header, and their `Drop` implementations. The fallible constructors (both
+//! the global-allocator and allocator-generic forms) live in the child
+//! [`construction`](self::construction) module, along with the uninit→init
+//! bridge; the query methods (`as_ptr`, `allocator`, `ptr_eq`, and the
+//! refcount reads) live in the child [`query`](self::query) module. `Deref`,
+//! `Clone`/`TryClone`, weak-reference handling, and the raw-pointer
+//! reconstitution methods will land in later incremental steps, each keeping
+//! the tree compiling and tested.
 
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
@@ -55,6 +57,8 @@ use olive_core::ptr::{self as ptr_ext, NonNull};
 
 /// Fallible node-construction methods and the uninit→init bridge.
 mod construction;
+/// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
+mod query;
 
 // ---------------------------------------------------------------------------
 // Shared internals
@@ -322,21 +326,6 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
         // `ArcInner` structure itself is `Sync` if the inner data is `Sync` as
         // well, so we're ok loaning out an immutable pointer to these contents.
         unsafe { self.ptr.as_ref() }
-    }
-
-    /// Returns the number of strong [`Arc`] pointers to this allocation.
-    // FIXME: move to query.rs
-    #[inline]
-    pub fn strong_count(this: &Self) -> usize {
-        Self::inner(this).strong()
-    }
-
-    /// Returns the number of weak (`Weak`) pointers to this allocation,
-    /// excluding the implicit weak reference held by each strong pointer.
-    // FIXME: move to query.rs
-    #[inline]
-    pub fn weak_count(this: &Self) -> usize {
-        Self::inner(this).weak().saturating_sub(1)
     }
 
     /// Destroys the value and conditionally frees the block after the last

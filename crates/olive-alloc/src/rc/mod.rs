@@ -834,8 +834,7 @@ impl<T: ?Sized> Rc<T, Global> {
     pub fn into_raw(rc: Self) -> *const T {
         let me = ManuallyDrop::new(rc);
         let _alloc = unsafe { ptr::read(&me.alloc) };
-        // SAFETY: `rc`'s inner field is fully initialized
-        unsafe { ptr_get_data(me.ptr.as_ptr()) }
+        Rc::as_ptr(&me)
     }
 }
 
@@ -1149,7 +1148,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     pub fn into_raw_with_allocator(rc: Self) -> (*const T, A) {
         let me = ManuallyDrop::new(rc);
         // SAFETY: `rc`'s inner field is fully initialized
-        let ptr = unsafe { ptr_get_data(me.ptr.as_ptr()) };
+        let ptr = Rc::as_ptr(&me);
         let alloc = unsafe { ptr::read(&me.alloc) };
         (ptr, alloc)
     }
@@ -1271,7 +1270,7 @@ impl<T: Sized, A: Allocator> Rc<MaybeUninit<T>, A> {
     ///
     /// # Safety
     ///
-    /// The payload slot must have been fully initialized. 
+    /// The payload slot must have been fully initialized.
     /// Calling this on uninitialized memory is UB.
     #[inline]
     pub unsafe fn assume_init(self) -> Rc<T, A> {
@@ -1292,9 +1291,9 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// Gets a shared raw pointer to the underlying data.
     ///
     /// The returned pointer carries write provenance derived from the live
-    /// allocation (see [`rc_as_ptr_write_provenance`](tests::rc_as_ptr_write_provenance)),
-    /// so it may be cast to `*mut T` and used for in-place mutation by sole
-    /// owners, exactly like std's `Rc::as_ptr`.
+    /// allocation, so it can be used in splitting and reconstitution
+    /// operations (e.g. [`Self::into_raw_with_allocator`] / [`Self::into_raw`] /
+    /// [`Self::from_raw_in`] / [`Self::from_raw`]).
     #[must_use]
     #[inline]
     pub fn as_ptr(this: &Self) -> *const T {
@@ -1830,7 +1829,7 @@ impl<T: ?Sized> Weak<T, Global> {
         let me = ManuallyDrop::new(self);
         let _alloc = unsafe { ptr::read(&me.alloc) };
         // SAFETY: the allocation and reference counts are valid
-        unsafe { ptr_get_data(me.ptr.as_ptr()) }
+        Weak::as_ptr(&me)
     }
 }
 
@@ -1868,7 +1867,7 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     pub fn into_raw_with_allocator(self) -> (*const T, A) {
         let me = ManuallyDrop::new(self);
         // SAFETY: the allocation and reference counts are valid
-        let ptr = unsafe { ptr_get_data(me.ptr.as_ptr()) };
+        let ptr = Weak::as_ptr(&me);
         let alloc = unsafe { ptr::read(&me.alloc) };
         (ptr, alloc)
     }
