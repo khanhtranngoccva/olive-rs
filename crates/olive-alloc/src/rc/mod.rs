@@ -1271,8 +1271,8 @@ impl<T: Sized, A: Allocator> Rc<MaybeUninit<T>, A> {
     ///
     /// # Safety
     ///
-    /// The payload slot must have been fully initialized, e.g. via
-    /// [`write`](Self::write). Calling this on uninitialized memory is UB.
+    /// The payload slot must have been fully initialized. 
+    /// Calling this on uninitialized memory is UB.
     #[inline]
     pub unsafe fn assume_init(self) -> Rc<T, A> {
         let (ptr, alloc) = Rc::into_raw_with_allocator(self);

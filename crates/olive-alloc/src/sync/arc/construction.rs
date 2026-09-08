@@ -192,39 +192,44 @@ impl<T: Sized, A: Allocator> Arc<MaybeUninit<T>, A> {
     /// exclusive access to the allocation.
     #[inline]
     pub unsafe fn write(self, val: T) -> Arc<T, A> {
+        // SAFETY: the caller guarantees strong == 1, so we exclusively own the
+        // payload slot; wrapping `val` in `MaybeUninit` matches the slot's type
+        // and leaves it fully initialized in place.
+        unsafe {
+            ptr::write(ptr_get_data_mut(self.ptr.as_ptr()), MaybeUninit::new(val));
+        }
+
+        // SAFETY: the payload slot was just fully written above, so it is now a
+        // valid `T`; the refcount header is untouched and still (1, 1).
+        unsafe { self.assume_init() }
+    }
+
+    /// Reinterprets this `Arc<MaybeUninit<T>, A>` as an initialized `Arc<T, A>`.
+    ///
+    /// This performs no initialization of the payload — it only changes the
+    /// static type of the backing allocation from `ArcInner<MaybeUninit<T>>` to
+    /// `ArcInner<T>`.
+    ///
+    /// # Safety
+    ///
+    /// The payload slot must already contain a fully-initialized.
+    #[inline]
+    pub unsafe fn assume_init(self) -> Arc<T, A> {
         // Establish up front that the uninit and init allocations have identical
-        // layouts, so the pointer cast below preserves size and alignment. This
-        // mirrors std's own assertion for the equivalent `Box<MaybeUninit<T>>`
-        // → `Box<T>` reinterpretation.
+        // layouts, so the pointer cast below preserves size and alignment.
         debug_assert_eq!(
             Layout::new::<ArcInner<MaybeUninit<T>>>(),
             Layout::new::<ArcInner<T>>()
         );
 
-        // Suppress the drop of `self` so that the original `Arc<MaybeUninit<T>>`
-        // does not decrement the refcount and free the allocation that the new
-        // `Arc<T>` will inherit or drop the allocator. We extract the pointer and 
-        // allocator handle via raw reads from the `ManuallyDrop`-wrapped value.
+        // Suppress the drop of `self` so the original `Arc<MaybeUninit<T>>`
+        // does not decrement the refcount and free the allocation that the
+        // returned `Arc<T>` inherits.
         let me = ManuallyDrop::new(self);
         let ptr = me.ptr;
         let alloc = unsafe { ptr::read(&me.alloc) };
 
-        // SAFETY: the caller guarantees strong == 1, so we exclusively own the
-        // payload slot; wrapping `val` in `MaybeUninit` matches the slot's type
-        // and leaves it fully initialized in place.
-        unsafe {
-            ptr::write(ptr_get_data_mut(ptr.as_ptr()), MaybeUninit::new(val));
-        }
-
-        // Reinterpret the same backing allocation as an initialized
-        // `Arc<T, A>`. Only the pointer's pointee type shifts from
-        // `ArcInner<MaybeUninit<T>>` to `ArcInner<T>`, which is valid because
-        // (a) their layouts are identical (proven above) and (b) the payload
-        // slot has just been fully written. The allocator handle is reused
-        // verbatim — the block was allocated by it and must be freed by it.
-        // SAFETY: layout identity established above; the block is still live and
-        // its refcount header remains valid after the payload write.
-        let new_ptr = unsafe { NonNull::new_unchecked(ptr.as_ptr().cast::<ArcInner<T>>()) };
+        let new_ptr = ptr.cast::<ArcInner<T>>();
         Arc {
             ptr: new_ptr,
             alloc,
@@ -307,6 +312,44 @@ mod tests {
         // The bridge must preserve the exact refcount state of the source.
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
+    }
+
+    #[test]
+    fn assume_init_reinterprets_without_touching_counters_or_payload() {
+        // Build an uninit handle, then fill its payload slot directly (bypassing
+        // `write`) so we can prove `assume_init` is a pure type reinterpretation:
+        // it must not rewrite the payload nor disturb the refcount header.
+        let uninit: Arc<MaybeUninit<[u8; 4]>, Global> = Arc::try_new_uninit().unwrap();
+        let data = unsafe { ptr_get_data_mut(uninit.ptr.as_ptr()) };
+        // SAFETY: exclusive access (strong == 1); writing a valid `[u8; 4]` makes
+        // the slot initialized, satisfying `assume_init`'s precondition.
+        unsafe { *data = MaybeUninit::new([1u8, 2, 3, 4]) };
+
+        let arc = unsafe { uninit.assume_init() };
+        // Payload bits survive verbatim — `assume_init` did not overwrite them.
+        assert_eq!(peek(&arc), &[1u8, 2, 3, 4]);
+        // Counters are untouched by the reinterpretation.
+        assert_eq!(Arc::strong_count(&arc), 1);
+        assert_eq!(Arc::weak_count(&arc), 0);
+    }
+
+    #[test]
+    fn assume_init_and_write_agree_on_layout_and_state() {
+        // Two handles built identically; one bridged via `write`, the other by
+        // filling the slot then calling `assume_init`. Both must converge on the
+        // same observable state, proving `write` composes over `assume_init`.
+        let a = unsafe {
+            let u: Arc<MaybeUninit<i64>, Global> = Arc::try_new_uninit().unwrap();
+            u.write(99i64)
+        };
+        let b = unsafe {
+            let u: Arc<MaybeUninit<i64>, Global> = Arc::try_new_uninit().unwrap();
+            *ptr_get_data_mut(u.ptr.as_ptr()) = MaybeUninit::new(99i64);
+            u.assume_init()
+        };
+        assert_eq!(peek(&a), peek(&b));
+        assert_eq!(Arc::strong_count(&a), Arc::strong_count(&b));
+        assert_eq!(Arc::weak_count(&a), Arc::weak_count(&b));
     }
 
     // --- Generic (allocator-parameterized) construction ---------------------
