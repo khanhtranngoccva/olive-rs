@@ -109,6 +109,17 @@ group introduces), get it green, then move to the next chunk. Because Phase 1
 already pinned the invariants, each chunk's job is to prove it neither breaks nor
 violates them — and to close any `Drop` coverage gap the chunk's methods open.
 
+**Stop at the chunk boundary.** This is the discipline that makes the whole
+scheme work, and it is easy to violate under momentum. Once a chunk is implemented,
+colocated, tested, and green, **stop there** — do not roll on into the next chunk,
+the next type, or a broader cleanup in the same pass. The only exception is when
+the user has *explicitly* asked for a long or speculative write; absent that, one
+chunk per working session is the ceiling. Continuing past a verified boundary is
+exactly where context rot creeps back in: the diff grows beyond what can be
+reviewed line by line, and the very invariants the small steps were protecting
+become the ones you break. When you stop, leave a one-line note of what the next
+chunk should be so the hand-off is clean.
+
 **Colocate the tests with the code they cover.** Each method block ships its own
 unit tests in the same file, sitting right beside the functions under test — not
 batched off into a separate pile. This is precisely what file partitioning is for:

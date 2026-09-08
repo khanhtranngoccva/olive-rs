@@ -53,7 +53,7 @@
 #![no_std]
 // Unstable-feature gates, enabled only when the build script has determined that
 // `#![feature(...)]` is permitted (nightly or bootstrap — see `olive-build`).
-
+#![allow(stable_features, reason = "pinned MSRV to 1.85")]
 // Used by `ptr::PointerExt::cast_with_metadata`, which needs `set_ptr_value` for
 // its Miri-clean `with_metadata_of` path.
 #![cfg_attr(unstable_features, feature(set_ptr_value))]

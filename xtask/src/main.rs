@@ -14,7 +14,7 @@ use std::process::{Command, ExitCode};
 
 /// The no_std-capable library crates that make up the Olive stack. Verification
 /// tasks scope to these by default; `--workspace` widens to every member.
-const CORE_CRATES: &[&str] = &["olive_core", "olive_alloc", "olive_std"];
+const CORE_CRATES: &[&str] = &["olive-core", "olive-alloc", "olive-std"];
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Olive developer task runner")]

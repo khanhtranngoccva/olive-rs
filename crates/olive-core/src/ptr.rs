@@ -338,13 +338,15 @@ mod tests {
         let moved = unsafe { (&cat as *const Cat).cast_with_metadata(src_dog as *const dyn Greet) };
         // SAFETY: `moved` is a valid `dyn Greet` fat pointer: `Dog`'s vtable plus
         // an in-bounds data address. Dispatching through it calls `Dog::greet`.
-        assert_eq!(unsafe { (*moved).greet() }, "woof");
+        // The explicit `&` keeps the reference creation visible rather than
+        // relying on an implicit autoref through a raw-pointer deref.
+        assert_eq!(unsafe { (&*moved).greet() }, "woof");
 
         // Symmetrically, relocating `Cat`'s metadata onto `dog`'s address must
         // yield `Cat`'s behavior, confirming the vtable travels with the source
         // pointer rather than being inferred from the destination address.
         let moved_back =
             unsafe { (&dog as *const Dog).cast_with_metadata(src_cat as *const dyn Greet) };
-        assert_eq!(unsafe { (*moved_back).greet() }, "meow");
+        assert_eq!(unsafe { (&*moved_back).greet() }, "meow");
     }
 }

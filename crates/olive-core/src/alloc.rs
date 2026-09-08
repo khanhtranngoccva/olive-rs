@@ -36,7 +36,6 @@
 
 extern crate alloc;
 
-use crate::mem::MaybeUninitUnsized;
 use crate::try_traits::try_clone::TryClone;
 use core::ptr::NonNull;
 
@@ -593,6 +592,7 @@ impl LayoutExt for Layout {
         }
         #[cfg(not(unstable_features))]
         {
+            use crate::mem::MaybeUninitUnsized;
             // SAFETY: precondition from the caller.
             unsafe { Layout::for_value(MaybeUninitUnsized::from_ptr(ptr)) }
         }

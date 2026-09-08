@@ -22,14 +22,19 @@ Two other files live here too:
 
 ## The non-negotiable core
 
-Across every task, three rules dominate everything else:
+Across every task, four rules dominate everything else:
 
 1. **Work incrementally.** Small, reviewable, always-compiling steps; partition
    large experiments into subagents. See [`INCREMENTAL.md`](./INCREMENTAL.md).
-2. **Test against invariants, exhaustively.** Cover every documented behavior and
+2. **Stop at the chunk boundary.** Once a chunk is implemented, colocated, tested,
+   and green, stop there — do not roll on into the next chunk or a broader cleanup
+   in the same pass. The only exception is an *explicit* request for a long or
+   speculative write. This is what keeps context rot from creeping back in. See
+   [`INCREMENTAL.md`](./INCREMENTAL.md).
+3. **Test against invariants, exhaustively.** Cover every documented behavior and
    assert the type's invariants under failure, not just happy-path outputs. See
    [`TESTING.md`](./TESTING.md).
-3. **Keep documentation concise, consistent, and marked** — with particular care
+4. **Keep documentation concise, consistent, and marked** — with particular care
    around safety text. See [`DOCUMENTATION.md`](./DOCUMENTATION.md).
 
 When in doubt about intent, defer to the existing code; when in doubt about
