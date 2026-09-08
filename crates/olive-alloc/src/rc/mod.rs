@@ -365,9 +365,16 @@ fn is_dangling_weak<T: ?Sized>(p: *const RcInner<T>) -> bool {
 
 /// Computes the byte offset from the start of an `RcInner<T>` allocation to
 /// the beginning of its `value` field, given the payload's alignment.
+///
+/// # Safety
+///
+/// - `p` must satisfy the conditions of [`LayoutExt::for_value_pointer`]: the
+///   memory must be from a valid pointer given by [`ptr_get_data`] and must not
+///   be mutated.
 #[inline]
-fn data_offset<T: ?Sized>(p: *const T) -> usize {
-    let value_layout = unsafe { Layout::for_value(&*p) };
+unsafe fn data_offset<T: ?Sized>(p: *const T) -> usize {
+    // SAFETY: precondition from the caller.
+    let value_layout = unsafe { Layout::for_value_pointer(p) };
     // Overflow is impossible here. The value_layout came from a pointer that is previously
     // validated with the exact same function.
     let (_, offset) =
@@ -380,18 +387,15 @@ fn data_offset<T: ?Sized>(p: *const T) -> usize {
 /// Implemented via **pointer arithmetic** (base + [`data_offset`]) rather than
 /// by forming a reference to the `value` field to prevent the pointer from
 /// being tagged.
+///
+/// # Safety
+///
+/// - `p` must point to a valid `RcInner<T>` allocation block.
+/// - The reference count fields must be initialized.
+/// - The `T` value does not have to be initialized.
 #[inline]
-fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
-    // The `RcInner<T>` pointer carries the payload's own metadata verbatim
-    // (see `try_new_for_value`, which grafts `src`'s metadata onto the inner
-    // pointer). Reinterpret the address as a `*const T` keeping that metadata,
-    // purely so `data_offset` can read the correct alignment / slice length /
-    // vtable. No reference is formed, so no shared tag is registered.
-    let meta_src = p as *const T;
-    let offset = data_offset(meta_src);
-    // SAFETY: advancing the base by the header offset lands exactly on the
-    // `value` field, which is in-bounds for any live `RcInner<T>` allocation.
-    unsafe { p.byte_add(offset) as *const T }
+unsafe fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
+    unsafe { &raw const (*p).value }
 }
 
 /// Mutable counterpart of [`ptr_get_data`]: yields a `*mut T` pointing at the
@@ -401,16 +405,15 @@ fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
 /// Mutating callers must go through this rather than doing
 /// `ptr_get_data(p) as *mut T`, which would silently launder a `*const T` into
 /// a `*mut T` and hide the fact that the caller is asserting write access.
+///
+/// # Safety
+///
+/// - `p` must point to a valid `RcInner<T>` allocation block.
+/// - The reference count fields must be initialized.
+/// - The `T` value does not have to be initialized.
 #[inline]
-fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
-    // Recover the payload's metadata-bearing address (same reasoning as
-    // `ptr_get_data`) purely to compute the offset, then advance the mutable
-    // base by that offset.
-    let meta_src = p as *const T;
-    let offset = data_offset(meta_src);
-    // SAFETY: advancing the base by the header offset lands exactly on the
-    // `value` field, which is in-bounds for any live `RcInner<T>` allocation.
-    unsafe { p.byte_add(offset) as *mut T }
+unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
+    unsafe { &raw mut (*p).value }
 }
 
 /// Reverse of [`ptr_get_data`]: casts a payload pointer back to its enclosing
@@ -418,11 +421,12 @@ fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
 ///
 /// # Safety
 ///
-/// The pointer must have been produced by [`ptr_get_data`] on a live
-/// `RcInner<T>` allocation, and the allocation must still be alive.
+/// The pointer must have been produced by [`ptr_get_data`] on a valid
+/// `RcInner<T>` allocation.
 #[inline]
 unsafe fn data_get_ptr<T: ?Sized>(p: *const T) -> *const RcInner<T> {
-    let offset = data_offset(p);
+    // SAFETY: the live RcInner<T> ensures that the pointer to T is valid.
+    let offset = unsafe { data_offset(p) };
     // SAFETY: subtracting the header offset lands at the start of the
     // `RcInner` allocation, which is in-bounds.
     unsafe { p.byte_sub(offset) as *const RcInner<T> }
@@ -804,15 +808,10 @@ impl<T: ?Sized> Rc<T, Global> {
     #[must_use = "losing the pointer will leak memory"]
     #[inline]
     pub fn into_raw(rc: Self) -> *const T {
-        // Mirrors std's `Rc::into_raw`: wrap in `ManuallyDrop` so that if this
-        // function ever panics (e.g. during unwinding), the block is not
-        // double-freed by the implicit drop at scope end. The `Global`
-        // allocator is a ZST, but we still perform an explicit read to keep
-        // the ownership transfer uniform with the generic path and to make
-        // the intent clear to reviewers and future maintainers.
         let me = ManuallyDrop::new(rc);
         let _alloc = unsafe { ptr::read(&me.alloc) };
-        ptr_get_data(me.ptr.as_ptr())
+        // SAFETY: `rc`'s inner field is fully initialized
+        unsafe { ptr_get_data(me.ptr.as_ptr()) }
     }
 }
 
@@ -952,7 +951,7 @@ impl<T, A: Allocator> Rc<T, A> {
         // Step 6: consume the Weak WITHOUT dropping it, so its weak count
         // becomes the implicit shared weak of the returned Rc. This yields
         // the standard (strong=1, weak=1) final state.
-        let (rc_data_ptr, weak_alloc) = Weak::into_raw_with_allocator(weak);
+        let (rc_data_ptr, weak_alloc) = weak.into_raw_with_allocator();
 
         // SAFETY: `rc_data_ptr` was produced by `ptr_get_data` on our fresh,
         // fully-initialized block, and `weak_alloc` is the same allocator.
@@ -1124,13 +1123,9 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     #[must_use = "losing the pointer will leak memory"]
     #[inline]
     pub fn into_raw_with_allocator(rc: Self) -> (*const T, A) {
-        // Mirrors std's `Rc::into_raw_with_allocator`: wrap in `ManuallyDrop`
-        // so that a panic during unwinding cannot cause the implicit drop at
-        // scope end to free the block after we have already handed ownership
-        // to the caller. The allocator is read out explicitly; the rest of the
-        // struct is logically consumed by the return value.
         let me = ManuallyDrop::new(rc);
-        let ptr = ptr_get_data(me.ptr.as_ptr());
+        // SAFETY: `rc`'s inner field is fully initialized
+        let ptr = unsafe { ptr_get_data(me.ptr.as_ptr()) };
         let alloc = unsafe { ptr::read(&me.alloc) };
         (ptr, alloc)
     }
@@ -1271,10 +1266,16 @@ impl<T: Sized, A: Allocator> Rc<MaybeUninit<T>, A> {
 
 impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// Gets a shared raw pointer to the underlying data.
+    ///
+    /// The returned pointer carries write provenance derived from the live
+    /// allocation (see [`rc_as_ptr_write_provenance`](tests::rc_as_ptr_write_provenance)),
+    /// so it may be cast to `*mut T` and used for in-place mutation by sole
+    /// owners, exactly like std's `Rc::as_ptr`.
     #[must_use]
     #[inline]
     pub fn as_ptr(this: &Self) -> *const T {
-        ptr_get_data(this.ptr.as_ptr())
+        let ptr: *mut RcInner<T> = this.ptr.as_ptr();
+        unsafe { &raw mut (*ptr).value }
     }
 
     /// Returns a shared reference to the allocation's internal [`RcInner`]
@@ -1305,12 +1306,14 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
 
     /// Gets a shared reference to the allocator backing this `Rc`.
     ///
-    /// Implemented as an inherent method (rather than an associated function)
-    /// so it does not shadow any future free-function helpers in this module.
+    /// Implemented as an associated function (taking `&Self`) rather than an
+    /// inherent method so that autoref-based deref coercion is not shadowed:
+    /// a `T` whose own API exposes an `allocator` method remains reachable via
+    /// `rc.as_ref().allocator()` / `(*rc).allocator()`.
     #[must_use]
     #[inline]
-    pub fn allocator(&self) -> &A {
-        &self.alloc
+    pub const fn allocator(this: &Self) -> &A {
+        &this.alloc
     }
 
     /// Determines if two `Rc` pointers point to the same allocation.
@@ -1793,16 +1796,11 @@ impl<T: ?Sized> Weak<T, Global> {
     /// [`from_raw`](Self::from_raw)) or manually deallocate it.
     #[must_use = "losing the pointer will leak memory"]
     #[inline]
-    pub fn into_raw(w: Self) -> *const T {
-        // Mirrors std's `Weak::into_raw`: wrap in `ManuallyDrop` so that if
-        // this function ever panics (e.g. during unwinding), the block is not
-        // double-freed by the implicit drop at scope end. The `Global`
-        // allocator is a ZST, but we still perform an explicit read to keep
-        // the ownership transfer uniform with the generic path and to make
-        // the intent clear to reviewers and future maintainers.
-        let me = ManuallyDrop::new(w);
+    pub fn into_raw(self) -> *const T {
+        let me = ManuallyDrop::new(self);
         let _alloc = unsafe { ptr::read(&me.alloc) };
-        ptr_get_data(me.ptr.as_ptr())
+        // SAFETY: the allocation and reference counts are valid
+        unsafe { ptr_get_data(me.ptr.as_ptr()) }
     }
 }
 
@@ -1837,14 +1835,10 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     /// [`from_raw_in`](Self::from_raw_in)) or manually deallocate it.
     #[must_use = "losing the pointer will leak memory"]
     #[inline]
-    pub fn into_raw_with_allocator(w: Self) -> (*const T, A) {
-        // Mirrors std's `Weak::into_raw_with_allocator`: wrap in `ManuallyDrop`
-        // so that a panic during unwinding cannot cause the implicit drop at
-        // scope end to free the block after we have already handed ownership
-        // to the caller. The allocator is read out explicitly; the rest of the
-        // struct is logically consumed by the return value.
-        let me = ManuallyDrop::new(w);
-        let ptr = ptr_get_data(me.ptr.as_ptr());
+    pub fn into_raw_with_allocator(self) -> (*const T, A) {
+        let me = ManuallyDrop::new(self);
+        // SAFETY: the allocation and reference counts are valid
+        let ptr = unsafe { ptr_get_data(me.ptr.as_ptr()) };
         let alloc = unsafe { ptr::read(&me.alloc) };
         (ptr, alloc)
     }
@@ -1853,10 +1847,24 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     ///
     /// The pointer may be dangling if the strong references have all vanished;
     /// it must not be dereferenced unless [`try_upgrade`](Self::try_upgrade) succeeds.
+    /// A weak that never referred to an allocation (from [`Weak::new`]) yields
+    /// the deliberately misaligned dangling sentinel address, which can never
+    /// collide with a real payload address.
     #[must_use]
     #[inline]
-    pub fn as_ptr(this: &Self) -> *const T {
-        ptr_get_data(this.ptr.as_ptr())
+    pub fn as_ptr(&self) -> *const T {
+        let ptr = self.ptr.as_ptr();
+
+        if is_dangling_weak(ptr) {
+            // If the pointer is dangling, we return the sentinel directly. This cannot be
+            // a valid payload address, as the payload is at least as aligned as RcInner (usize).
+            ptr as *const T
+        } else {
+            // SAFETY: if is_dangling returns false, then the pointer is dereferenceable.
+            // The payload may be dropped at this point, and we have to maintain provenance,
+            // so use raw pointer manipulation.
+            unsafe { &raw mut (*ptr).value }
+        }
     }
 
     /// Gets a shared reference to the allocator backing this `Weak`.
@@ -1870,8 +1878,8 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     ///
     /// This method does not deal with fat pointer metadata.
     #[inline]
-    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        ptr::addr_eq(this.ptr.as_ptr(), other.ptr.as_ptr())
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        ptr::addr_eq(self.ptr.as_ptr(), other.ptr.as_ptr())
     }
 
     /// Returns a [`WeakInner`] handle to the allocation's reference-count
@@ -1920,11 +1928,11 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
     /// `usize`, or [`TryRcError::CloneAlloc`] if cloning the allocator handle
     /// fails.
     #[inline]
-    pub fn try_upgrade(this: &Self) -> Result<Option<Rc<T, A>>, TryRcError> {
+    pub fn try_upgrade(&self) -> Result<Option<Rc<T, A>>, TryRcError> {
         // A dangling weak (from `Weak::new`) never referred to an allocation,
         // so it can never be upgraded. Checking this first also avoids ever
         // dereferencing the sentinel address below.
-        let inner = match this.inner() {
+        let inner = match self.inner() {
             Some(i) => i,
             None => return Ok(None),
         };
@@ -1932,14 +1940,14 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
             return Ok(None);
         }
 
-        let alloc = A::try_clone(&this.alloc)?;
+        let alloc = A::try_clone(&self.alloc)?;
         // Restore the strong count. The allocation is guaranteed to stay alive
         // because this `Weak` itself pins it. We only bump strong; the weak
         // count already accounts for this handle (it was incremented when the
         // `Weak` was created via `try_downgrade`).
         inner.inc_strong()?;
         Ok(Some(Rc {
-            ptr: this.ptr,
+            ptr: self.ptr,
             alloc,
             _marker: PhantomData,
         }))
@@ -2017,7 +2025,7 @@ impl<T: Debug + ?Sized, A: AllocatorTryClone> Debug for Weak<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         // Mirror std: show the upgraded value if possible, else "<defunct>".
         // Debug must not fail, so any upgrade error is treated as defunct.
-        match Self::try_upgrade(self).ok().flatten() {
+        match self.try_upgrade().ok().flatten() {
             Some(rc) => write!(f, "Weak({rc:?})"),
             None => f.write_str("<defunct>"),
         }
@@ -2109,14 +2117,14 @@ mod tests {
         let weak = Rc::try_downgrade(&rc).unwrap();
         assert_eq!(Rc::weak_count(&rc), 1);
         drop(rc);
-        assert!(Weak::try_upgrade(&weak).unwrap().is_none());
+        assert!(weak.try_upgrade().unwrap().is_none());
     }
 
     #[test]
     fn weak_upgrade_restores_strong() {
         let rc = Rc::try_new(7).unwrap();
         let weak = Rc::try_downgrade(&rc).unwrap();
-        let upgraded = Weak::try_upgrade(&weak).unwrap().unwrap();
+        let upgraded = weak.try_upgrade().unwrap().unwrap();
         assert_eq!(Rc::strong_count(&upgraded), 2);
         assert_eq!(*upgraded, 7);
         drop(upgraded);
@@ -2155,8 +2163,8 @@ mod tests {
         let w2 = w1.try_clone().unwrap();
         assert_eq!(Rc::weak_count(&rc), 2);
         drop(rc);
-        assert!(Weak::try_upgrade(&w1).unwrap().is_none());
-        assert!(Weak::try_upgrade(&w2).unwrap().is_none());
+        assert!(w1.try_upgrade().unwrap().is_none());
+        assert!(w2.try_upgrade().unwrap().is_none());
     }
 
     #[test]
@@ -2225,7 +2233,7 @@ mod tests {
         let weak = Rc::try_downgrade(&rc).unwrap();
         assert_eq!(Rc::weak_count(&rc), 1);
         drop(rc);
-        assert!(Weak::try_upgrade(&weak).unwrap().is_none());
+        assert!(weak.try_upgrade().unwrap().is_none());
     }
 
     // Note: Direct unsized coercion from Rc<Concrete> to Rc<dyn Trait> is not
@@ -2330,7 +2338,7 @@ mod tests {
         // The weak handle must still be valid (block not freed): upgrading
         // returns None because strong is 0, but accessing the weak does not
         // trigger a use-after-free. Dropping it now frees the block.
-        assert!(Weak::try_upgrade(&weak).unwrap().is_none());
+        assert!(weak.try_upgrade().unwrap().is_none());
         drop(weak);
     }
 
@@ -2348,7 +2356,7 @@ mod tests {
         // A freshly constructed `Weak` refers to no allocation, so upgrading it
         // must always yield `None`.
         let w: Weak<i32> = Weak::new();
-        assert!(Weak::try_upgrade(&w).unwrap().is_none());
+        assert!(w.try_upgrade().unwrap().is_none());
     }
 
     #[test]
@@ -2368,11 +2376,11 @@ mod tests {
         // Both infallible constructors produce an equivalent dangling weak.
         let a: Weak<i32> = Default::default();
         let b: Weak<i32> = Weak::new();
-        assert!(Weak::try_upgrade(&a).unwrap().is_none());
-        assert!(Weak::try_upgrade(&b).unwrap().is_none());
+        assert!(a.try_upgrade().unwrap().is_none());
+        assert!(b.try_upgrade().unwrap().is_none());
         // And the fallible twin agrees.
         let c: Weak<i32> = TryDefault::try_default().unwrap();
-        assert!(Weak::try_upgrade(&c).unwrap().is_none());
+        assert!(c.try_upgrade().unwrap().is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -2418,7 +2426,7 @@ mod tests {
         assert_eq!(Rc::strong_count(&returned), 1);
         // Dropping the strong leaves the weak pointing at a dead block.
         drop(returned);
-        assert!(Weak::try_upgrade(&weak).unwrap().is_none());
+        assert!(weak.try_upgrade().unwrap().is_none());
         drop(weak);
     }
 
@@ -2475,7 +2483,7 @@ mod tests {
 
     #[test]
     fn unwrap_or_try_clone_give_back_shared_clones_value() {
-        // Shared ownership: cannot move out, so the value is cloned instead.
+        // Sole ownership: cannot move out, so the value is cloned instead.
         // Both handles remain valid and point at the same allocation.
         let rc = Rc::try_new(88i32).unwrap();
         let rc2 = rc.try_clone().unwrap();
@@ -2485,5 +2493,81 @@ mod tests {
         assert_eq!(*rc2, 88);
         assert_eq!(Rc::strong_count(&rc2), 1);
         drop(rc2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Raw-pointer provenance / sentinel semantics
+    // -----------------------------------------------------------------------
+
+    /// `Rc::as_ptr` must hand back a pointer with write provenance rooted in
+    /// the live allocation, so that a sole owner can legally cast it to
+    /// `*mut T` and mutate the payload in place (manual-write scenarios such as
+    /// `ptr::write` through the raw pointer). Under Miri this proves the data
+    /// word was derived from the allocation rather than fabricated; on native
+    /// builds it proves the roundtrip works end-to-end.
+    #[test]
+    fn rc_as_ptr_write_provenance_manual_write() {
+        let rc = Rc::try_new(42u64).unwrap();
+        let p: *const u64 = Rc::as_ptr(&rc);
+        // Cast away constness — only sound because we hold the sole strong
+        // reference (strong == 1, weak == 0) and the pointer's provenance
+        // covers the payload slot.
+        let mut_p = p as *mut u64;
+        unsafe {
+            ptr::write(mut_p, 7);
+        }
+        assert_eq!(*rc, 7);
+        // Overwrite again via the same pointer to confirm repeated use is fine.
+        unsafe {
+            ptr::write_volatile(mut_p, 9);
+        }
+        assert_eq!(*rc, 9);
+    }
+
+    /// Same guarantee for unsized payloads: the fat pointer returned by
+    /// `Rc::as_ptr` must be writable through its data word while metadata
+    /// (the slice length) is preserved.
+    #[test]
+    fn rc_as_ptr_write_provenance_unsized_slice() {
+        let arr = [1u8, 2, 3];
+        let rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let p: *const [u8] = Rc::as_ptr(&rc);
+        let mut_p = p as *mut [u8];
+        unsafe {
+            (*mut_p)[1] = 20;
+        }
+        assert_eq!(&*rc, [1, 20, 3]);
+    }
+
+    /// A `Weak` produced by [`Weak::new`] never referred to an allocation, so
+    /// `as_ptr` must return the deliberately misaligned dangling sentinel
+    /// (`usize::MAX`) rather than deriving one from a real block. No valid
+    /// allocation address can equal the sentinel, which makes "was this weak
+    /// ever attached?" decidable by pure pointer comparison.
+    #[test]
+    fn weak_as_ptr_dangling_returns_sentinel() {
+        let w: Weak<i32> = Weak::new();
+        let p = w.as_ptr();
+        assert_eq!(p.addr(), usize::MAX);
+        // The sentinel is misaligned relative to any non-ZST payload, so it
+        // can never alias a real allocation.
+        assert_ne!(p.addr() % align_of::<i32>(), 0);
+    }
+
+    /// Once the last strong reference drops, a still-live `Weak` keeps the
+    /// block pinned but the payload is gone: `as_ptr` must NOT return the
+    /// sentinel (this weak WAS attached to a real allocation), and the
+    /// address must not be dereferenced. We verify the address differs from
+    /// the sentinel and that upgrade reports no strong references.
+    #[test]
+    fn weak_as_ptr_after_last_strong_is_not_sentinel() {
+        let rc = Rc::try_new(1i32).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        drop(rc);
+        let p = weak.as_ptr();
+        // This weak did refer to a real allocation, so its data word is the
+        // genuine (now dead) payload address, not the sentinel.
+        assert_ne!(p.addr(), usize::MAX);
+        assert!(weak.try_upgrade().unwrap().is_none());
     }
 }

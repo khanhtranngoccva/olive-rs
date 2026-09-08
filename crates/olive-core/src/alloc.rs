@@ -36,11 +36,12 @@
 
 extern crate alloc;
 
+use crate::mem::MaybeUninitUnsized;
+use crate::try_traits::try_clone::TryClone;
 use core::ptr::NonNull;
 
 // Borrow the stable layout API from `core` instead of reimplementing it.
 pub use crate::alloc_errors::AllocError;
-use crate::try_traits::try_clone::TryClone;
 pub use core::alloc::{Layout, LayoutError};
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -552,17 +553,23 @@ pub trait LayoutExt {
     /// Computes the layout of the value pointed to by `ptr`, without requiring
     /// the pointee to be initialized.
     ///
-    /// This is the stable shim for [`Layout::for_value_raw`] (stabilized in 1.99).
-    /// On stable, it delegates to [`Layout::for_value`] via a
-    /// reference formed from the pointer.
+    /// This is the stable but limited shim for [`Layout::for_value_raw`]
+    /// (stabilized in 1.99). On stable, it delegates to [`Layout::for_value`]
+    /// via an [`MaybeUninitUnsized`] reference formed from the pointer.
+    ///
+    /// This is meant to be [`Layout::for_value`] that is semantically sound for
+    /// uninitialized pointers. For example, one can use this function to determine
+    /// the layout of the memory block to deallocate. Due to safety limitations, it 
+    /// is not suitable for all use cases of [`Layout::for_value_raw`].
     ///
     /// # Safety
     ///
-    /// The pointer must be properly aligned and carry correct metadata for the
-    /// type `T` (slice length, vtable, etc.). It does **not** need to point to
-    /// initialized memory.
-    ///
-    /// See [`Layout::for_value_raw`] for detailed notes.
+    /// - The pointer must be properly aligned, non-null and carry correct metadata
+    ///   for the type `T` (slice length, vtable, etc.). If `T` is not a ZST, it must 
+    ///   also point to valid memory.
+    /// - It does **not** need to point to initialized memory.
+    /// - The memory must not be mutated during the call.
+    /// - It must satisfy other requirements of [`Layout::for_value_raw`].
     unsafe fn for_value_pointer<T: ?Sized>(ptr: *const T) -> Layout;
 }
 
@@ -584,11 +591,8 @@ impl LayoutExt for Layout {
         }
         #[cfg(not(unstable_features))]
         {
-            // SAFETY: precondition from the caller. No bytes from the pointer is read.
-            unsafe {
-                use crate::mem::MaybeUninitUnsized;
-                Layout::for_value(&*(ptr as *const MaybeUninitUnsized<T>))
-            }
+            // SAFETY: precondition from the caller.
+            unsafe { Layout::for_value(MaybeUninitUnsized::from_ptr(ptr)) }
         }
     }
 }
