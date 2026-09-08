@@ -580,7 +580,7 @@ pub const fn layout_dangling_pointer(layout: Layout) -> NonNull<u8> {
 #[must_use]
 #[inline]
 pub const fn layout_padding_need_for(layout: Layout, align: usize) -> usize {
-    assert!(align.is_power_of_two(), "alignment must be a power of two");
+    assert!(align.is_power_of_two(), "alignment is not a power of two");
     // layout.size % align, but since align is a power of 2,
     // binary AND with align - 1 is equivalent (strips non-modulo bytes).
     #[allow(
