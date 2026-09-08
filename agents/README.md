@@ -35,7 +35,8 @@ Across every task, four rules dominate everything else:
    assert the type's invariants under failure, not just happy-path outputs. See
    [`TESTING.md`](./TESTING.md).
 4. **Keep documentation concise, consistent, and marked** — with particular care
-   around safety text. See [`DOCUMENTATION.md`](./DOCUMENTATION.md).
+   around safety text. Documentation that LLMs add *must* be marked LLM-generated. 
+   See [`DOCUMENTATION.md`](./DOCUMENTATION.md).
 
 When in doubt about intent, defer to the existing code; when in doubt about
 correctness, defer to Miri and the leak sanitizer.

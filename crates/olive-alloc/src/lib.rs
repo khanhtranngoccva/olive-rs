@@ -9,7 +9,7 @@
 //! - [`vec`] — fallible `Vec`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
 //! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap`.
-//! - [`rc`] / [`arc`] — reference-counted pointers with fallible construction.
+//! - [`rc`] / [`sync::Arc`] — reference-counted pointers with fallible construction.
 //!
 //! TBA: these items are still being landed.
 #![no_std]
@@ -28,6 +28,7 @@ pub mod boxed;
 mod raw_vec;
 pub mod rc;
 pub mod string;
+pub mod sync;
 pub mod vec;
 
 #[cfg(test)]
