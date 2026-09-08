@@ -107,6 +107,29 @@ impl core::error::Error for TryRcError {
     }
 }
 
+/// Error returned by fallible reference-count operations that only mutate a
+/// counter.
+///
+/// Indicates a logic error (unbalanced inc/dec) or adversarial misuse of the 
+/// raw pointer APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TryRcOutOfBoundsError;
+
+impl Display for TryRcOutOfBoundsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("reference count out of bounds")
+    }
+}
+
+impl core::error::Error for TryRcOutOfBoundsError {}
+
+impl From<TryRcOutOfBoundsError> for TryRcError {
+    #[inline]
+    fn from(_: TryRcOutOfBoundsError) -> Self {
+        Self::OutOfBounds
+    }
+}
+
 /// Error returned by [`Rc::try_new_cyclic`] and [`Rc::try_new_cyclic_in`],
 /// or any future error
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,17 +212,17 @@ impl<T: ?Sized> RcInner<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the count is already at
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already at
     /// `usize::MAX`.
     #[inline]
-    pub(crate) fn inc_strong(&self) -> Result<(), TryRcError> {
+    pub(crate) fn inc_strong(&self) -> Result<(), TryRcOutOfBoundsError> {
         let cur = self.strong.get();
         match cur.checked_add(1) {
             Some(next) => {
                 self.strong.set(next);
                 Ok(())
             }
-            None => Err(TryRcError::OutOfBounds),
+            None => Err(TryRcOutOfBoundsError),
         }
     }
 
@@ -207,17 +230,17 @@ impl<T: ?Sized> RcInner<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the count is already zero
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already zero
     /// (unbalanced decrement).
     #[inline]
-    pub(crate) fn dec_strong(&self) -> Result<(), TryRcError> {
+    pub(crate) fn dec_strong(&self) -> Result<(), TryRcOutOfBoundsError> {
         let cur = self.strong.get();
         match cur.checked_sub(1) {
             Some(next) => {
                 self.strong.set(next);
                 Ok(())
             }
-            None => Err(TryRcError::OutOfBounds),
+            None => Err(TryRcOutOfBoundsError),
         }
     }
 
@@ -225,17 +248,17 @@ impl<T: ?Sized> RcInner<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the count is already at
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already at
     /// `usize::MAX`.
     #[inline]
-    pub(crate) fn inc_weak(&self) -> Result<(), TryRcError> {
+    pub(crate) fn inc_weak(&self) -> Result<(), TryRcOutOfBoundsError> {
         let cur = self.weak.get();
         match cur.checked_add(1) {
             Some(next) => {
                 self.weak.set(next);
                 Ok(())
             }
-            None => Err(TryRcError::OutOfBounds),
+            None => Err(TryRcOutOfBoundsError),
         }
     }
 }
@@ -270,17 +293,17 @@ impl WeakInner<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the count is already at
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already at
     /// `usize::MAX`.
     #[inline]
-    fn inc_strong(&self) -> Result<(), TryRcError> {
+    fn inc_strong(&self) -> Result<(), TryRcOutOfBoundsError> {
         let cur = self.strong.get();
         match cur.checked_add(1) {
             Some(next) => {
                 self.strong.set(next);
                 Ok(())
             }
-            None => Err(TryRcError::OutOfBounds),
+            None => Err(TryRcOutOfBoundsError),
         }
     }
 
@@ -288,17 +311,17 @@ impl WeakInner<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the count is already zero
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already zero
     /// (unbalanced decrement).
     #[inline]
-    fn dec_weak(&self) -> Result<(), TryRcError> {
+    fn dec_weak(&self) -> Result<(), TryRcOutOfBoundsError> {
         let cur = self.weak.get();
         match cur.checked_sub(1) {
             Some(next) => {
                 self.weak.set(next);
                 Ok(())
             }
-            None => Err(TryRcError::OutOfBounds),
+            None => Err(TryRcOutOfBoundsError),
         }
     }
 }
@@ -1410,7 +1433,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the strong count would overflow
+    /// Returns [`TryRcOutOfBoundsError`] if the strong count would overflow
     /// `usize`.
     ///
     /// # Safety
@@ -1421,7 +1444,10 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// - `ptr` must point to a block allocated by the `alloc`.
     /// - The `Rc` must be valid - the strong count must not be 0.
     #[inline]
-    pub unsafe fn increment_strong_count_in(ptr: *const T, alloc: &A) -> Result<(), TryRcError> {
+    pub unsafe fn increment_strong_count_in(
+        ptr: *const T,
+        alloc: &A,
+    ) -> Result<(), TryRcOutOfBoundsError> {
         // NOTE: taking `alloc` by reference lets us wrap the temporary `Rc` in
         // `ManuallyDrop` without leaking it, and avoids paying for an allocator
         // clone that this operation does not need.
@@ -1431,7 +1457,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         let me = unsafe { ManuallyDrop::new(Rc::from_raw_in(ptr, &alloc)) };
         let inner = Rc::inner(&me);
         if inner.strong() == 0 {
-            return Err(TryRcError::OutOfBounds);
+            return Err(TryRcOutOfBoundsError);
         }
         inner.inc_strong()?;
         Ok(())
@@ -1443,7 +1469,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the strong count is already zero
+    /// Returns [`TryRcOutOfBoundsError`] if the strong count is already zero
     /// (unbalanced decrement).
     ///
     /// # Safety
@@ -1455,7 +1481,10 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// - The `Rc` must be valid - the strong count must not be 0.
     /// - This method can be used to free the [`Rc`] and its backing storage.
     #[inline]
-    pub unsafe fn decrement_strong_count_in(ptr: *const T, alloc: &A) -> Result<(), TryRcError> {
+    pub unsafe fn decrement_strong_count_in(
+        ptr: *const T,
+        alloc: &A,
+    ) -> Result<(), TryRcOutOfBoundsError> {
         // NOTE: taking `alloc` by reference lets us wrap the temporary `Rc` in
         // `ManuallyDrop` without leaking it, and avoids paying for an allocator
         // clone that this operation does not need.
@@ -1479,7 +1508,7 @@ impl<T: ?Sized> Rc<T, Global> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the strong count would overflow
+    /// Returns [`TryRcOutOfBoundsError`] if the strong count would overflow
     /// `usize`.
     ///
     /// # Safety
@@ -1489,7 +1518,9 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - `ptr` must point to a block allocated by the global allocator.
     /// - The `Rc` must be valid - the strong count must not be 0.
     #[inline]
-    pub unsafe fn increment_strong_count(ptr: *const T) -> Result<(), TryRcError> {
+    pub unsafe fn increment_strong_count(
+        ptr: *const T,
+    ) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation.
         unsafe { Self::increment_strong_count_in(ptr, &Global) }
     }
@@ -1499,7 +1530,7 @@ impl<T: ?Sized> Rc<T, Global> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryRcError::OutOfBounds`] if the strong count is already zero
+    /// Returns [`TryRcOutOfBoundsError`] if the strong count is already zero
     /// (unbalanced decrement).
     ///
     /// # Safety
@@ -1511,7 +1542,9 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - This method can be called to release the Rc and backing storage, similar to
     ///   calling [`Rc<T>::from_raw`] and dropping the value.
     #[inline]
-    pub unsafe fn decrement_strong_count(ptr: *const T) -> Result<(), TryRcError> {
+    pub unsafe fn decrement_strong_count(
+        ptr: *const T,
+    ) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
         // the global allocator.
         unsafe { Self::decrement_strong_count_in(ptr, &Global) }
@@ -1543,7 +1576,7 @@ impl<T: ?Sized, A: AllocatorTryClone> Rc<T, A> {
     pub fn try_downgrade(this: &Self) -> Result<Weak<T, A>, TryRcError> {
         let alloc = A::try_clone(&this.alloc)?;
         let inner = Self::inner(this);
-        inner.inc_weak()?;
+        inner.inc_weak().map_err(TryRcError::from)?;
         Ok(Weak {
             ptr: this.ptr,
             alloc,
@@ -1945,7 +1978,7 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
         // because this `Weak` itself pins it. We only bump strong; the weak
         // count already accounts for this handle (it was incremented when the
         // `Weak` was created via `try_downgrade`).
-        inner.inc_strong()?;
+        inner.inc_strong().map_err(TryRcError::from)?;
         Ok(Some(Rc {
             ptr: self.ptr,
             alloc,
