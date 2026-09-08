@@ -43,7 +43,7 @@ use core::ops::Deref;
 use core::pin::Pin;
 
 use crate::alloc::{AllocError, Allocator, Global, Layout, LayoutError, StaticAllocator};
-use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::{AllocatorTryClone, LayoutExt};
 use olive_core::ptr::PointerExt;
 use olive_core::ptr::{self, NonNull};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
@@ -238,6 +238,51 @@ impl<T: ?Sized> RcInner<T> {
             None => Err(TryRcError::OutOfBounds),
         }
     }
+}
+
+/// Helper type to allow accessing the reference counts without
+/// making any assertions about the data field.
+///
+/// When a `Weak` outlives all `Rc`s, the payload (`value`) has been dropped
+/// in-place but the allocation remains alive (pinned by the weak count). A
+/// `&RcInner<T>` covering the whole struct would assert validity of the
+/// already-dropped payload. `WeakInner` holds only references to the two
+/// counter cells, which are always valid while the allocation exists.
+pub(crate) struct WeakInner<'a> {
+    strong: &'a Cell<usize>,
+    weak: &'a Cell<usize>,
+}
+
+impl WeakInner<'_> {
+    /// Reads the current strong count.
+    #[inline]
+    fn strong(&self) -> usize {
+        self.strong.get()
+    }
+
+    /// Reads the current weak count.
+    #[inline]
+    fn weak(&self) -> usize {
+        self.weak.get()
+    }
+
+    /// Increments the strong count by one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryRcError::OutOfBounds`] if the count is already at
+    /// `usize::MAX`.
+    #[inline]
+    fn inc_strong(&self) -> Result<(), TryRcError> {
+        let cur = self.strong.get();
+        match cur.checked_add(1) {
+            Some(next) => {
+                self.strong.set(next);
+                Ok(())
+            }
+            None => Err(TryRcError::OutOfBounds),
+        }
+    }
 
     /// Decrements the weak count by one.
     ///
@@ -246,7 +291,7 @@ impl<T: ?Sized> RcInner<T> {
     /// Returns [`TryRcError::OutOfBounds`] if the count is already zero
     /// (unbalanced decrement).
     #[inline]
-    pub(crate) fn dec_weak(&self) -> Result<(), TryRcError> {
+    fn dec_weak(&self) -> Result<(), TryRcError> {
         let cur = self.weak.get();
         match cur.checked_sub(1) {
             Some(next) => {
@@ -1829,19 +1874,32 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
         ptr::addr_eq(this.ptr.as_ptr(), other.ptr.as_ptr())
     }
 
-    /// Returns a shared reference to the allocation's internal [`RcInner`]
-    /// header, or `None` if this handle is dangling (constructed via
-    /// [`Weak::new`]) or the strong count has already reached zero.
-    // FIXME: construct a temporary WeakInner<'_> that contains only the cells.
-    // This prevents dereferencing over a deallocated RcInner.
+    /// Returns a [`WeakInner`] handle to the allocation's reference-count
+    /// cells, or `None` if this handle is dangling (constructed via
+    /// [`Weak::new`]).
+    ///
+    /// We are careful to *not* create a reference covering the "data" field, as
+    /// the field may have been dropped in-place (e.g., when the last `Rc` was
+    /// dropped while this `Weak` still pins the allocation). Only the two
+    /// counter cells are referenced, which remain valid for the lifetime of the
+    /// allocation.
     #[inline]
-    pub(crate) fn inner(&self) -> Option<&RcInner<T>> {
+    pub(crate) fn inner(&self) -> Option<WeakInner<'_>> {
         if is_dangling_weak(self.ptr.as_ptr()) {
-            return None;
+            None
+        } else {
+            // SAFETY: a non-dangling `Weak` always owns a live allocation whose
+            // counter cells are valid for reads/writes while `self` exists. The
+            // payload (`value`) may have been dropped, but we never form a
+            // reference to it here.
+            Some(unsafe {
+                let ptr = self.ptr.as_ptr();
+                WeakInner {
+                    strong: &(*ptr).strong,
+                    weak: &(*ptr).weak,
+                }
+            })
         }
-        // SAFETY: a non-dangling `Weak` always owns a live allocation whose
-        // header is valid for reads while `self` exists.
-        Some(unsafe { &*self.ptr.as_ptr() })
     }
 }
 
@@ -1866,12 +1924,11 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
         // A dangling weak (from `Weak::new`) never referred to an allocation,
         // so it can never be upgraded. Checking this first also avoids ever
         // dereferencing the sentinel address below.
-        let inner_ref = match this.inner() {
+        let inner = match this.inner() {
             Some(i) => i,
             None => return Ok(None),
         };
-        let strong = inner_ref.strong();
-        if strong == 0 {
+        if inner.strong() == 0 {
             return Ok(None);
         }
 
@@ -1880,7 +1937,7 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
         // because this `Weak` itself pins it. We only bump strong; the weak
         // count already accounts for this handle (it was incremented when the
         // `Weak` was created via `try_downgrade`).
-        inner_ref.inc_strong()?;
+        inner.inc_strong()?;
         Ok(Some(Rc {
             ptr: this.ptr,
             alloc,
@@ -1915,15 +1972,10 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
         // A dangling weak (from `Weak::new`) owns no allocation, so there is
         // nothing to decrement or free — return immediately. `inner()` folds
         // the sentinel check into one call.
-        if self.inner().is_none() {
-            return;
-        }
-
-        // Mutate the counters through a unique `&mut` re-borrow of the already
-        // validated pointer. Handing out a shared `&` here and then writing
-        // through it would alias that stale read-tag against our own write,
-        // which Stacked Borrows rejects; a fresh exclusive borrow avoids it.
-        let inner: &mut RcInner<T> = unsafe { &mut *self.ptr.as_ptr() };
+        let inner = match self.inner() {
+            Some(i) => i,
+            None => return,
+        };
 
         // Decrement the weak count. If this was the last reference of any kind
         // (strong already zero, and now weak hits zero), free the allocation.
@@ -1936,14 +1988,10 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
         // left it pinned by at least one `Weak`). So `weak == 0` is sufficient
         // to decide whether to deallocate.
         if is_last_ref(inner.weak()) {
-            // Reconstruct the exact layout the block was allocated with: derive
-            // it from the payload's value layout, mirroring the allocation site
-            // (`try_new_for_value`). Reading through `inner.value` (rather than
-            // re-casting the raw pointer) keeps the access tied to the same
-            // exclusive borrow used above.
-            let value_layout = Layout::for_value(&inner.value);
-            let (layout, _) = rc_inner_layout_for_value_layout(value_layout)
-                .expect("Rc header/payload layout overflow");
+            // SAFETY: `ptr` carries correct pointer metadata for `T`; the pointee
+            // may be uninitialized (already dropped) but we only need its size
+            // and alignment, which live in the fat pointer.
+            let layout = unsafe { Layout::for_value_pointer(self.ptr.as_ptr()) };
             // SAFETY: the block was allocated with exactly this layout; the
             // header alone guarantees a non-zero size.
             unsafe {
@@ -2346,11 +2394,10 @@ mod tests {
     #[test]
     fn try_unwrap_shared_returns_handle_back() {
         // Shared ownership: cannot move out, so the whole input handle is
-        // handed back alongside an error and the allocation stays intact.
+        // handed back as the Err variant and the allocation stays intact.
         let rc = Rc::try_new(42i32).unwrap();
         let rc2 = rc.try_clone().unwrap();
-        let err = Rc::try_unwrap(rc).unwrap_err();
-        let (returned, _why) = err;
+        let returned = Rc::try_unwrap(rc).unwrap_err();
         // The returned handle still points at the same live allocation.
         assert!(Rc::ptr_eq(&returned, &rc2));
         assert_eq!(*returned, 42);
@@ -2366,8 +2413,7 @@ mod tests {
         // move out even though there is only one strong reference.
         let rc = Rc::try_new(7u8).unwrap();
         let weak = Rc::try_downgrade(&rc).unwrap();
-        let err = Rc::try_unwrap(rc).unwrap_err();
-        let (returned, _why) = err;
+        let returned = Rc::try_unwrap(rc).unwrap_err();
         assert_eq!(*returned, 7);
         assert_eq!(Rc::strong_count(&returned), 1);
         // Dropping the strong leaves the weak pointing at a dead block.
@@ -2398,20 +2444,6 @@ mod tests {
     }
 
     #[test]
-    fn try_unwrap_give_back_shared_returns_handle_back() {
-        // Shared ownership: the whole input handle comes back unchanged.
-        let rc = Rc::try_new(6i32).unwrap();
-        let rc2 = rc.try_clone().unwrap();
-        let err = Rc::try_unwrap_give_back(rc).unwrap_err();
-        let (returned, _why) = err;
-        assert!(Rc::ptr_eq(&returned, &rc2));
-        assert_eq!(*returned, 6);
-        assert_eq!(Rc::strong_count(&returned), 2);
-        drop(returned);
-        drop(rc2);
-    }
-
-    #[test]
     fn unwrap_or_try_clone_sole_owner_moves_out() {
         // Sole owner: consumes the handle and moves the payload out directly.
         let rc = Rc::try_new(1234i32).unwrap();
@@ -2420,17 +2452,16 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_or_try_clone_shared_returns_handle_back() {
-        // Shared ownership: cannot move out, so the whole input handle comes
-        // back alongside an error and the allocation stays intact.
+    fn unwrap_or_try_clone_shared_clones_value() {
+        // Shared ownership: cannot move out, so the value is cloned instead.
+        // Both handles remain valid and point at the same allocation.
         let rc = Rc::try_new(99i32).unwrap();
         let rc2 = rc.try_clone().unwrap();
-        let err = Rc::unwrap_or_try_clone(rc).unwrap_err();
-        let (returned, _why) = err;
-        assert!(Rc::ptr_eq(&returned, &rc2));
-        assert_eq!(*returned, 99);
-        assert_eq!(Rc::strong_count(&returned), 2);
-        drop(returned);
+        let val = Rc::unwrap_or_try_clone(rc).unwrap();
+        assert_eq!(val, 99);
+        // The original allocation is untouched.
+        assert_eq!(*rc2, 99);
+        assert_eq!(Rc::strong_count(&rc2), 1);
         drop(rc2);
     }
 
@@ -2443,16 +2474,16 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_or_try_clone_give_back_shared_returns_handle_back() {
-        // Shared ownership: the whole input handle comes back unchanged.
+    fn unwrap_or_try_clone_give_back_shared_clones_value() {
+        // Shared ownership: cannot move out, so the value is cloned instead.
+        // Both handles remain valid and point at the same allocation.
         let rc = Rc::try_new(88i32).unwrap();
         let rc2 = rc.try_clone().unwrap();
-        let err = Rc::unwrap_or_try_clone_give_back(rc).unwrap_err();
-        let (returned, _why) = err;
-        assert!(Rc::ptr_eq(&returned, &rc2));
-        assert_eq!(*returned, 88);
-        assert_eq!(Rc::strong_count(&returned), 2);
-        drop(returned);
+        let val = Rc::unwrap_or_try_clone_give_back(rc).unwrap();
+        assert_eq!(val, 88);
+        // The original allocation is untouched.
+        assert_eq!(*rc2, 88);
+        assert_eq!(Rc::strong_count(&rc2), 1);
         drop(rc2);
     }
 }

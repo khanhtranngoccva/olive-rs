@@ -57,6 +57,9 @@
 // Used by `ptr::PointerExt::cast_with_metadata`, which needs `set_ptr_value` for
 // its Miri-clean `with_metadata_of` path.
 #![cfg_attr(unstable_features, feature(set_ptr_value))]
+// Used by `alloc::LayoutExt::for_value_pointer`, which needs `layout_for_ptr` for
+// its Miri-clean `for_value_raw` path.
+#![cfg_attr(unstable_features, feature(layout_for_ptr))]
 // Clippy configuration: pedantic as a baseline, with arithmetic side effects
 // denied (library code must use checked/wrapping/saturating ops explicitly).
 // Scoped to non-test builds so test helpers aren't held to the same standard.

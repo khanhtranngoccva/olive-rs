@@ -540,12 +540,30 @@ pub trait LayoutExt {
     /// before a field requiring alignment `align` may begin at an offset that is
     /// a multiple of `align`.
     ///
+    /// This is the stable shim for [`Layout::padding_needed_for`].
+    ///
     /// # Panics
     ///
     /// Panics if `align` is zero or not a power of two — i.e. not a valid
     /// alignment — mirroring the precondition every `Layout` constructor
     /// enforces.
     fn padding_need_for(&self, align: usize) -> usize;
+
+    /// Computes the layout of the value pointed to by `ptr`, without requiring
+    /// the pointee to be initialized.
+    ///
+    /// This is the stable shim for [`Layout::for_value_raw`] (stabilized in 1.99).
+    /// On stable, it delegates to [`Layout::for_value`] via a
+    /// reference formed from the pointer.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must be properly aligned and carry correct metadata for the
+    /// type `T` (slice length, vtable, etc.). It does **not** need to point to
+    /// initialized memory.
+    /// 
+    /// See [`Layout::for_value_raw`] for detailed notes.
+    unsafe fn for_value_pointer<T: ?Sized>(ptr: *const T) -> Layout;
 }
 
 impl LayoutExt for Layout {
@@ -555,6 +573,20 @@ impl LayoutExt for Layout {
 
     fn padding_need_for(&self, align: usize) -> usize {
         layout_padding_need_for(*self, align)
+    }
+
+    #[inline]
+    unsafe fn for_value_pointer<T: ?Sized>(ptr: *const T) -> Layout {
+        #[cfg(unstable_features)]
+        {
+            // SAFETY: precondition from the caller.
+            unsafe { Layout::for_value_raw(ptr) }
+        }
+        #[cfg(not(unstable_features))]
+        {
+            // SAFETY: precondition from the caller. No bytes from the pointer is read.
+            unsafe { Layout::for_value(&*ptr) }
+        }
     }
 }
 

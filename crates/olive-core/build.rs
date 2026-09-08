@@ -17,11 +17,8 @@ fn main() {
     // Declare our custom cfg so the compiler doesn't warn about it.
     println!("cargo:rustc-check-cfg=cfg(unstable_features)");
 
-    // Miri guard (enforced at build time, not via compile_error! in source):
-    // The stable `stable_graft` path in `ptr::PointerExt` constructs pointers by
-    // writing raw address words into `MaybeUninit` slots. This fallback approach
-    // does not run under Miri. Running this crate under a *genuine* Miri invocation
-    // therefore requires `unstable_features` to enable use of `with_metadata_of`.
+    // Miri guard: Running this crate under a *genuine* Miri invocation requires
+    // `unstable_features` to enable use of strict Miri implementations.
     // We detect a real Miri run here (via MIRI_SYSROOT / the miri driver) rather
     // than relying on cfg(miri), because rust-analyzer sets cfg(miri) by default
     // during analysis while leaving unstable_features unset — a source-level
