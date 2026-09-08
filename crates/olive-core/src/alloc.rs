@@ -561,7 +561,7 @@ pub trait LayoutExt {
     /// The pointer must be properly aligned and carry correct metadata for the
     /// type `T` (slice length, vtable, etc.). It does **not** need to point to
     /// initialized memory.
-    /// 
+    ///
     /// See [`Layout::for_value_raw`] for detailed notes.
     unsafe fn for_value_pointer<T: ?Sized>(ptr: *const T) -> Layout;
 }
@@ -585,7 +585,10 @@ impl LayoutExt for Layout {
         #[cfg(not(unstable_features))]
         {
             // SAFETY: precondition from the caller. No bytes from the pointer is read.
-            unsafe { Layout::for_value(&*ptr) }
+            unsafe {
+                use crate::mem::MaybeUninitUnsized;
+                Layout::for_value(&*(ptr as *const MaybeUninitUnsized<T>))
+            }
         }
     }
 }

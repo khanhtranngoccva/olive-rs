@@ -47,3 +47,20 @@ pub const unsafe fn transmute_unchecked<T, U>(value: T) -> U {
     // SAFETY: Caller guarantees correct representation.
     unsafe { ManuallyDrop::into_inner(transmute.dst) }
 }
+
+/// A shim for [`core::mem::MaybeUninit`] that works with unsized types (`?Sized`).
+///
+/// [`core::mem::MaybeUninit<T>`] requires `T: Sized`, so it cannot represent an
+/// uninitialized value of a dynamically sized type (a slice, `dyn Trait`, ...).
+///
+/// This type fills that gap: it pairs an uninit placeholder with a
+/// [`ManuallyDrop<T>`]-flavored payload and is `#[repr(transparent)]` over it,
+/// so it has exactly the layout of `T` itself — including its metadata — even
+/// when `T` is unsized. A fat pointer of type `*const T` therefore casts
+/// losslessly to `*const MaybeUninit<T>`.
+#[repr(transparent)]
+pub struct MaybeUninitUnsized<T: ?Sized> {
+    /// Zero-sized payload carrying `T`'s variance and layout identity via
+    /// [`ManuallyDrop<T>`].
+    _inner: ManuallyDrop<T>,
+}
