@@ -10,7 +10,8 @@
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
 //! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap`.
 //! - [`rc`] / [`arc`] — reference-counted pointers with fallible construction.
-
+//!
+//! TBA: these items are still being landed.
 #![no_std]
 #![cfg_attr(not(test), deny(clippy::arithmetic_side_effects))]
 // Require every `unsafe fn` / `unsafe impl` to carry a `# Safety` doc section.
