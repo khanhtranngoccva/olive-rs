@@ -124,18 +124,11 @@ impl_try_clone_copy!(bool, char, ());
 // tokens at compile time and adds no runtime dependency).
 olive_macros::try_clone_tuples!(12);
 
-// Immutable references to slices / str are just pointer copies — no allocation.
-impl<T> TryClone for &[T] {
+// Immutable references are always cloneable.
+impl<T: ?Sized> TryClone for &T {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        Ok(*self)
-    }
-}
-
-impl TryClone for &str {
-    #[inline]
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        Ok(*self)
+        Ok(self)
     }
 }
 

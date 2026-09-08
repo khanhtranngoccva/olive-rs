@@ -513,6 +513,8 @@ unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
 /// described above for their [`TryClone::try_clone`] implementation.
 pub unsafe trait AllocatorTryClone: Allocator + TryClone {}
 
+unsafe impl<A: Allocator + ?Sized> AllocatorTryClone for &A {}
+
 /// Extracts the base `NonNull<u8>` from a fat `NonNull<[u8]>`.
 ///
 /// `NonNull::<T>::as_non_null_ptr` is not yet stable, so we recover the base
@@ -559,13 +561,13 @@ pub trait LayoutExt {
     ///
     /// This is meant to be [`Layout::for_value`] that is semantically sound for
     /// uninitialized pointers. For example, one can use this function to determine
-    /// the layout of the memory block to deallocate. Due to safety limitations, it 
+    /// the layout of the memory block to deallocate. Due to safety limitations, it
     /// is not suitable for all use cases of [`Layout::for_value_raw`].
     ///
     /// # Safety
     ///
     /// - The pointer must be properly aligned, non-null and carry correct metadata
-    ///   for the type `T` (slice length, vtable, etc.). If `T` is not a ZST, it must 
+    ///   for the type `T` (slice length, vtable, etc.). If `T` is not a ZST, it must
     ///   also point to valid memory.
     /// - It does **not** need to point to initialized memory.
     /// - The memory must not be mutated during the call.
