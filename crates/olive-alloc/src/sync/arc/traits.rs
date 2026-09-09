@@ -3,7 +3,7 @@
 //! Covers `Deref`, `TryClone`, `TryDefault`, `Default`, `Debug`, `Display`,
 //! `AsRef`, `Borrow`, and `Pointer`.
 
-use super::pointers;
+use super::pointers::{self, MAX_REFCOUNT};
 use super::{Arc, Weak};
 use core::borrow::Borrow;
 use core::fmt::{self, Debug, Formatter};
@@ -12,6 +12,20 @@ use olive_core::alloc::Allocator;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+
+fn checked_increment(n: usize) -> Option<usize> {
+    if n >= MAX_REFCOUNT {
+        None
+    } else {
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "cannot overflow: guarded by the check above."
+        )]
+        {
+            Some(n + 1)
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Deref (?Sized)
@@ -51,7 +65,7 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Arc<T, A> {
             .fetch_update(
                 core::sync::atomic::Ordering::Relaxed,
                 core::sync::atomic::Ordering::Relaxed,
-                |n| n.checked_add(1),
+                checked_increment,
             )
             .map_err(|_| TryCloneError::Other("strong count out of bounds"))?;
         Ok(Arc {
@@ -84,7 +98,7 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
             .fetch_update(
                 core::sync::atomic::Ordering::Relaxed,
                 core::sync::atomic::Ordering::Relaxed,
-                |n| n.checked_add(1),
+                checked_increment,
             )
             .map_err(|_| TryCloneError::Other("weak count out of bounds"))?;
         Ok(Weak {
@@ -244,6 +258,70 @@ mod tests {
         assert_eq!(Arc::weak_count(&arc), 1);
         drop(w2);
         assert_eq!(Arc::weak_count(&arc), 0);
+    }
+
+    // --- Refcount bound (MAX_REFCOUNT) ----------------------------------------
+
+    #[test]
+    fn try_clone_rejected_when_strong_at_max_refcount() {
+        use super::pointers::MAX_REFCOUNT;
+        let arc = Arc::try_new(1i32).unwrap();
+        // Drive the strong counter to the bound via direct store (safe: sole
+        // handle, no other threads).
+        arc.inner()
+            .strong
+            .store(MAX_REFCOUNT, core::sync::atomic::Ordering::Relaxed);
+        // Clone must be rejected (not saturate): the increment would reach the
+        // reserved `usize::MAX` sentinel.
+        let res = arc.try_clone();
+        assert!(res.is_err());
+        // The counter is unchanged by the rejected attempt.
+        assert_eq!(Arc::strong_count(&arc), MAX_REFCOUNT);
+        // Walk it back down one step; clone now succeeds again.
+        arc.inner()
+            .strong
+            .store(MAX_REFCOUNT - 1, core::sync::atomic::Ordering::Relaxed);
+        let cloned = arc.try_clone().unwrap();
+        assert_eq!(Arc::strong_count(&cloned), MAX_REFCOUNT);
+        drop(cloned);
+        // Restore the strong count after dropping the clone.
+        arc.inner()
+            .strong
+            .store(1, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[test]
+    fn weak_try_clone_rejected_when_weak_at_max_refcount() {
+        use super::pointers::MAX_REFCOUNT;
+        let arc = Arc::try_new(1i32).unwrap();
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        // Drive the weak counter to the bound via direct store (safe: sole
+        // handle, no other threads).
+        arc.inner()
+            .weak
+            .store(MAX_REFCOUNT, core::sync::atomic::Ordering::Relaxed);
+        // Clone must be rejected (not saturate).
+        let res = weak.try_clone();
+        assert!(res.is_err());
+        // The counter is unchanged by the rejected attempt.
+        assert_eq!(
+            arc.inner().weak.load(core::sync::atomic::Ordering::Relaxed),
+            MAX_REFCOUNT
+        );
+        // Walk it back down one step; clone now succeeds again.
+        arc.inner()
+            .weak
+            .store(MAX_REFCOUNT - 1, core::sync::atomic::Ordering::Relaxed);
+        let cloned = weak.try_clone().unwrap();
+        assert_eq!(
+            arc.inner().weak.load(core::sync::atomic::Ordering::Relaxed),
+            MAX_REFCOUNT
+        );
+        drop(cloned);
+        // Restore the weak count after dropping the clone.
+        arc.inner()
+            .weak
+            .store(2, core::sync::atomic::Ordering::Relaxed);
     }
 
     // --- Pointer / AsRef / Borrow ---------------------------------------------

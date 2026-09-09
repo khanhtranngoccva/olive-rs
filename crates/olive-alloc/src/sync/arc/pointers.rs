@@ -172,6 +172,22 @@ pub(crate) const fn dangling_inner_ptr<T: ?Sized>() -> NonNull<ArcInner<T>> {
 }
 
 // ---------------------------------------------------------------------------
+// Refcount cap
+// ---------------------------------------------------------------------------
+
+/// The maximum reference count permitted for either the strong or weak
+/// counter of an [`ArcInner`](super::ArcInner) allocation.
+///
+/// `usize::MAX` is reserved as a sentinel for temporarily "locking" the
+/// weak count, preventing `Arc::downgrade` from racing to create new
+/// `Weak` references. `Arc::is_unique` (which backs `Arc::get_mut`)
+/// needs to observe both the strong and weak counts as indicating
+/// uniqueness in one logical atomic step; since they live in separate
+/// atomic words, it locks the weak count while reading the strong
+/// count to keep the two reads consistent.
+pub(crate) const MAX_REFCOUNT: usize = usize::MAX - 1;
+
+// ---------------------------------------------------------------------------
 // Counter predicates
 // ---------------------------------------------------------------------------
 

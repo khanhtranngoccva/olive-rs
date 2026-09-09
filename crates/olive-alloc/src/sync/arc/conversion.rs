@@ -15,6 +15,7 @@ use crate::alloc::AllocError;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::try_traits::try_clone::TryCloneError;
 
+use super::pointers::MAX_REFCOUNT;
 use super::{Arc, Weak};
 
 // ---------------------------------------------------------------------------
@@ -25,15 +26,17 @@ use super::{Arc, Weak};
 /// [`Weak`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryArcError {
-    /// A counter increment would exceed `usize::MAX` or a decrement would
-    /// underflow below zero.
+    /// A counter mutation was rejected because it would violate the refcount
+    /// invariant: an increment attempted while the counter is already at
+    /// [`MAX_REFCOUNT`](super::pointers::MAX_REFCOUNT) (incrementing further
+    /// would reach the reserved `usize::MAX` sentinel), or a decrement
+    /// attempted on a zero counter.
     ///
-    /// This can arise from a logic error (unbalanced inc/dec), adversarial
-    /// misuse of the raw pointer APIs, or — through the safe API alone — from
-    /// [`core::mem::forget`]ing enough `Arc`s that their skipped `Drop` leaves
-    /// the strong count stranded near `usize::MAX`; any further increment then
-    /// overflows. Such leaks are rare in practice but do make this variant
-    /// reachable without undefined behavior.
+    /// Through the safe API alone, counters are bounded by `MAX_REFCOUNT` and
+    /// increments past that bound are refused, so this variant is only
+    /// reachable via adversarial misuse of the raw pointer APIs
+    /// (`into_raw` / `from_raw`) or a logic error producing unbalanced
+    /// increments/decrements.
     OutOfBounds,
     /// Cloning the allocator handle failed.
     CloneAlloc(TryCloneError),
@@ -88,16 +91,30 @@ impl<T: ?Sized, A: AllocatorTryClone> Arc<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryArcError::OutOfBounds`] if the weak count would overflow
-    /// `usize`, or [`TryArcError::CloneAlloc`] if cloning the allocator handle
-    /// fails.
+    /// Returns [`TryArcError::OutOfBounds`] if the weak counter has reached
+    /// [`MAX_REFCOUNT`](super::pointers::MAX_REFCOUNT) and cannot be incremented
+    /// further without hitting the reserved `usize::MAX` sentinel, or
+    /// [`TryArcError::CloneAlloc`] if cloning the allocator handle fails.
     #[inline]
     pub fn try_downgrade(this: &Self) -> Result<Weak<T, A>, TryArcError> {
         let alloc = A::try_clone(&this.alloc)?;
         let inner = Self::inner(this);
+        // Reject increments once the weak count has reached MAX_REFCOUNT:
+        // `usize::MAX` is reserved as a sentinel, so the counter must never
+        // reach it.
         inner
             .weak
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                // Reject (rather than saturate) once the counter has reached
+                // MAX_REFCOUNT: incrementing further would reach the reserved
+                // `usize::MAX` sentinel.
+                if n >= MAX_REFCOUNT {
+                    None
+                } else {
+                    // Cannot overflow: guarded by the check above.
+                    Some(n.checked_add(1).expect("guarded by MAX_REFCOUNT bound"))
+                }
+            })
             .map_err(|_| TryArcError::OutOfBounds)?;
         Ok(Weak {
             ptr: this.ptr,
@@ -123,9 +140,10 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryArcError::OutOfBounds`] if the strong count would overflow
-    /// `usize`, or [`TryArcError::CloneAlloc`] if cloning the allocator handle
-    /// fails.
+    /// Returns [`TryArcError::OutOfBounds`] if the strong counter has reached
+    /// [`MAX_REFCOUNT`](super::pointers::MAX_REFCOUNT) and cannot be incremented
+    /// further without hitting the reserved `usize::MAX` sentinel, or
+    /// [`TryArcError::CloneAlloc`] if cloning the allocator handle fails.
     #[inline]
     pub fn try_upgrade(&self) -> Result<Option<Arc<T, A>>, TryArcError> {
         // A dangling weak (from `Weak::new`) never referred to an allocation,
@@ -141,11 +159,22 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
 
         // Bump the strong count. Success uses `Acquire` so an upgrader is
         // synchronized-with a publisher that wrote the payload then bumped the
-        // count with `Release`.
+        // count with `Release`. Increments are rejected once the count has
+        // reached MAX_REFCOUNT: `usize::MAX` is reserved as a sentinel.
         match inner
             .strong
             .fetch_update(Ordering::Acquire, Ordering::Relaxed, |n| {
-                if n != 0 { n.checked_add(1) } else { None }
+                if n == 0 {
+                    None
+                } else if n >= MAX_REFCOUNT {
+                    // Reject (rather than saturate) once the counter has reached
+                    // MAX_REFCOUNT: incrementing further would reach the reserved
+                    // `usize::MAX` sentinel.
+                    None
+                } else {
+                    // Cannot overflow: guarded by the check above.
+                    Some(n.checked_add(1).expect("guarded by MAX_REFCOUNT bound"))
+                }
             }) {
             Ok(_) => {}
             Err(current) => {
@@ -316,5 +345,68 @@ mod tests {
             from_alloc,
             TryArcError::CloneAlloc(TryCloneError::Alloc(_))
         ));
+    }
+
+    // --- Refcount bound (MAX_REFCOUNT) ----------------------------------------
+    //
+    // These tests drive a counter up to `MAX_REFCOUNT` by writing the atomic
+    // cell directly (safe here because the test holds the sole handle), then
+    // verify that further increments are *rejected* — not saturated — and that
+    // decrements continue to work so the counter can be walked back down.
+
+    /// Drives the strong counter of `arc`'s allocation to `target`. Safe only
+    /// when the caller exclusively owns the allocation (single live `Arc`, no
+    /// other threads touching it).
+    fn set_strong(arc: &Arc<i32, Global>, target: usize) {
+        arc.inner().strong.store(target, Ordering::Relaxed);
+    }
+
+    /// Drives the weak counter of `arc`'s allocation to `target`. Same
+    /// exclusivity requirement as [`set_strong`].
+    fn set_weak(arc: &Arc<i32, Global>, target: usize) {
+        arc.inner().weak.store(target, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn upgrade_rejected_when_strong_at_max_refcount() {
+        use crate::sync::arc::pointers::MAX_REFCOUNT;
+        let arc = Arc::try_new(1i32).unwrap();
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        // Drive the strong counter to the bound via direct store.
+        set_strong(&arc, MAX_REFCOUNT);
+        // Upgrade must be rejected (not saturate): the increment would reach
+        // the reserved `usize::MAX` sentinel.
+        let res = weak.try_upgrade();
+        assert!(matches!(res, Err(TryArcError::OutOfBounds)));
+        // The counter is unchanged by the rejected attempt.
+        assert_eq!(Arc::strong_count(&arc), MAX_REFCOUNT);
+        // Walk it back down one step; upgrade now succeeds again.
+        set_strong(&arc, MAX_REFCOUNT - 1);
+        let upgraded = weak
+            .try_upgrade()
+            .unwrap()
+            .expect("should succeed below bound");
+        assert_eq!(Arc::strong_count(&upgraded), MAX_REFCOUNT);
+        drop(upgraded);
+        set_strong(&arc, 1);
+    }
+
+    #[test]
+    fn downgrade_rejected_when_weak_at_max_refcount() {
+        use crate::sync::arc::pointers::MAX_REFCOUNT;
+        let arc = Arc::try_new(1i32).unwrap();
+        // Drive the weak counter to the bound via direct store.
+        set_weak(&arc, MAX_REFCOUNT);
+        // Downgrade must be rejected (not saturate).
+        let res = Arc::try_downgrade(&arc);
+        assert!(matches!(res, Err(TryArcError::OutOfBounds)));
+        // The counter is unchanged by the rejected attempt.
+        assert_eq!(arc.inner().weak.load(Ordering::Relaxed), MAX_REFCOUNT);
+        // Walk it back down one step; downgrade now succeeds again.
+        set_weak(&arc, MAX_REFCOUNT - 1);
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        assert_eq!(arc.inner().weak.load(Ordering::Relaxed), MAX_REFCOUNT);
+        drop(weak);
+        set_weak(&arc, 1);
     }
 }
