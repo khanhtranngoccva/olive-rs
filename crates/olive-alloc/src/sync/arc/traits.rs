@@ -141,7 +141,7 @@ impl<T: TryDefault, A: Allocator + TryDefault> TryDefault for Arc<T, A> {
         let alloc = A::try_default()?;
         let uninit = Self::try_new_uninit_in(alloc).map_err(TryDefaultError::Alloc)?;
         let value = T::try_default()?;
-        // SAFETY: we just initialized the Arc with strong == 1.
+        // SAFETY: we just initialized the Arc with strong == 1 and weak == 0 (excluding the implicit ref).
         Ok(unsafe { uninit.write(value) })
     }
 }

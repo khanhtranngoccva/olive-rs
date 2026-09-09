@@ -429,7 +429,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::string::String;
-    use crate::test_helpers::{CloneBudget, FailAlloc, Ledger, FlakyTrackedItem};
+    use crate::test_helpers::{CloneBudget, FailAlloc, FlakyTrackedItem, Ledger};
     use std::rc::Rc as StdRc;
     use std::vec::Vec;
 
@@ -654,7 +654,6 @@ mod tests {
 
     /// Fills every slot of an `Arc<[MaybeUninit<T>]>` by projecting the payload
     /// slice out of the fat pointer and writing each element's `MaybeUninit`.
-    /// Exclusive access holds because strong == 1 in these single-threaded tests.
     fn fill_slots<T>(arc: &Arc<[MaybeUninit<T>]>, f: impl Fn(usize) -> T) {
         let slots: *mut [MaybeUninit<T>] = unsafe { &raw mut (*arc.ptr.as_ptr()).value };
         #[allow(
@@ -662,7 +661,8 @@ mod tests {
             reason = "Miri does not allow implicit autoref"
         )]
         let n = unsafe { (&*slots).len() };
-        // SAFETY: exclusive access (strong == 1); each write initializes one slot.
+        // SAFETY: exclusive access (strong == 1, weak == 0 excluding implicit weak ref);
+        // each write initializes one slot.
         unsafe {
             for i in 0..n {
                 (*slots)[i].as_mut_ptr().write(f(i));

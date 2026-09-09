@@ -214,7 +214,7 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     /// strong reference has been dropped.
     ///
     /// # Safety
-    /// - The Arc must be uniquely owned (or strong == 1).
+    /// - The Arc must have strong == 1.
     #[inline(never)]
     unsafe fn drop_slow(this: &mut Self) {
         // Construct a temporary `Weak` standing in for this `Arc`'s implicit

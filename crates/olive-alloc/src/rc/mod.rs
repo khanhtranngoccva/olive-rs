@@ -270,6 +270,24 @@ impl<T: ?Sized> RcInner<T> {
             None => Err(TryRcOutOfBoundsError),
         }
     }
+
+    /// Decrements the weak count by one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryRcOutOfBoundsError`] if the count is already zero
+    /// (unbalanced decrement).
+    #[inline]
+    pub(crate) fn dec_weak(&self) -> Result<(), TryRcOutOfBoundsError> {
+        let cur = self.weak.get();
+        match cur.checked_sub(1) {
+            Some(next) => {
+                self.weak.set(next);
+                Ok(())
+            }
+            None => Err(TryRcOutOfBoundsError),
+        }
+    }
 }
 
 /// Helper type to allow accessing the reference counts without
@@ -443,7 +461,7 @@ unsafe fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
 /// - `p` must point to a valid `RcInner<T>` allocation block.
 /// - The reference count fields must be initialized.
 /// - The `T` value does not have to be initialized.
-/// - `p` must have strong == 1.
+/// - `p` must have strong == 1 and weak == 0 (excluding implicit weak ref).
 #[inline]
 unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
     unsafe { &raw mut (*p).value }
@@ -698,7 +716,8 @@ impl<T> Rc<T, Global> {
     pub fn try_new_give_back(x: T) -> Result<Self, (T, AllocError)> {
         match Self::try_new_uninit_in(Global) {
             Ok(b) => {
-                // SAFETY: We just initialized the pointer with strong == 1
+                // SAFETY: this pointer is newly initialized, strong == 1 and weak == 0
+                // (excluding implicit weak ref).
                 Ok(unsafe { b.write(x) })
             }
             Err(e) => Err((x, e)),
@@ -861,7 +880,8 @@ impl<T, A: Allocator> Rc<T, A> {
     #[inline]
     pub fn try_new_in(x: T, alloc: A) -> Result<Self, AllocError> {
         let b = Self::try_new_uninit_in(alloc)?;
-        // SAFETY: this pointer is newly initialized, strong == 1.
+        // SAFETY: this pointer is newly initialized, strong == 1 and weak == 0
+        // (excluding implicit weak ref).
         Ok(unsafe { b.write(x) })
     }
 
@@ -876,7 +896,8 @@ impl<T, A: Allocator> Rc<T, A> {
     pub fn try_new_give_back_in(x: T, alloc: A) -> Result<Self, (T, AllocError)> {
         match Self::try_new_uninit_in(alloc) {
             Ok(b) => {
-                // SAFETY: this pointer is newly initialized, strong == 1.
+                // SAFETY: this pointer is newly initialized, strong == 1 and weak == 0
+                // (excluding implicit weak ref).
                 Ok(unsafe { b.write(x) })
             }
             Err(e) => Err((x, e)),
@@ -1263,10 +1284,12 @@ impl<T: Sized, A: Allocator> Rc<MaybeUninit<T>, A> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure the `Rc`'s strong count is exactly 1.
+    /// The caller must ensure the `Rc`'s strong count is exactly 1 and
+    /// weak count is 0 (excluding the implicit weak reference).
     #[inline]
     pub unsafe fn write(mut self, val: T) -> Rc<T, A> {
-        // SAFETY: `inner` is a live allocation, caller ensures strong == 1.
+        // SAFETY: `inner` is a live allocation, caller ensures strong == 1 and weak == 0
+        // (excluding implicit weak ref).
         let inner = unsafe { Rc::inner_mut(&mut self) };
         inner.value.write(val);
         // SAFETY: we just initialized the pointer.
@@ -1367,20 +1390,28 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         Self::inner(this).weak().saturating_sub(1)
     }
 
+    /// Returns `true` if there are no other `Rc` or [`Weak`] pointers to this
+    /// allocation.
+    #[inline]
+    pub fn is_unique(this: &Self) -> bool {
+        Rc::weak_count(this) == 0 && Rc::strong_count(this) == 1
+    }
+
     /// Gets a mutable reference to the contained value if this `Rc` is the
-    /// sole strong reference. Returns `None` if other strong references exist.
+    /// sole strong reference **and** no [`Weak`] pointers to the same
+    /// allocation exist. Returns `None` otherwise.
     ///
-    /// This is the fallible analogue of std's `Rc::get_mut`: because we never
-    /// panic on contention, the "already shared" case is simply reported via
-    /// `Option`.
+    /// This mirrors std's `Rc::get_mut`, which requires both that there are no
+    /// other strong references *and* no weak references, because a live `Weak`
+    /// could upgrade back into a second strong reference at any moment.
     #[inline]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
-        let inner = Self::inner(this);
-        if inner.strong() != 1 {
-            return None;
+        // SAFETY: ensured by the uniqueness check below.
+        if Self::is_unique(this) {
+            Some(unsafe { Self::get_mut_unchecked(this) })
+        } else {
+            None
         }
-        // SAFETY: we just checked strong == 1.
-        Some(unsafe { Self::get_mut_unchecked(this) })
     }
 
     /// Gets a mutable reference to the contained value **without** checking
@@ -1401,37 +1432,96 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         &mut inner.value
     }
 
-    /// If this `Rc` is the sole strong reference, gets a mutable reference.
-    /// Otherwise, clones the value into a fresh `Rc` and returns a mutable
-    /// reference to it.
+    /// Makes a mutable reference into the given `Rc`, disassociating other
+    /// references by moving or cloning as needed.
     ///
-    /// This mirrors std's `Rc::make_mut`: the clone path uses
-    /// [`TryCloneToUninit`] to write directly into a newly allocated block,
-    /// which works for both sized and unsized payloads.
+    /// Three cases, mirroring std's `Rc::make_mut`:
+    ///
+    /// * **Unique** — no other [`Rc`] or [`Weak`] pointers exist: the payload is
+    ///   accessed in place with no allocation.
+    /// * **Shared** — more than one strong reference exists: the inner value is
+    ///   cloned into a fresh allocation via [`TryCloneToUninit`], and this [`Rc`]
+    ///   is replaced in place to point at the clone. The old shared allocation keeps
+    ///   serving the remaining owners.
+    /// * **Only weak refs remain** — exactly one strong reference (this one) but
+    ///   some [`Weak`] pointers: the value is moved out of the old block into a
+    ///   freshly allocated one, and the old block's counts are decremented, so its
+    ///   payload is logically gone. The surviving `Weak`s no longer points to a live
+    ///   value (their `upgrade` will now fail). No clone is performed.
     ///
     /// # Errors
     ///
-    /// Returns [`TryCloneError`] if cloning the allocator handle or the
-    /// clone-and-reallocate path fails.
+    /// Returns [`TryCloneError`] if cloning the allocator handle, allocating the
+    /// replacement block, or the clone itself fails.
     #[inline]
     pub fn try_make_mut(this: &mut Self) -> Result<&mut T, TryCloneError>
     where
         T: TryCloneToUninit,
         A: AllocatorTryClone,
     {
-        // Fast path: sole owner can mutate in place. Checking the count first
-        // avoids creating a long-lived mutable borrow that would prevent us
-        // from reading `this`'s fields below.
-        if Self::strong_count(this) == 1 {
-            // SAFETY: strong count is 1, so we are the exclusive owner.
+        // Case 1: shared (more than one strong reference) — clone the payload
+        // into a fresh block and reassign `this` to the clone.
+        if Self::strong_count(this) != 1 {
+            let alloc = A::try_clone(&this.alloc)?;
+            let new_rc = Rc::try_clone_from_ref_in(&**this, alloc)?;
+            *this = new_rc;
+            // SAFETY: `new_rc` was just constructed with strong == 1 and weak == 0 (excluding the implicit ref),
+            // so it is uniquely owned.
             return Ok(unsafe { Self::get_mut_unchecked(this) });
         }
-        // Shared: allocate a fresh block sized to match the current payload's
-        // metadata, clone directly into it, then swap the new handle in.
-        // Both fallible steps report through `TryRcError::CloneAlloc`.
+
+        // Case 2: unique — mutate in place. We just ensured strong == 1 above.
+        if Self::weak_count(this) == 0 {
+            // SAFETY: strong == 1 and weak == 0 (excluding the implicit ref),
+            // so we are the exclusive owner.
+            return Ok(unsafe { Self::get_mut_unchecked(this) });
+        }
+
+        // Case 3: strong == 1 but weak > 0 — steal the data into a fresh block.
+        let size_of_val = size_of_val::<T>(&**this);
         let alloc = A::try_clone(&this.alloc)?;
-        let new_rc = Rc::try_clone_from_ref_in(&**this, alloc)?;
-        *this = new_rc;
+        let in_progress = UniqueRcUninit::try_new_for_value(&**this, alloc)?;
+        // SAFETY: we own the only strong reference, so moving the payload out by
+        // byte-copying `size_of_val` bytes is sound for any `T: ?Sized`. After
+        // this copy the source slot is treated as moved-from; the counters are
+        // adjusted immediately below so the old block never drops the payload.
+        unsafe {
+            // Almost all the block below all the way until drop() will not panic.
+            ptr::copy_nonoverlapping(
+                Self::as_ptr(this).cast::<u8>(),
+                in_progress.data_ptr().cast::<u8>(),
+                size_of_val,
+            );
+
+            // Leave the old block with 0 strong refs: the data has effectively
+            // been moved to the new rc. Unreachable underflow cannot occur — we
+            // hold a live strong reference, so the count is at least one.
+            Self::inner(this)
+                .dec_strong()
+                .expect("strong count underflow");
+
+            // Remove the implicit strong-held weak ref. Other `Weak`s remain and
+            // are responsible for freeing the (now empty) block.
+            Self::inner(this).dec_weak().expect("weak count underflow");
+
+            // Last chance to not accidentally forget the allocator before we
+            // overwrite `this`. The `_alloc` will be dropped last after the state has
+            // committed to avoid panics.
+            let alloc = ptr::read(&this.alloc);
+
+            // Replace `this` with the freshly constructed `Rc` holding the moved
+            // data. Writing over `this` using pointer syntax inhibits its `Drop` impl,
+            // so the old Rc is not dropped.
+            ptr::write(this, in_progress.into_rc());
+
+            // Panics may occur here, but the state is already fully committed at this point.
+            drop(alloc);
+        }
+
+        // SAFETY: after the move-out, `this.ptr` is the *only* pointer to the
+        // new allocation (strong == 1, weak == 0), and we required the `Rc<T>`
+        // itself to be `mut`, so this is the only possible reference to the
+        // payload.
         Ok(unsafe { Self::get_mut_unchecked(this) })
     }
 
@@ -1751,7 +1841,8 @@ impl<T: TryDefault> TryDefault for Rc<T, Global> {
     fn try_default() -> Result<Self, TryDefaultError> {
         let uninit = Self::try_new_uninit().map_err(TryDefaultError::Alloc)?;
         let value = T::try_default()?;
-        // SAFETY: we just initialized the Rc with strong == 1.
+        // SAFETY: we just initialized the Rc with strong == 1 and weak == 0
+        // (excluding the implicit ref).
         Ok(unsafe { uninit.write(value) })
     }
 }
@@ -1888,7 +1979,7 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
         }
     }
 
-    /// Converts a `Weak<T, A>` into a raw pointer, returning it along with 
+    /// Converts a `Weak<T, A>` into a raw pointer, returning it along with
     /// its allocator.
     ///
     /// The caller takes ownership of both the allocation and the allocator and
@@ -2565,6 +2656,124 @@ mod tests {
         assert_eq!(*rc2, 88);
         assert_eq!(Rc::strong_count(&rc2), 1);
         drop(rc2);
+    }
+
+    // -----------------------------------------------------------------------
+    // is_unique / get_mut / try_make_mut
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_unique_true_only_when_no_other_refs() {
+        let rc = Rc::try_new(1).unwrap();
+        assert!(Rc::is_unique(&rc));
+
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        // A live Weak disqualifies uniqueness even though strong == 1.
+        assert!(!Rc::is_unique(&rc));
+        drop(weak);
+        assert!(Rc::is_unique(&rc));
+
+        let rc2 = rc.try_clone().unwrap();
+        assert!(!Rc::is_unique(&rc));
+        drop(rc2);
+        assert!(Rc::is_unique(&rc));
+    }
+
+    #[test]
+    fn get_mut_requires_no_weak() {
+        let mut rc = Rc::try_new(String::from("hi")).unwrap();
+        *Rc::get_mut(&mut rc).unwrap() += "!";
+        assert_eq!(*rc, "hi!");
+
+        // A single Weak now blocks get_mut (matching std semantics).
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert!(Rc::get_mut(&mut rc).is_none());
+        drop(weak);
+        assert!(Rc::get_mut(&mut rc).is_some());
+    }
+
+    #[test]
+    fn make_mut_unique_mutates_in_place() {
+        let mut rc = Rc::try_new(5u32).unwrap();
+        let addr = Rc::as_ptr(&rc) as usize;
+        *Rc::try_make_mut(&mut rc).unwrap() += 1;
+        assert_eq!(*rc, 6);
+        // No reallocation happened — same payload address.
+        assert_eq!(Rc::as_ptr(&rc) as usize, addr);
+    }
+
+    #[test]
+    fn make_mut_shared_clones_and_disassociates() {
+        let mut data = Rc::try_new(5i32).unwrap();
+        let other = data.try_clone().unwrap();
+
+        let old_addr = Rc::as_ptr(&data) as usize;
+        assert_eq!(Rc::strong_count(&data), 2);
+
+        *Rc::try_make_mut(&mut data).unwrap() += 1;
+
+        // `data` moved to a fresh allocation holding the mutated clone.
+        assert_eq!(*data, 6);
+        assert_ne!(Rc::as_ptr(&data) as usize, old_addr);
+        assert_eq!(Rc::strong_count(&data), 1);
+        // The original owner is untouched and still valid.
+        assert_eq!(*other, 5);
+        assert_eq!(Rc::strong_count(&other), 1);
+        assert!(!Rc::ptr_eq(&data, &other));
+    }
+
+    #[test]
+    fn make_mut_with_weak_steals_without_cloning() {
+        // Only weak references remain: the value must be MOVED into a fresh
+        // block (not cloned), and the surviving Weaks become dangling.
+        struct Movable<'a>(&'a Cell<i32>, String);
+
+        impl TryClone for Movable<'_> {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                panic!("this test should not move");
+            }
+        }
+
+        impl Drop for Movable<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        // External counter so we can observe the destructor across the move
+        // (a counter embedded in the payload would itself be relocated).
+        let counter_cell = Cell::new(0i32);
+        let mut data = Rc::try_new(Movable(&counter_cell, String::from("payload"))).unwrap();
+        let weak = Rc::try_downgrade(&data).unwrap();
+        let old_addr = Rc::as_ptr(&data) as usize;
+
+        Rc::try_make_mut(&mut data).unwrap().1.push('x');
+
+        assert_eq!(data.1.as_str(), "payloadx");
+        assert_ne!(Rc::as_ptr(&data) as usize, old_addr);
+        assert_eq!(Rc::strong_count(&data), 1);
+        // The weak reference is now detached from any live value.
+        assert!(weak.try_upgrade().unwrap().is_none());
+        // Dropping the new sole owner runs the destructor exactly once.
+        drop(data);
+        assert_eq!(counter_cell.get(), 1);
+    }
+
+    #[test]
+    fn make_mut_unsized_slice_shared_clones() {
+        let arr = [1u8, 2, 3];
+        let mut rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let other = rc.try_clone().unwrap();
+        
+        let old_addr = Rc::as_ptr(&rc).cast::<u8>() as usize;
+
+        let m = Rc::try_make_mut(&mut rc).unwrap();
+        m[0] = 99;
+
+        assert_eq!(&*rc, [99, 2, 3]);
+        assert_ne!(Rc::as_ptr(&rc).cast::<u8>() as usize, old_addr);
+        // Original slice untouched.
+        assert_eq!(&*other, [1, 2, 3]);
     }
 
     // -----------------------------------------------------------------------

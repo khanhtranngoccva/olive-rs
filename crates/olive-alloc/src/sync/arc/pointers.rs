@@ -66,7 +66,7 @@ pub(crate) unsafe fn ptr_get_data<T: ?Sized>(p: *const ArcInner<T>) -> *const T 
 /// - `p` must point to a valid `ArcInner<T>` allocation block.
 /// - The reference count fields must be initialized.
 /// - The `T` value does not have to be initialized.
-/// - `p` must have strong == 1.
+/// - `p` must have strong == 1 and weak == 0 (excluding implicit weak ref).
 #[inline]
 pub(crate) unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut ArcInner<T>) -> *mut T {
     unsafe { &raw mut (*p).value }

@@ -75,8 +75,8 @@ turns a contained bug into downstream undefined behavior. Specifically:
   "properly initialized").
 - Every `unsafe { }` block carries a `SAFETY:` comment stating *why* the
   preconditions hold *at that site*. Keep it tied to the concrete guarantee being
-  relied on ("capacity was reserved above", "we just checked strong == 1"), not a
-  generic "safe".
+  relied on ("capacity was reserved above", "we just checked strong == 1 and weak == 0"), 
+  not a generic "safe".
 - Treat safety text as part of the tested surface: if you change the code such
   that a previously-valid justification no longer holds, the `SAFETY:` comment and
   the `# Safety` section are now lying, and that is a bug as serious as the code

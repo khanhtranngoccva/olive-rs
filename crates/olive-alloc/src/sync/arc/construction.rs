@@ -128,7 +128,8 @@ impl<T, A: Allocator> Arc<T, A> {
     #[inline]
     pub fn try_new_in(x: T, alloc: A) -> Result<Self, crate::alloc::AllocError> {
         let b = Self::try_new_uninit_in(alloc)?;
-        // SAFETY: this pointer is newly initialized, strong == 1.
+        // SAFETY: this pointer is newly initialized, strong == 1 and weak == 0
+        // (excluding implicit weak ref).
         Ok(unsafe { b.write(x) })
     }
 
@@ -143,7 +144,8 @@ impl<T, A: Allocator> Arc<T, A> {
     pub fn try_new_give_back_in(x: T, alloc: A) -> Result<Self, (T, crate::alloc::AllocError)> {
         match Self::try_new_uninit_in(alloc) {
             Ok(b) => {
-                // SAFETY: this pointer is newly initialized, strong == 1.
+                // SAFETY: this pointer is newly initialized, strong == 1 and weak == 0
+                // (excluding implicit weak ref).
                 Ok(unsafe { b.write(x) })
             }
             Err(e) => Err((x, e)),
@@ -216,12 +218,12 @@ impl<T: Sized, A: Allocator> Arc<MaybeUninit<T>, A> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure this `Arc`'s strong count is exactly 1 (i.e. it
-    /// was just constructed and never shared). Writing the payload requires
+    /// The caller must ensure this `Arc`'s strong count is exactly 1 and weak count is 0
+    /// (i.e. it was just constructed and never shared). Writing the payload requires
     /// exclusive access to the allocation.
     #[inline]
     pub unsafe fn write(self, val: T) -> Arc<T, A> {
-        // SAFETY: the caller guarantees strong == 1, so we exclusively own the
+        // SAFETY: the caller guarantees strong == 1 and weak == 0, so we exclusively own the
         // payload slot; wrapping `val` in `MaybeUninit` matches the slot's type
         // and leaves it fully initialized in place.
         unsafe {
@@ -325,6 +327,7 @@ mod tests {
     #[test]
     fn write_initializes_uninit_arc() {
         let uninit: Arc<MaybeUninit<String>, Global> = Arc::try_new_uninit().unwrap();
+        // SAFETY: we just initialized Arc with strong == 1 and weak == 0 (excluding implicit weak ref)
         let arc = unsafe { uninit.write(String::from("bridged")) };
         assert_eq!(*arc, "bridged");
         // The bridge must preserve the exact refcount state of the source.
@@ -338,11 +341,11 @@ mod tests {
         // `write`) so we can prove `assume_init` is a pure type reinterpretation:
         // it must not rewrite the payload nor disturb the refcount header.
         let uninit: Arc<MaybeUninit<[u8; 4]>, Global> = Arc::try_new_uninit().unwrap();
+        // SAFETY: exclusive access (strong == 1 and weak == 0 excluding the implicit weak count);
         let data = unsafe { ptr_get_data_mut(uninit.ptr.as_ptr()) };
-        // SAFETY: exclusive access (strong == 1); writing a valid `[u8; 4]` makes
-        // the slot initialized, satisfying `assume_init`'s precondition.
         unsafe { *data = MaybeUninit::new([1u8, 2, 3, 4]) };
 
+        // SAFETY: writing a valid `[u8; 4]` makes the slot initialized, satisfying `assume_init`'s precondition.
         let arc = unsafe { uninit.assume_init() };
         // Payload bits survive verbatim — `assume_init` did not overwrite them.
         assert_eq!(*arc, [1u8, 2, 3, 4]);
