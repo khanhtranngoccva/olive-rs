@@ -2064,20 +2064,17 @@ impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
     }
 }
 
-// A default `Weak` is simply a dangling one: it points nowhere and frees
-// nothing. Infallible by construction (no allocation involved), so both the
-// conventional `Default` and the crate-standard fallible `TryDefault` succeed.
-impl<T: ?Sized> Default for Weak<T, Global> {
+impl<T: ?Sized, A: Allocator + Default> Default for Weak<T, A> {
     #[inline]
     fn default() -> Self {
-        Self::new()
+        Self::new_in(A::default())
     }
 }
 
-impl<T: ?Sized> TryDefault for Weak<T, Global> {
+impl<T: ?Sized, A: Allocator + TryDefault> TryDefault for Weak<T, A> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self::new())
+        Ok(Self::new_in(A::try_default()?))
     }
 }
 
