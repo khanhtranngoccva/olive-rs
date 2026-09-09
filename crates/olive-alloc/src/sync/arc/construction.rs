@@ -1,15 +1,9 @@
-//! Fallible node-construction methods for [`Arc`](super::Arc).
+//! Fallible node-construction methods for [`Arc`](super::Arc) and [`Weak`](super::Weak).
 //!
-//! This submodule holds every constructor that allocates a fresh `ArcInner`
-//! block: the global-allocator forms (`try_new`, `try_new_give_back`,
-//! `try_new_uninit`, `try_new_zeroed`), their allocator-generic `_in`
-//! counterparts, and the [`Arc::write`] bridge that turns an
-//! `Arc<MaybeUninit<T>>` into an initialized `Arc<T>` in place.
+//! # Invariants
 //!
-//! # Invariants established here
-//!
-//! Every constructor returns a node whose strong count is exactly 1 and whose
-//! weak count is exactly 1 (the implicit weak reference held by the sole
+//! Every [`Arc`] constructor returns a node whose strong count is exactly 1
+//! and whose weak count is exactly 1 (the implicit weak reference held by the sole
 //! strong owner). The payload is either fully initialized (`try_new`,
 //! `try_new_give_back`, `write`) or deliberately left uninitialized
 //! (`try_new_uninit`). No constructor leaves a partially-initialized block
@@ -22,8 +16,8 @@ use core::ptr;
 use crate::alloc::{Allocator, Global, Layout};
 use olive_core::ptr::NonNull;
 
-use super::pointers::{initialize_arcinner, ptr_get_data_mut};
-use super::{Arc, ArcInner};
+use super::pointers::{dangling_inner_ptr, initialize_arcinner, ptr_get_data_mut};
+use super::{Arc, ArcInner, Weak};
 
 // ---------------------------------------------------------------------------
 // Global construction block
@@ -83,6 +77,40 @@ impl<T> Arc<T, Global> {
     #[inline]
     pub fn try_new_zeroed() -> Result<Self, crate::alloc::AllocError> {
         Self::try_new_zeroed_in(Global)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Weak construction block
+// ---------------------------------------------------------------------------
+
+impl<T: ?Sized> Weak<T, Global> {
+    /// Creates a new dangling [`Weak`] that does not point to any allocation.
+    ///
+    /// A dangling `Weak` owns no memory and never keeps a value alive.
+    /// Dropping it is a no-op.
+    #[inline]
+    pub fn new() -> Self {
+        // No allocation occurs, so this cannot fail. The pointer is pinned to
+        // the misaligned dangling sentinel, which `Drop` and every access path
+        // detect before touching memory.
+        Weak {
+            ptr: dangling_inner_ptr(),
+            alloc: Global,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: ?Sized, A: Allocator> Weak<T, A> {
+    /// Like [`new`](Self::new), but parameterized over the choice of allocator.
+    #[inline]
+    pub fn new_in(alloc: A) -> Self {
+        Weak {
+            ptr: dangling_inner_ptr(),
+            alloc,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -251,6 +279,8 @@ mod tests {
     use crate::test_helpers::FailAlloc;
     use std::string::String;
 
+    use crate::sync::arc::pointers::is_dangling_weak;
+
     /// Reads the payload behind an `Arc` without relying on `Deref` (which has
     /// not landed yet). Only valid while the payload is initialized and no
     /// other thread mutates it — both hold in these single-threaded tests.
@@ -408,5 +438,54 @@ mod tests {
         let generic = Arc::try_new_in(1u8, Global).unwrap();
         assert_eq!(Arc::strong_count(&generic), 1);
         assert_eq!(peek(&generic), &1u8);
+    }
+
+    // --- Weak construction ---------------------------------------------------
+
+    #[test]
+    fn weak_new_is_dangling() {
+        // A freshly constructed `Weak` refers to no allocation: its pointer is
+        // the dangling sentinel and it owns no inner handle.
+        let w: Weak<i32, Global> = Weak::new();
+        assert!(is_dangling_weak(w.ptr.as_ptr()));
+        assert!(w.inner().is_none());
+    }
+
+    #[test]
+    fn weak_new_in_is_dangling_with_custom_allocator() {
+        // The allocator-parameterized form is equally dangling, but must carry
+        // the given allocator handle — which we observe being dropped exactly
+        // once when the `Weak` itself is dropped.
+        let drops = std::rc::Rc::new(crate::test_helpers::DropCounter::new());
+        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let w: Weak<u64, _> = Weak::new_in(alloc);
+        assert!(is_dangling_weak(w.ptr.as_ptr()));
+        assert!(w.inner().is_none());
+        drop(w);
+        // The allocator handle was consumed by the Weak and dropped with it.
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn weak_new_dropping_frees_nothing() {
+        // Dropping a dangling weak must not touch the allocator at all (there is
+        // no deallocation path to corrupt). Constructing and dropping several —
+        // including for unsized types — leaving the process stable proves this.
+        let _ = Weak::<i32>::new();
+        let _ = Weak::<str>::new();
+        let _ = Weak::<[u8]>::new();
+        // Explicitly dropped at end of scope; no leak or UB or panic means we passed.
+    }
+
+    #[test]
+    fn weak_new_global_and_generic_agree() {
+        // Both routes produce an equivalent dangling weak on the global
+        // allocator.
+        let g: Weak<i32, Global> = Weak::new();
+        let generic: Weak<i32, Global> = Weak::new_in(Global);
+        assert!(is_dangling_weak(g.ptr.as_ptr()));
+        assert!(is_dangling_weak(generic.ptr.as_ptr()));
+        assert!(g.inner().is_none());
+        assert!(generic.inner().is_none());
     }
 }

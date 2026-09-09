@@ -111,8 +111,8 @@ impl<T: ?Sized> ArcInner<T> {
         self.strong.load(atomic::Ordering::Relaxed)
     }
 
-    /// Reads the current weak count. See [`Self::strong`] for why this is a
-    /// `Relaxed` load.
+    /// Reads the current weak count (including the implicit weak count). 
+    /// See [`Self::strong`] for why this is a `Relaxed` load.
     #[inline]
     pub(crate) fn weak(&self) -> usize {
         self.weak.load(atomic::Ordering::Relaxed)

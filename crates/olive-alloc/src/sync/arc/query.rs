@@ -50,7 +50,7 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     }
 
     /// Returns the number of weak (`Weak`) pointers to this allocation,
-    /// excluding the implicit weak reference held by each strong pointer.
+    /// excluding the implicit weak reference held by all strong pointers.
     #[inline]
     pub fn weak_count(this: &Self) -> usize {
         Self::inner(this).weak().saturating_sub(1)
