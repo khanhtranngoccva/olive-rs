@@ -4,6 +4,8 @@
 //! `Rc<RefCell<_>>` instances, eliminating cross-test interference when tests
 //! run in parallel threads.
 
+pub mod allocators;
+
 extern crate std;
 
 use std::cell::RefCell;
@@ -15,6 +17,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 use olive_core::alloc::{AllocError, Allocator};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// A per-test drop counter. Each test constructs its own instance so there is
 /// no cross-test interference from parallel execution.
@@ -304,6 +307,13 @@ unsafe impl Allocator for FailAlloc {
         Err(AllocError)
     }
     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+}
+
+impl TryDefault for FailAlloc {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self)
+    }
 }
 
 /// A value whose `try_clone` succeeds while its internal counter is below

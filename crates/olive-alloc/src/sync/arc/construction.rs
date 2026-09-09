@@ -114,16 +114,6 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     }
 }
 
-// TODO: relocate this in trait implementations file
-// A dangling `Weak` is infallible by construction (no allocation involved), so
-// the conventional `Default` succeeds and yields a weak that points at nothing.
-impl<T: ?Sized> Default for Weak<T, Global> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Generic construction block (sized)
 // ---------------------------------------------------------------------------

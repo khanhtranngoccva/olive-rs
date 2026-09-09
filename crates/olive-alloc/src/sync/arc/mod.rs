@@ -68,6 +68,9 @@ mod dst;
 pub(crate) mod pointers;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
+/// Trait implementations: `Deref`, `TryClone`, `Debug`, `Display`,
+/// `Default`, `TryDefault`.
+mod traits;
 
 // Re-export the conversion error at the module root so callers of the public
 // `try_downgrade`/`try_upgrade` can name it without reaching into the
