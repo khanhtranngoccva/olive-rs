@@ -116,22 +116,6 @@ pub(crate) struct ArcInner<T: ?Sized> {
     value: T,
 }
 
-impl<T: ?Sized> ArcInner<T> {
-    /// Reads an approximation of the current strong count without
-    /// any memory ordering guarantees.
-    #[inline]
-    pub(crate) fn strong(&self) -> usize {
-        self.strong.load(atomic::Ordering::Relaxed)
-    }
-
-    /// Reads an approximation of the current weak count without
-    /// any memory ordering guarantees.
-    #[inline]
-    pub(crate) fn weak(&self) -> usize {
-        self.weak.load(atomic::Ordering::Relaxed)
-    }
-}
-
 /// Helper type allowing access to an allocation's reference-count cells without
 /// making any assertions about the data field.
 ///
@@ -143,22 +127,6 @@ impl<T: ?Sized> ArcInner<T> {
 pub(crate) struct WeakInner<'a> {
     strong: &'a AtomicUsize,
     weak: &'a AtomicUsize,
-}
-
-impl WeakInner<'_> {
-    /// Reads an approximation of the current strong count without
-    /// any memory ordering guarantees.
-    #[inline]
-    fn strong(&self) -> usize {
-        self.strong.load(atomic::Ordering::Relaxed)
-    }
-
-    /// Reads an approximation of the current weak count without
-    /// any memory ordering guarantees.
-    #[inline]
-    fn weak(&self) -> usize {
-        self.weak.load(atomic::Ordering::Relaxed)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +283,7 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
             // must also be zero (the last strong `Arc`'s drop either freed the
             // block or left it pinned by at least one `Weak`). So `weak == 0`
             // is sufficient to decide whether to deallocate.
-            debug_assert!(is_last_strong(inner.strong()));
+            debug_assert!(is_last_strong(inner.strong.load(atomic::Ordering::Relaxed)));
 
             // SAFETY: `self.ptr` carries correct pointer metadata for `T`; the
             // pointee may be uninitialized (already dropped) but we only need

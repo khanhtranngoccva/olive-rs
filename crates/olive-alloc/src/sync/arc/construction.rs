@@ -290,7 +290,10 @@ mod tests {
         // Fresh node: exactly one strong owner and the implicit weak ref.
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
-        assert_eq!(arc.inner().weak(), 1);
+        assert_eq!(
+            arc.inner().weak.load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]

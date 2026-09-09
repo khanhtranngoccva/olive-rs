@@ -5,6 +5,7 @@
 //! coercion methods from being shadowed.
 
 use core::ptr;
+use core::sync::atomic::Ordering;
 
 use super::pointers::is_dangling_weak;
 use super::{Arc, ArcInner, Weak};
@@ -54,7 +55,7 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     /// [`Weak`]s pointing to the same allocation.
     #[inline]
     pub fn strong_count(this: &Self) -> usize {
-        Self::inner(this).strong()
+        this.inner().strong.load(Ordering::Relaxed)
     }
 
     /// Gets an approximation of the number of weak ([`Weak`]) pointers to this
@@ -68,7 +69,14 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     /// [`Weak`]s pointing to the same allocation.
     #[inline]
     pub fn weak_count(this: &Self) -> usize {
-        Self::inner(this).weak().saturating_sub(1)
+        let cnt = this.inner().weak.load(Ordering::Relaxed);
+        // If the weak count is currently locked, the value of the
+        // count was 0 just before taking the lock.
+        if cnt == usize::MAX {
+            0
+        } else {
+            cnt.saturating_sub(1)
+        }
     }
 }
 
@@ -130,7 +138,8 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     #[inline]
     pub fn strong_count(&self) -> usize {
         // A dangling weak owns no allocation, so there are no strong pointers.
-        self.inner().map_or(0, |inner| inner.strong())
+        self.inner()
+            .map_or(0, |inner| inner.strong.load(Ordering::Relaxed))
     }
 
     /// Gets an approximation of the number of [`Weak`] pointers pointing to this
@@ -151,12 +160,17 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
             // Dangling weak: no allocation, hence no weak pointers.
             return 0;
         };
-        // With no strong pointers left the payload has been dropped and only the
-        // implicit weak ref (if any) remains; report 0 to match std's contract.
-        if inner.strong() == 0 {
+        let weak = inner.weak.load(Ordering::Acquire);
+        let strong = inner.strong.load(Ordering::Relaxed);
+        if strong == 0 {
             0
         } else {
-            inner.weak().saturating_sub(1)
+            // Since we observed that there was at least one strong pointer
+            // after reading the weak count, we know that the implicit weak
+            // reference (present whenever any strong references are alive)
+            // was still around when we observed the weak count, and can
+            // therefore safely subtract it.
+            weak.saturating_sub(1)
         }
     }
 }
@@ -233,7 +247,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
         // Internal invariant: the raw weak cell includes the implicit weak ref.
-        assert_eq!(arc.inner().weak(), 1);
+        assert_eq!(arc.inner().weak.load(Ordering::Relaxed), 1);
     }
 
     // --- Weak query methods --------------------------------------------------
@@ -334,8 +348,8 @@ mod tests {
     #[test]
     fn weak_counts_live_match_arc_and_zero_after_drop() {
         // A live weak reports the same strong/weak counts as its Arc (both
-        // excluding the implicit weak ref). Once every strong reference is gone,
-        // the payload has been dropped and both queries collapse to 0.
+        // excluding the implicit weak ref). When strong count is 0, the
+        // weak count also collapses to 0.
         let arc = Arc::try_new(1i32).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
         assert_eq!(weak.strong_count(), Arc::strong_count(&arc));
@@ -345,5 +359,52 @@ mod tests {
         drop(arc);
         assert_eq!(weak.strong_count(), 0);
         assert_eq!(weak.weak_count(), 0);
+    }
+
+    /// Differential parity test against `std::sync::{Arc, Weak}`: the count
+    /// methods must agree with std in every phase of the lifecycle, including
+    /// after the last strong reference has vanished. This is the regression
+    /// net for the "implicit weak subtraction" logic in `Weak::weak_count`.
+    #[test]
+    fn weak_counts_parity_with_std_across_lifecycle() {
+        use std::sync as stock;
+
+        // Phase 1: fresh node, no weaks.
+        let a = Arc::try_new(1i32).unwrap();
+        let sa = stock::Arc::new(1i32);
+        assert_eq!(Arc::strong_count(&a), stock::Arc::strong_count(&sa));
+        assert_eq!(Arc::weak_count(&a), stock::Arc::weak_count(&sa));
+
+        // Phase 2: two explicit weaks alive alongside the strong.
+        let w1 = Arc::try_downgrade(&a).unwrap();
+        let w2 = Arc::try_downgrade(&a).unwrap();
+        let sw1 = stock::Arc::downgrade(&sa);
+        let sw2 = stock::Arc::downgrade(&sa);
+        for (ours, theirs) in [(&w1, &sw1), (&w2, &sw2)] {
+            assert_eq!(ours.strong_count(), theirs.strong_count());
+            assert_eq!(ours.weak_count(), theirs.weak_count());
+        }
+        assert_eq!(Arc::strong_count(&a), stock::Arc::strong_count(&sa));
+        assert_eq!(Arc::weak_count(&a), stock::Arc::weak_count(&sa));
+
+        // Phase 3: all strongs gone, only weaks remain. std collapses
+        // `Weak::weak_count` to 0 once the last strong reference is dropped,
+        // even though explicit weaks still pin the allocation; ours must match.
+        drop(sa);
+        drop(a);
+        for (ours, theirs) in [(&w1, &sw1), (&w2, &sw2)] {
+            assert_eq!(ours.strong_count(), theirs.strong_count());
+            assert_eq!(ours.weak_count(), theirs.weak_count());
+        }
+
+        // Phase 4: one weak drops, the other survives.
+        drop(sw1);
+        drop(w1);
+        assert_eq!(w2.strong_count(), sw2.strong_count());
+        assert_eq!(w2.weak_count(), sw2.weak_count());
+
+        // Phase 5: everything is gone.
+        drop(sw2);
+        drop(w2);
     }
 }
