@@ -6,4 +6,4 @@
 
 mod arc;
 
-pub use self::arc::{Arc, Weak};
+pub use self::arc::{Arc, TryArcError, Weak};

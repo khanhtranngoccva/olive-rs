@@ -251,11 +251,8 @@ mod tests {
 
     // --- Weak query methods --------------------------------------------------
     //
-    // TODO(downgrade): the live-allocation cases below need a way to obtain a
-    // non-dangling `Weak` from an `Arc`, which requires `Arc::downgrade` (or
-    // `Weak::try_downgrade`) to land first. Until then only the dangling paths
-    // are exercisable without fabricating handles and corrupting the refcount.
-    // Replace these TODO stubs with real tests once downgrade is available.
+    // Live-allocation cases use [`Arc::try_downgrade`] to obtain a non-dangling
+    // `Weak`; dangling cases use `Weak::new`.
 
     #[test]
     fn weak_as_ptr_dangling_returns_sentinel() {
@@ -270,8 +267,17 @@ mod tests {
         assert_ne!(w.as_ptr(), Arc::as_ptr(&arc));
     }
 
-    // TODO(downgrade): test that a live weak's `as_ptr` projects to the same
-    // payload slot as the corresponding `Arc::as_ptr` and reads the value.
+    #[test]
+    fn weak_as_ptr_live_projects_to_same_payload_slot() {
+        // A live weak (obtained by downgrading an Arc) projects `as_ptr` to the
+        // exact same payload slot as the originating Arc, and reading through it
+        // yields the current value.
+        let arc = Arc::try_new(7i32).unwrap();
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        assert_eq!(weak.as_ptr(), Arc::as_ptr(&arc));
+        // The payload is still initialized while a strong reference is alive.
+        assert_eq!(unsafe { &*weak.as_ptr() }, &7);
+    }
 
     #[test]
     fn weak_allocator_returns_backing_handle() {
@@ -310,8 +316,18 @@ mod tests {
         assert_ne!(live_inner_addr, dang_addr);
     }
 
-    // TODO(downgrade): test that two weaks over the same allocation compare
-    // equal via `ptr_eq`, while weaks over distinct allocations do not.
+    #[test]
+    fn weak_ptr_eq_live_same_allocation_true_distinct_false() {
+        // Two weaks derived from the same Arc share an inner pointer, so they
+        // compare equal; a weak from a different allocation does not.
+        let arc = Arc::try_new(1u8).unwrap();
+        let other = Arc::try_new(2u8).unwrap();
+        let w1 = Arc::try_downgrade(&arc).unwrap();
+        let w2 = Arc::try_downgrade(&arc).unwrap();
+        let wo = Arc::try_downgrade(&other).unwrap();
+        assert!(w1.ptr_eq(&w2));
+        assert!(!w1.ptr_eq(&wo));
+    }
 
     #[test]
     fn weak_strong_count_dangling_is_zero() {
@@ -328,7 +344,19 @@ mod tests {
         assert_eq!(w.weak_count(), 0);
     }
 
-    // TODO(downgrade): with a live weak (obtained via `Arc::downgrade`) assert
-    // `strong_count()` equals the Arc's strong count and `weak_count()` equals
-    // the Arc's weak count; after all strongs drop, both must read 0.
+    #[test]
+    fn weak_counts_live_match_arc_and_zero_after_drop() {
+        // A live weak reports the same strong/weak counts as its Arc (both
+        // excluding the implicit weak ref). Once every strong reference is gone,
+        // the payload has been dropped and both queries collapse to 0.
+        let arc = Arc::try_new(1i32).unwrap();
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        assert_eq!(weak.strong_count(), Arc::strong_count(&arc));
+        assert_eq!(weak.weak_count(), Arc::weak_count(&arc));
+        assert_eq!(weak.strong_count(), 1);
+        assert_eq!(weak.weak_count(), 1);
+        drop(arc);
+        assert_eq!(weak.strong_count(), 0);
+        assert_eq!(weak.weak_count(), 0);
+    }
 }

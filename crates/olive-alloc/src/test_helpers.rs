@@ -254,6 +254,53 @@ impl Drop for LocalCountingAlloc {
     }
 }
 
+/// An [`Allocator`] whose allocation forwards to [`Global`] but whose
+/// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
+///
+/// This is the workhorse for exercising the `CloneAlloc` failure arm of the
+/// fallible refcount conversions (`try_downgrade` / `try_upgrade`) on `Arc` and
+/// `Rc`, which require their allocator handle to be `AllocatorTryClone`. A fresh
+/// budget of `n` allows exactly `n` successful clones (each downgrade/upgrade
+/// consumes one), then every further clone fails deterministically — letting a
+/// test place a clone failure at an exact point in a sequence.
+#[derive(Debug, Clone)]
+pub struct FlakyCloneAlloc {
+    pub(crate) budget: Rc<CloneBudget>,
+}
+
+impl FlakyCloneAlloc {
+    /// Builds an allocator sharing one clone budget with the test.
+    pub fn new(budget: Rc<CloneBudget>) -> Self {
+        Self { budget }
+    }
+}
+
+// SAFETY: all allocation operations delegate to `Global`; no extra invariants.
+unsafe impl Allocator for FlakyCloneAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        crate::alloc::Global.allocate(layout)
+    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+    }
+}
+
+impl TryClone for FlakyCloneAlloc {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if self.budget.try_consume() {
+            Ok(Self {
+                budget: self.budget.clone(),
+            })
+        } else {
+            Err(TryCloneError::Other("clone budget exhausted"))
+        }
+    }
+}
+
+// SAFETY: allocation delegates to `Global` (a valid allocator) and cloning is
+// handled by the `TryClone` impl above; together they satisfy the marker.
+unsafe impl olive_core::alloc::AllocatorTryClone for FlakyCloneAlloc {}
+
 /// An allocator whose every allocation fails. Used to exercise OOM paths.
 #[derive(Debug, Default)]
 pub struct FailAlloc;

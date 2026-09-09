@@ -57,6 +57,10 @@ use pointers::{is_dangling_weak, is_last_strong, ptr_get_data_mut};
 
 /// Fallible node-construction methods and the uninit→init bridge.
 mod construction;
+/// Conversion between `Arc` and `Weak`: [`try_downgrade`](Arc::try_downgrade)
+/// and [`try_upgrade`](Weak::try_upgrade), plus their shared
+/// [`TryArcError`](self::conversion::TryArcError).
+pub(crate) mod conversion;
 /// Unsized (`?Sized`) payload construction: slices, `str`, and the
 /// `Arc<MaybeUninit<[T]>>` → `Arc<[T]>` bridge.
 mod dst;
@@ -64,6 +68,12 @@ mod dst;
 pub(crate) mod pointers;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
+
+// Re-export the conversion error at the module root so callers of the public
+// `try_downgrade`/`try_upgrade` can name it without reaching into the
+// (crate-private) `conversion` submodule. Mirrors how `Rc` exposes
+// `TryRcError` from its own module root.
+pub use self::conversion::TryArcError;
 
 // ---------------------------------------------------------------------------
 // Shared internals
@@ -99,20 +109,15 @@ pub(crate) struct ArcInner<T: ?Sized> {
 }
 
 impl<T: ?Sized> ArcInner<T> {
-    /// Reads the current strong count.
-    ///
-    /// Only a plain `Relaxed` load is provided as a convenience: every
-    /// *mutation* of the counters uses an explicit atomic operation at its call
-    /// site with the ordering that operation requires, mirroring the standard
-    /// library. Folding an ordering into a wrapper would hide those decisions
-    /// and make it easy to reuse the wrong one.
+    /// Reads an approximation of the current strong count without
+    /// any memory ordering guarantees.
     #[inline]
     pub(crate) fn strong(&self) -> usize {
         self.strong.load(atomic::Ordering::Relaxed)
     }
 
-    /// Reads the current weak count (including the implicit weak count). 
-    /// See [`Self::strong`] for why this is a `Relaxed` load.
+    /// Reads an approximation of the current weak count without
+    /// any memory ordering guarantees.
     #[inline]
     pub(crate) fn weak(&self) -> usize {
         self.weak.load(atomic::Ordering::Relaxed)
@@ -133,13 +138,15 @@ pub(crate) struct WeakInner<'a> {
 }
 
 impl WeakInner<'_> {
-    /// Reads the current strong count.
+    /// Reads an approximation of the current strong count without
+    /// any memory ordering guarantees.
     #[inline]
     fn strong(&self) -> usize {
         self.strong.load(atomic::Ordering::Relaxed)
     }
 
-    /// Reads the current weak count.
+    /// Reads an approximation of the current weak count without
+    /// any memory ordering guarantees.
     #[inline]
     fn weak(&self) -> usize {
         self.weak.load(atomic::Ordering::Relaxed)
