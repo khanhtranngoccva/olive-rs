@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
-use olive_core::alloc::{AllocError, Allocator};
+use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
@@ -147,6 +147,20 @@ impl Drop for LocalCountingAlloc {
     }
 }
 
+impl TryClone for LocalCountingAlloc {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        // Cloning an `Rc` never fails in this framework's test harness.
+        Ok(Self {
+            drops: self.drops.clone(),
+        })
+    }
+}
+
+// SAFETY: cloning is infallible (the shared `Rc` clone cannot fail) and all
+// memory operations delegate to `Global`, so a cloned handle is equivalent to
+// the original.
+unsafe impl AllocatorTryClone for LocalCountingAlloc {}
+
 /// An [`Allocator`] whose allocation forwards to `Global` but whose
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
 #[derive(Debug, Clone)]
@@ -185,7 +199,7 @@ impl TryClone for FlakyCloneAlloc {
 
 // SAFETY: allocation delegates to `Global` (a valid allocator) and cloning is
 // handled by the `TryClone` impl above; together they satisfy the marker.
-unsafe impl olive_core::alloc::AllocatorTryClone for FlakyCloneAlloc {}
+unsafe impl AllocatorTryClone for FlakyCloneAlloc {}
 
 /// An allocator whose every allocation fails. Used to exercise OOM paths.
 #[derive(Debug, Default)]

@@ -42,10 +42,7 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Arc<T, A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = A::try_clone(&self.alloc)?;
         let inner = self.inner();
-        // Having an Arc reference here means that the object cannot be deleted,
-        // and the object cannot be newly written to or initialized from a second
-        // thread (invariant). Passing an existing reference between threads already
-        // requires synchronization.
+        // Passing an existing reference between threads already requires synchronization.
         //
         // See [boost documentation][1] for details.
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)

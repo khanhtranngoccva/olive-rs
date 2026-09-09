@@ -14,9 +14,9 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     /// Gets a shared raw pointer to the underlying data.
     ///
     /// The pointer has write provenance from the live allocation, so it can be
-    /// used in splitting and reconstitution operations.
-    // TODO: test as_ptr provenance behavior by testing the splitting and
-    // reconstitution API
+    /// used in splitting and reconstitution operations (see
+    /// [`into_raw`](super::Arc::into_raw) / [`from_raw`](super::Arc::from_raw)
+    /// and so on).
     #[must_use]
     #[inline]
     pub fn as_ptr(this: &Self) -> *const T {

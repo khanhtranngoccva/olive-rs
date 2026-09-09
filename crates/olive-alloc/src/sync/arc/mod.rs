@@ -38,10 +38,10 @@
 //! the global-allocator and allocator-generic forms) live in the child
 //! [`construction`](self::construction) module, along with the uninit→init
 //! bridge; the query methods (`as_ptr`, `allocator`, `ptr_eq`, and the
-//! refcount reads) live in the child [`query`](self::query) module. `Deref`,
-//! `Clone`/`TryClone`, weak-reference handling, and the raw-pointer
-//! reconstitution methods will land in later incremental steps, each keeping
-//! the tree compiling and tested.
+//! refcount reads) live in the child [`query`](self::query) module; and the
+//! raw-pointer splitting/reconstitution pairs (`into_raw` / `from_raw`) live
+//! in the child [`reconstitution`](self::reconstitution) module. Each step
+//! keeps the tree compiling and tested.
 
 use core::marker::PhantomData;
 use core::ptr;
@@ -70,6 +70,9 @@ pub(crate) mod pointers;
 mod passthrough;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
+/// Raw-pointer splitting and reconstitution (`into_raw` / `from_raw` pairs for
+/// both `Arc` and `Weak`).
+mod reconstitution;
 /// Trait implementations: `Deref`, `TryClone`, `Pointer`, `AsRef`, `Borrow`,
 /// `Debug`, `Default`, `TryDefault`.
 mod traits;

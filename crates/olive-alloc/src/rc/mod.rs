@@ -1807,18 +1807,30 @@ impl<T: ?Sized> Weak<T, Global> {
     ///
     /// # Safety
     ///
-    /// The pointer must have been obtained from [`Weak::into_raw`]
-    /// or [`Weak::into_raw_with_allocator`] and must be allocated with the global allocator,
-    /// and must still be valid.
+    /// The pointer must have originated from the [`Self::into_raw`] and
+    /// must still own its potential weak reference, and must point to a block of memory
+    /// allocated by global allocator.
     ///
-    /// It is allowed to pass in a pointer with a strong count of 0.
+    /// It is allowed for the strong count to be 0 at the time of calling this. Nevertheless, this
+    /// takes ownership of one weak reference currently represented as a raw pointer (the weak
+    /// count is not modified by this operation) and therefore it must be paired with a previous
+    /// call to [`Self::into_raw`].
+    ///
+    /// This function is unsafe because improper use may lead to memory
+    /// unsafety, even if the returned [`Weak<T>`] is never accessed.
     #[inline]
     pub unsafe fn from_raw(p: *const T) -> Self {
         // SAFETY: caller guarantees `p` derives from `Weak::into_raw`.
         unsafe {
-            let inner = data_get_ptr(p);
+            // A dangling weak's raw pointer is the sentinel itself (see
+            // `Weak::as_ptr`), not a projected payload address.
+            let inner = if is_dangling_weak(p as *const RcInner<T>) {
+                p as *mut RcInner<T>
+            } else {
+                data_get_ptr(p) as *mut RcInner<T>
+            };
             Weak {
-                ptr: NonNull::new_unchecked(inner as *mut RcInner<T>),
+                ptr: NonNull::new_unchecked(inner),
                 alloc: Global,
                 _marker: PhantomData,
             }
@@ -1846,25 +1858,38 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     ///
     /// # Safety
     ///
-    /// The pointer must have been obtained from [`Weak::into_raw`]
-    /// or [`Weak::into_raw_with_allocator`] and must be allocated with `alloc`,
-    /// and must still be valid.
+    /// The pointer must have originated from the [`Self::into_raw_with_allocator`] and
+    /// must still own its potential weak reference, and must point to a block of memory
+    /// allocated by `alloc`.
     ///
-    /// It is allowed to pass in a pointer with a strong count of 0.
+    /// It is allowed for the strong count to be 0 at the time of calling this. Nevertheless, this
+    /// takes ownership of one weak reference currently represented as a raw pointer (the weak
+    /// count is not modified by this operation) and therefore it must be paired with a previous
+    /// call to [`Self::into_raw_with_allocator`].
+    ///
+    /// This function is unsafe because improper use may lead to memory
+    /// unsafety, even if the returned [`Weak<T, A>`] is never accessed.
     #[inline]
     pub unsafe fn from_raw_in(p: *const T, alloc: A) -> Self {
         // SAFETY: caller guarantees validity.
         unsafe {
-            let inner = data_get_ptr(p);
+            // Mirror `from_raw`: a dangling weak's sentinel is not a payload
+            // address, so it must be cast directly instead of offset-adjusted.
+            let inner = if is_dangling_weak(p as *const RcInner<T>) {
+                p as *mut RcInner<T>
+            } else {
+                data_get_ptr(p) as *mut RcInner<T>
+            };
             Weak {
-                ptr: NonNull::new_unchecked(inner as *mut RcInner<T>),
+                ptr: NonNull::new_unchecked(inner),
                 alloc,
                 _marker: PhantomData,
             }
         }
     }
 
-    /// Converts a `Weak<T, A>` into a raw pointer, returning its allocator.
+    /// Converts a `Weak<T, A>` into a raw pointer, returning it along with 
+    /// its allocator.
     ///
     /// The caller takes ownership of both the allocation and the allocator and
     /// must eventually reconstruct a `Weak` from them (via
@@ -2183,6 +2208,21 @@ mod tests {
         let rc = unsafe { Rc::from_raw(raw) };
         assert_eq!(*rc, 99);
         assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn weak_dangling_into_raw_roundtrip() {
+        // A dangling weak carries no allocation; its raw pointer is the
+        // misaligned sentinel, and reconstituting it yields another dangling
+        // weak that behaves identically.
+        let w: Weak<u32, Global> = Weak::new();
+        let raw = Weak::into_raw(w);
+        assert_ne!(raw.addr(), 0);
+        let w = unsafe { Weak::from_raw(raw) };
+        // `as_ptr` on a dangling weak returns the sentinel itself — exercising
+        // the same branch that `from_raw` relies on to detect the sentinel.
+        assert_eq!(w.as_ptr().addr(), raw.addr());
+        assert!(w.try_upgrade().unwrap().is_none());
     }
 
     #[test]
