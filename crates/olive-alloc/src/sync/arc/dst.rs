@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(peek(&arc).len(), 1);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
-        assert_eq!(peek(&arc)[1], "hello world");
+        assert_eq!(peek(&arc)[0], "hello world");
     }
 
     #[test]
