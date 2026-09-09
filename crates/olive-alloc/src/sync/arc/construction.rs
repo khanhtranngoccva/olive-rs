@@ -281,28 +281,12 @@ mod tests {
 
     use crate::sync::arc::pointers::is_dangling_weak;
 
-    /// Reads the payload behind an `Arc` without relying on `Deref` (which has
-    /// not landed yet). Only valid while the payload is initialized and no
-    /// other thread mutates it — both hold in these single-threaded tests.
-    fn peek<T, A: Allocator>(arc: &Arc<T, A>) -> &T {
-        // SAFETY: the Arc owns a live allocation whose payload is initialized.
-        // Projects the `value` field out of the fat pointer, mirroring the
-        // parent module's `ptr_get_data`.
-        #[allow(
-            clippy::needless_borrow,
-            reason = "Miri does not allow implicit autoref"
-        )]
-        unsafe {
-            &(&*arc.ptr.as_ptr()).value
-        }
-    }
-
     // --- Global construction ------------------------------------------------
 
     #[test]
     fn try_new_initializes_counters_and_payload() {
         let arc = Arc::try_new(42u32).unwrap();
-        assert_eq!(peek(&arc), &42);
+        assert_eq!(*arc, 42);
         // Fresh node: exactly one strong owner and the implicit weak ref.
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
@@ -312,7 +296,7 @@ mod tests {
     #[test]
     fn try_new_give_back_success_preserves_value() {
         let arc = Arc::try_new_give_back(String::from("hi")).unwrap();
-        assert_eq!(&**peek(&arc), "hi");
+        assert_eq!(*arc, "hi");
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -328,7 +312,7 @@ mod tests {
     #[test]
     fn try_new_zeroed_yields_zeroed_payload() {
         let arc: Arc<u64, Global> = Arc::try_new_zeroed().unwrap();
-        assert_eq!(peek(&arc), &0u64);
+        assert_eq!(*arc, 0u64);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -339,7 +323,7 @@ mod tests {
     fn write_initializes_uninit_arc() {
         let uninit: Arc<MaybeUninit<String>, Global> = Arc::try_new_uninit().unwrap();
         let arc = unsafe { uninit.write(String::from("bridged")) };
-        assert_eq!(&**peek(&arc), "bridged");
+        assert_eq!(*arc, "bridged");
         // The bridge must preserve the exact refcount state of the source.
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
@@ -358,7 +342,7 @@ mod tests {
 
         let arc = unsafe { uninit.assume_init() };
         // Payload bits survive verbatim — `assume_init` did not overwrite them.
-        assert_eq!(peek(&arc), &[1u8, 2, 3, 4]);
+        assert_eq!(*arc, [1u8, 2, 3, 4]);
         // Counters are untouched by the reinterpretation.
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
@@ -378,7 +362,7 @@ mod tests {
             *ptr_get_data_mut(u.ptr.as_ptr()) = MaybeUninit::new(99i64);
             u.assume_init()
         };
-        assert_eq!(peek(&a), peek(&b));
+        assert_eq!(*a, *b);
         assert_eq!(Arc::strong_count(&a), Arc::strong_count(&b));
         assert_eq!(Arc::weak_count(&a), Arc::weak_count(&b));
     }
@@ -390,7 +374,7 @@ mod tests {
         let drops = std::rc::Rc::new(crate::test_helpers::DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(7i64, alloc).unwrap();
-        assert_eq!(peek(&arc), &7);
+        assert_eq!(*arc, 7);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
         drop(arc);
@@ -434,10 +418,10 @@ mod tests {
         // Both routes allocate a fresh node with identical initial counters.
         let g = Arc::try_new(1u8).unwrap();
         assert_eq!(Arc::strong_count(&g), 1);
-        assert_eq!(peek(&g), &1u8);
+        assert_eq!(*g, 1u8);
         let generic = Arc::try_new_in(1u8, Global).unwrap();
         assert_eq!(Arc::strong_count(&generic), 1);
-        assert_eq!(peek(&generic), &1u8);
+        assert_eq!(*generic, 1u8);
     }
 
     // --- Weak construction ---------------------------------------------------

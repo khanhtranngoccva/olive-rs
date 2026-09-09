@@ -171,19 +171,6 @@ mod tests {
     use super::*;
     use crate::alloc::Global;
 
-    /// Reads the payload behind an `Arc` without relying on `Deref` (which has
-    /// not landed yet). Only valid while the payload is initialized.
-    fn peek<T, A: Allocator>(arc: &Arc<T, A>) -> &T {
-        // SAFETY: the Arc owns a live allocation whose payload is initialized.
-        #[allow(
-            clippy::needless_borrow,
-            reason = "Miri does not allow implicit autoref"
-        )]
-        unsafe {
-            &(&*arc.ptr.as_ptr()).value
-        }
-    }
-
     #[test]
     fn as_ptr_points_at_payload() {
         let arc = Arc::try_new(42u32).unwrap();
@@ -192,7 +179,7 @@ mod tests {
         // The pointer addresses the payload slot, not the counter header:
         // writing through it (sole owner) must be observable via the handle.
         unsafe { *(p as *mut u32) = 7 };
-        assert_eq!(peek(&arc), &7);
+        assert_eq!(*arc, 7);
     }
 
     #[test]

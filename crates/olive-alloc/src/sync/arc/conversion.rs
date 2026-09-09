@@ -178,19 +178,6 @@ mod tests {
     use std::rc::Rc;
     use std::string::String;
 
-    /// Reads the payload behind an `Arc` without relying on `Deref` (which has
-    /// not landed yet). Only valid while the payload is initialized.
-    fn peek<T, A: AllocatorTryClone>(arc: &Arc<T, A>) -> &T {
-        // SAFETY: the Arc owns a live allocation whose payload is initialized.
-        #[allow(
-            clippy::needless_borrow,
-            reason = "Miri does not allow implicit autoref"
-        )]
-        unsafe {
-            &(&*arc.ptr.as_ptr()).value
-        }
-    }
-
     // --- Happy paths --------------------------------------------------------
 
     #[test]
@@ -214,12 +201,12 @@ mod tests {
         let upgraded = weak.try_upgrade().unwrap().expect("strong refs remain");
         // Upgrading adds exactly one strong owner.
         assert_eq!(Arc::strong_count(&upgraded), 2);
-        assert_eq!(peek(&upgraded), &42);
+        assert_eq!(*upgraded, 42);
         // The block is still shared: dropping the original leaves the upgraded
         // handle fully valid.
         drop(arc);
         assert_eq!(Arc::strong_count(&upgraded), 1);
-        assert_eq!(peek(&upgraded), &42);
+        assert_eq!(*upgraded, 42);
     }
 
     #[test]

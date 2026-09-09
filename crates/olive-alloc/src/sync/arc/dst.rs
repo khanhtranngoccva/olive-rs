@@ -434,29 +434,13 @@ mod tests {
     use std::rc::Rc as StdRc;
     use std::vec::Vec;
 
-    /// Reads the payload behind an `Arc` without relying on `Deref` (which has
-    /// not landed yet). Only valid while the payload is initialized and no
-    /// other thread mutates it — both hold in these single-threaded tests.
-    fn peek<T: ?Sized, A: Allocator>(arc: &Arc<T, A>) -> &T {
-        // SAFETY: the Arc owns a live allocation whose payload is initialized.
-        // Projects the `value` field out of the fat pointer, mirroring the
-        // parent module's `ptr_get_data`.
-        #[allow(
-            clippy::needless_borrow,
-            reason = "Miri does not allow implicit autoref"
-        )]
-        unsafe {
-            &(&*arc.ptr.as_ptr()).value
-        }
-    }
-
     // --- Slice construction --------------------------------------------------
 
     #[test]
     fn try_from_slice_copies_bytes_and_sets_counters() {
         let arr = [1u8, 2, 3, 4];
         let arc: Arc<[u8]> = Arc::try_from_slice(&arr[..]).unwrap();
-        assert_eq!(peek(&arc), &[1, 2, 3, 4]);
+        assert_eq!(&*arc, &[1, 2, 3, 4]);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
         assert_eq!(arc.inner().weak(), 1);
@@ -466,7 +450,7 @@ mod tests {
     fn try_from_slice_empty_is_valid() {
         let arr: [u8; 0] = [];
         let arc: Arc<[u8]> = Arc::try_from_slice(&arr[..]).unwrap();
-        assert_eq!(peek(&arc).len(), 0);
+        assert_eq!(arc.len(), 0);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -475,10 +459,10 @@ mod tests {
     fn try_from_string_slice_is_correct() {
         let arr: [String; 1] = [String::try_from_str("hello world").unwrap()];
         let arc: Arc<[String]> = Arc::try_from_slice(&arr[..]).unwrap();
-        assert_eq!(peek(&arc).len(), 1);
+        assert_eq!(arc.len(), 1);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
-        assert_eq!(peek(&arc)[0], "hello world");
+        assert_eq!(arc[0], "hello world");
     }
 
     #[test]
@@ -487,7 +471,7 @@ mod tests {
         // pointer must still report the correct length.
         let src: Vec<()> = std::vec![(), (), ()];
         let arc: Arc<[()]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
-        assert_eq!(peek(&arc).len(), 3);
+        assert_eq!(arc.len(), 3);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -496,7 +480,7 @@ mod tests {
     fn try_from_str_copies_utf8_and_sets_counters() {
         let s = String::try_from_str("héllo wörld").unwrap();
         let arc: Arc<str> = Arc::try_from_str(s.as_str()).unwrap();
-        assert_eq!(peek(&arc), "héllo wörld");
+        assert_eq!(arc.as_ref(), "héllo wörld");
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -507,7 +491,7 @@ mod tests {
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arr = [9u8, 8, 7];
         let arc = Arc::try_from_slice_in(&arr[..], alloc).unwrap();
-        assert_eq!(peek(&arc), &[9, 8, 7]);
+        assert_eq!(&*arc, &[9, 8, 7]);
         assert_eq!(Arc::strong_count(&arc), 1);
         drop(arc);
         // The allocator handle was consumed by the Arc and dropped with it.
@@ -595,7 +579,7 @@ mod tests {
         let src: Vec<DropCountingElem> = std::vec![mk(), mk(), mk()];
 
         let arc: Arc<[DropCountingElem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
-        assert_eq!(peek(&arc).len(), 3);
+        assert_eq!(arc.len(), 3);
         // No clone has been dropped while the Arc is still alive.
         assert_eq!(drops.get(), 0);
 
@@ -684,7 +668,7 @@ mod tests {
         fill_slots(&uninit, |i| i as i32 * 10);
 
         let arc = unsafe { uninit.assume_init() };
-        assert_eq!(peek(&arc), &[0, 10, 20, 30]);
+        assert_eq!(&*arc, &[0, 10, 20, 30]);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -694,7 +678,7 @@ mod tests {
         let uninit: Arc<[MaybeUninit<u8>], Global> =
             Arc::try_new_uninit_slice_in(0, Global).unwrap();
         let arc = unsafe { uninit.assume_init() };
-        assert_eq!(peek(&arc).len(), 0);
+        assert_eq!(arc.len(), 0);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -711,7 +695,7 @@ mod tests {
         assert_eq!(Arc::weak_count(&zeroed), 0);
 
         let arc = unsafe { zeroed.assume_init() };
-        assert_eq!(peek(&arc), &[0u64; 8]);
+        assert_eq!(&*arc, &[0u64; 8]);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -740,7 +724,7 @@ mod tests {
         // them is a no-op write, then `assume_init` must preserve the count.
         fill_slots(&uninit, |_| ());
         let arc = unsafe { uninit.assume_init() };
-        assert_eq!(peek(&arc).len(), 5);
+        assert_eq!(arc.len(), 5);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
     }
@@ -777,7 +761,7 @@ mod tests {
         assert_eq!(Arc::weak_count(&via_alias), Arc::weak_count(&via_generic));
 
         let aliased = unsafe { via_alias.assume_init() };
-        assert_eq!(peek(&aliased), &[0u64; 8]);
+        assert_eq!(&*aliased, &[0u64; 8]);
     }
 
     // --- Cross-checks ---------------------------------------------------------
@@ -790,7 +774,7 @@ mod tests {
         ];
         let g = Arc::try_from_slice(&arr[..]).unwrap();
         let generic = Arc::try_from_slice_in(&arr[..], Global).unwrap();
-        assert_eq!(peek(&g), peek(&generic));
+        assert_eq!(*g, *generic);
         assert_eq!(Arc::strong_count(&g), Arc::strong_count(&generic));
         assert_eq!(Arc::weak_count(&g), Arc::weak_count(&generic));
     }
