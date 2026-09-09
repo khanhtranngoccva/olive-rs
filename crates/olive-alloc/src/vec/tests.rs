@@ -14,7 +14,8 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::*;
 use crate::test_helpers::{
-    CloneBudget, DropCounter, FailAlloc, FlakyClone, Ledger, LocalCountingAlloc, PanicArmer,
+    CloneBudget, DropCounter, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger,
+    LocalCountingAlloc, PanicArmer,
 };
 use std::format;
 use std::rc::Rc;
@@ -437,38 +438,6 @@ fn from_iter_in_fail_alloc_reports_reserve() {
 // Clone-failure rollback
 // ---------------------------------------------------------------------------
 
-/// A payload that registers a fresh id on construction and unregisters it on
-/// drop, so the shared [`Ledger`] can track exactly which instances are alive.
-/// Its `try_clone` succeeds while a shared [`CloneBudget`] has room (each clone
-/// gets its own new id), then fails — letting a test drive a deterministic
-/// mid-operation clone failure while still observing every transient instance.
-struct TrackedPayload {
-    id: u32,
-    ledger: Rc<Ledger>,
-    budget: Rc<CloneBudget>,
-}
-
-impl Drop for TrackedPayload {
-    fn drop(&mut self) {
-        self.ledger.unregister(self.id);
-    }
-}
-
-impl TryClone for TrackedPayload {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        if !self.budget.try_consume() {
-            return Err(TryCloneError::Other("budget exhausted"));
-        }
-        let id = self.ledger.allocate();
-        self.ledger.register(id);
-        Ok(TrackedPayload {
-            id,
-            ledger: self.ledger.clone(),
-            budget: self.budget.clone(),
-        })
-    }
-}
-
 #[test]
 fn resize_rollbacks_partial_on_clone_failure() {
     let ledger = Rc::new(Ledger::new());
@@ -479,8 +448,8 @@ fn resize_rollbacks_partial_on_clone_failure() {
     // Seed one live payload (id 0).
     let seed_id = ledger.allocate();
     ledger.register(seed_id);
-    let mut v: Vec<TrackedPayload> = Vec::new();
-    v.try_push(TrackedPayload {
+    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    v.try_push(FlakyTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
         budget: budget.clone(),
@@ -527,8 +496,8 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     // One live seed in the destination (id 0).
     let seed_id = ledger.allocate();
     ledger.register(seed_id);
-    let mut v: Vec<TrackedPayload> = Vec::new();
-    v.try_push(TrackedPayload {
+    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    v.try_push(FlakyTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
         budget: budget.clone(),
@@ -538,11 +507,11 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
     // order; the budget allows exactly two successful clones (of ids 1 and 2),
     // then the third clone (of id 3) fails → rollback discards the two appends.
-    let mut fv: Vec<TrackedPayload> = Vec::new();
+    let mut fv: Vec<FlakyTrackedItem> = Vec::new();
     for _ in 0..3 {
         let id = ledger.allocate();
         ledger.register(id);
-        fv.try_push(TrackedPayload {
+        fv.try_push(FlakyTrackedItem {
             id,
             ledger: ledger.clone(),
             budget: budget.clone(),
@@ -743,25 +712,17 @@ fn into_iter_size_hint() {
 #[test]
 fn into_iter_drop_mid_way_drops_only_tail() {
     let ledger = Rc::new(Ledger::new());
-
-    struct Tracked {
-        id: u32,
-        ledger: Rc<Ledger>,
-    }
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.ledger.unregister(self.id);
-        }
-    }
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
 
     // Yield two elements, then drop the iterator while three remain.
     {
-        let mut v = Vec::new();
+        let mut v: Vec<FlakyTrackedItem> = Vec::new();
         for i in 0..5u32 {
             ledger.register(i);
-            v.try_push(Tracked {
+            v.try_push(FlakyTrackedItem {
                 id: i,
                 ledger: ledger.clone(),
+                budget: budget.clone(),
             })
             .unwrap();
         }
@@ -1142,33 +1103,24 @@ fn into_raw_parts_roundtrip() {
 #[test]
 fn drop_runs_each_element_once() {
     let ledger = Rc::new(Ledger::new());
-
-    struct Tracked {
-        id: u32,
-        ledger: Rc<Ledger>,
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    for i in 0..5u32 {
+        ledger.register(i);
+        v.try_push(FlakyTrackedItem {
+            id: i,
+            ledger: ledger.clone(),
+            budget: budget.clone(),
+        })
+        .unwrap();
     }
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.ledger.unregister(self.id);
-        }
-    }
-
-    {
-        let mut v = Vec::new();
-        for i in 0..5u32 {
-            ledger.register(i);
-            v.try_push(Tracked {
-                id: i,
-                ledger: ledger.clone(),
-            })
-            .unwrap();
-        }
-        // truncate(3) destroys the tail (ids 3 and 4).
-        v.truncate(3);
-        assert_eq!(ledger.live_ids(), [0, 1, 2]);
-        assert_eq!(ledger.drop_count(3), 1);
-        assert_eq!(ledger.drop_count(4), 1);
-    } // dropping the vec destroys ids 0, 1, 2
+    // truncate(3) destroys the tail (ids 3 and 4).
+    v.truncate(3);
+    assert_eq!(ledger.live_ids(), [0, 1, 2]);
+    assert_eq!(ledger.drop_count(3), 1);
+    assert_eq!(ledger.drop_count(4), 1);
+    // Drops the remaining IDs
+    drop(v);
     // All five dropped exactly once; no leaks, no double-frees.
     assert!(ledger.leaked_ids().is_empty());
     assert!(ledger.all_dropped_once(0..5));
@@ -1184,21 +1136,21 @@ fn drop_runs_each_element_once() {
 #[test]
 fn dedup_by_panic_is_safe() {
     let ledger = Rc::new(Ledger::new());
-
-    struct Tracked(u8, Rc<Ledger>);
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.1.unregister(self.0 as u32);
-        }
-    }
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();
+        let b = budget.clone();
         move || {
-            let mut v = Vec::new();
+            let mut v: Vec<FlakyTrackedItem> = Vec::new();
             for i in 0..6u8 {
                 l.register(i as u32);
-                v.try_push(Tracked(i, l.clone())).unwrap();
+                v.try_push(FlakyTrackedItem {
+                    id: i as u32,
+                    ledger: l.clone(),
+                    budget: b.clone(),
+                })
+                .unwrap();
             }
             // Panic on the third predicate call, mid-gap-fill, so some duplicate
             // elements have already been destroyed by the time we unwind.
@@ -1208,7 +1160,7 @@ fn dedup_by_panic_is_safe() {
                 if calls == 3 {
                     panic!("forced panic mid-dedup");
                 }
-                a.0 == b.0
+                a.id == b.id
             });
         }
     }));
@@ -1921,19 +1873,17 @@ fn drain_exhausted_from_back_at_tail_is_safe() {
 #[test]
 fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     let ledger = Rc::new(Ledger::new());
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
 
-    #[allow(dead_code)]
-    struct Tracked(u32, Rc<Ledger>);
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.1.unregister(self.0);
-        }
-    }
-
-    let mut v: Vec<Tracked> = Vec::new();
+    let mut v: Vec<FlakyTrackedItem> = Vec::new();
     for i in 0..6u32 {
         ledger.register(i);
-        v.try_push(Tracked(i, ledger.clone())).unwrap();
+        v.try_push(FlakyTrackedItem {
+            id: i,
+            ledger: ledger.clone(),
+            budget: budget.clone(),
+        })
+        .unwrap();
     }
     // Drain [1..4): elements 1, 2, 3 live in the hole. Pull one from each end:
     // element 1 via `next`, element 3 via `next_back`, leaving element 2 as the
@@ -1942,9 +1892,9 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     // the prefix is the only part the vec still owns.)
     let mut d = v.try_drain(1..4).unwrap();
     let front = d.next().expect("front drain element");
-    assert_eq!(front.0, 1);
+    assert_eq!(front.id, 1);
     let back = d.next_back().expect("back drain element");
-    assert_eq!(back.0, 3);
+    assert_eq!(back.id, 3);
     // Forget the rest of the drainer: its remaining hole (element 2) and the
     // suffix (4, 5) are abandoned by both owners.
     core::mem::forget(d);
@@ -2143,19 +2093,17 @@ fn split_off_moves_all_elements_exactly_once() {
     // dropping anything, and that each element is destroyed exactly once when
     // its owning vec finally goes away — no double-free, no leak.
     let ledger = Rc::new(Ledger::new());
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
 
-    #[allow(dead_code)]
-    struct Tracked(u32, Rc<Ledger>);
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.1.unregister(self.0);
-        }
-    }
-
-    let mut v: Vec<Tracked> = Vec::new();
+    let mut v: Vec<FlakyTrackedItem> = Vec::new();
     for i in 0..6u32 {
         ledger.register(i);
-        v.try_push(Tracked(i, ledger.clone())).unwrap();
+        v.try_push(FlakyTrackedItem {
+            id: i,
+            ledger: ledger.clone(),
+            budget: budget.clone(),
+        })
+        .unwrap();
     }
     let right = v.try_split_off(3).unwrap();
     assert_eq!(v.len(), 3);
@@ -2292,49 +2240,59 @@ fn extend_from_within_grows_capacity() {
 /// precise verification of both leaks and double-frees.
 #[test]
 fn extend_from_within_panic_is_safe() {
-    struct Payload {
-        id: u32,
-        ledger: Rc<Ledger>,
+    /// A tracked item whose `try_clone` panics once it has produced its third
+    /// successful clone overall (id >= 5 means ids 4 and 5 were the two prior
+    /// successes), driving the loop past at least one successful append before
+    /// unwinding. The panicked clone undoes its own registration so no payload
+    /// survives that call.
+    struct PanickingItem {
+        pub id: u32,
+        pub ledger: Rc<Ledger>,
+        pub budget: Rc<CloneBudget>,
     }
 
-    impl Drop for Payload {
+    impl Drop for PanickingItem {
         fn drop(&mut self) {
             self.ledger.unregister(self.id);
         }
     }
 
-    impl TryClone for Payload {
+    impl TryClone for PanickingItem {
         fn try_clone(&self) -> Result<Self, TryCloneError> {
+            if !self.budget.try_consume() {
+                return Err(TryCloneError::Other("budget exhausted"));
+            }
             let id = self.ledger.allocate();
             self.ledger.register(id);
-            // Panic starting from the 3rd successful clone (id >= 5 means ids
-            // 4 and 5 were the two prior successes). This drives the loop past
-            // at least one successful append before unwinding.
             if id >= 5 {
-                // Undo the registration: no Payload survives this call.
+                // Undo the registration: no item survives this call.
                 self.ledger.unregister(id);
                 panic!("forced panic in try_clone");
             }
-            Ok(Payload {
+            Ok(PanickingItem {
                 id,
                 ledger: self.ledger.clone(),
+                budget: self.budget.clone(),
             })
         }
     }
 
     let ledger = Rc::new(Ledger::new());
+    let budget = Rc::new(CloneBudget::new(u32::MAX));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();
+        let b = budget.clone();
         move || {
-            let mut v = Vec::new();
-            // Push 4 initial payloads (ids 0–3).
+            let mut v: Vec<PanickingItem> = Vec::new();
+            // Push 4 initial items (ids 0–3).
             for _ in 0..4 {
                 let id = l.allocate();
                 l.register(id);
-                v.try_push(Payload {
+                v.try_push(PanickingItem {
                     id,
                     ledger: l.clone(),
+                    budget: b.clone(),
                 })
                 .unwrap();
             }

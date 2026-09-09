@@ -429,8 +429,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::string::String;
-    use crate::test_helpers::{BudgetedFlaky, CloneBudget, FailAlloc};
-    use olive_core::try_traits::try_clone::TryClone;
+    use crate::test_helpers::{CloneBudget, FailAlloc, Ledger, FlakyTrackedItem};
     use std::rc::Rc as StdRc;
     use std::vec::Vec;
 
@@ -543,68 +542,76 @@ mod tests {
 
     // --- Clone-failure rollback ----------------------------------------------
 
-    /// An element whose every incarnation (source or clone) increments a shared
-    /// drop counter on destruction. Lets a test verify that a successful slice
-    /// clone produces exactly one extra drop per element when the resulting
-    /// `Arc` is later dropped, with nothing leaked or double-freed along the way.
-    struct DropCountingElem {
-        drops: StdRc<std::cell::Cell<u32>>,
-    }
-
-    impl TryClone for DropCountingElem {
-        fn try_clone(&self) -> Result<Self, TryCloneError> {
-            Ok(DropCountingElem {
-                drops: self.drops.clone(),
-            })
-        }
-    }
-
-    impl Drop for DropCountingElem {
-        fn drop(&mut self) {
-            self.drops.set(self.drops.get() + 1);
-        }
-    }
-
     #[test]
-    // FIXME: use the ledger
     fn slice_clone_success_drops_each_element_exactly_once() {
-        // Three source elements are cloned into a fresh Arc. While the Arc is
-        // alive no clone has been dropped yet; dropping the Arc must destroy the
-        // three clones exactly once, then dropping the source vec destroys the
-        // three originals exactly once. Total: six drops, none lost or doubled.
-        let drops = StdRc::new(std::cell::Cell::new(0u32));
-        let mk = || DropCountingElem {
-            drops: drops.clone(),
-        };
-        let src: Vec<DropCountingElem> = std::vec![mk(), mk(), mk()];
+        // Three source elements (ids 0..3) are cloned into a fresh Arc as new
+        // ids (3..6). While the Arc is alive no clone has been dropped yet;
+        // dropping the Arc must destroy the three clones exactly once, then
+        // dropping the source vec destroys the three originals exactly once.
+        let ledger = StdRc::new(Ledger::new());
+        let budget = StdRc::new(CloneBudget::new(u32::MAX));
+        let mut src: Vec<FlakyTrackedItem> = Vec::new();
+        for _ in 0..3 {
+            let id = ledger.allocate();
+            ledger.register(id);
+            src.push(FlakyTrackedItem {
+                id,
+                ledger: ledger.clone(),
+                budget: budget.clone(),
+            });
+        }
 
-        let arc: Arc<[DropCountingElem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
+        let arc: Arc<[FlakyTrackedItem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
         assert_eq!(arc.len(), 3);
-        // No clone has been dropped while the Arc is still alive.
-        assert_eq!(drops.get(), 0);
+        // Six instances exist: the three sources and their three clones. None
+        // has been dropped yet.
+        assert_eq!(ledger.live_ids(), [0, 1, 2, 3, 4, 5]);
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.drop_counts().is_empty());
 
         drop(arc);
-        // The three cloned incarnations are destroyed exactly once each.
-        assert_eq!(drops.get(), 3);
+        // The three cloned incarnations (ids 3, 4, 5) are destroyed exactly
+        // once each; the sources remain live.
+        assert_eq!(ledger.live_ids(), [0, 1, 2]);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        assert_eq!(ledger.drop_count(5), 1);
 
         drop(src);
-        // Plus the three originals: six total, no leaks or double-frees.
-        assert_eq!(drops.get(), 6);
+        // All six instances died exactly once: no leaks, no double-frees.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..6));
     }
 
     #[test]
-    // FIXME: use the ledger
     fn budgeted_flaky_mid_operation_failure_is_clean() {
         // Shared budget allows exactly 2 clones; a 3-element slice forces a
-        // failure at element index 2. Nothing may leak or double-free.
+        // failure at element index 2. Rollback must discard the two transient
+        // clones without leaking or double-freeing anything.
+        let ledger = StdRc::new(Ledger::new());
         let budget = StdRc::new(CloneBudget::new(2));
-        let mk = || BudgetedFlaky {
-            budget: budget.clone(),
-        };
-        let src: Vec<BudgetedFlaky> = std::vec![mk(), mk(), mk()];
-        let res: Result<Arc<[BudgetedFlaky]>, TryCloneError> =
+        let mut src: Vec<FlakyTrackedItem> = Vec::new();
+        for _ in 0..3 {
+            let id = ledger.allocate();
+            ledger.register(id);
+            src.push(FlakyTrackedItem {
+                id,
+                ledger: ledger.clone(),
+                budget: budget.clone(),
+            });
+        }
+        let res: Result<Arc<[FlakyTrackedItem]>, TryCloneError> =
             Arc::try_clone_from_ref_in(&src[..], Global);
         assert!(res.is_err(), "third clone must exhaust the budget");
+        // Exactly two transient clones (ids 3 and 4) were created and both were
+        // rolled back: each dropped precisely once, only the sources remain
+        // live, and nothing was double-freed.
+        assert_eq!(ledger.live_ids(), [0, 1, 2]);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        assert_eq!(ledger.total_allocated(), 5);
         // The budget must be fully drained: two successful clones plus the third
         // failed attempt that observed an empty budget. A further consume must
         // therefore still fail, proving nothing was leaked back into the pool.
@@ -612,6 +619,11 @@ mod tests {
             !budget.try_consume(),
             "budget should be exhausted after the failed clone"
         );
+
+        // Tear down the sources: all five instances now dead exactly once.
+        drop(src);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
     }
 
     // --- Absurd layout --------------------------------------------------------
