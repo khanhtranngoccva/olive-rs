@@ -197,3 +197,19 @@ pub(crate) const MAX_REFCOUNT: usize = usize::MAX - 1;
 pub(crate) fn is_last_strong(strong: usize) -> bool {
     strong == 0
 }
+
+/// A checked increment that does not exceed [`MAX_REFCOUNT`].
+#[inline]
+pub(crate) fn checked_increment(n: usize) -> Option<usize> {
+    if n >= MAX_REFCOUNT {
+        None
+    } else {
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "cannot overflow: guarded by the check above."
+        )]
+        {
+            Some(n + 1)
+        }
+    }
+}

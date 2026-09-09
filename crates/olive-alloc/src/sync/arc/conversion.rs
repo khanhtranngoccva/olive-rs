@@ -15,7 +15,7 @@ use crate::alloc::AllocError;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::try_traits::try_clone::TryCloneError;
 
-use super::pointers::MAX_REFCOUNT;
+use super::pointers::checked_increment;
 use super::{Arc, Weak};
 
 // ---------------------------------------------------------------------------
@@ -99,22 +99,9 @@ impl<T: ?Sized, A: AllocatorTryClone> Arc<T, A> {
     pub fn try_downgrade(this: &Self) -> Result<Weak<T, A>, TryArcError> {
         let alloc = A::try_clone(&this.alloc)?;
         let inner = Self::inner(this);
-        // Reject increments once the weak count has reached MAX_REFCOUNT:
-        // `usize::MAX` is reserved as a sentinel, so the counter must never
-        // reach it.
         inner
             .weak
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                // Reject (rather than saturate) once the counter has reached
-                // MAX_REFCOUNT: incrementing further would reach the reserved
-                // `usize::MAX` sentinel.
-                if n >= MAX_REFCOUNT {
-                    None
-                } else {
-                    // Cannot overflow: guarded by the check above.
-                    Some(n.checked_add(1).expect("guarded by MAX_REFCOUNT bound"))
-                }
-            })
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, checked_increment)
             .map_err(|_| TryArcError::OutOfBounds)?;
         Ok(Weak {
             ptr: this.ptr,
@@ -159,22 +146,11 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
 
         // Bump the strong count. Success uses `Acquire` so an upgrader is
         // synchronized-with a publisher that wrote the payload then bumped the
-        // count with `Release`. Increments are rejected once the count has
-        // reached MAX_REFCOUNT: `usize::MAX` is reserved as a sentinel.
+        // count with `Release`.
         match inner
             .strong
             .fetch_update(Ordering::Acquire, Ordering::Relaxed, |n| {
-                if n == 0 {
-                    None
-                } else if n >= MAX_REFCOUNT {
-                    // Reject (rather than saturate) once the counter has reached
-                    // MAX_REFCOUNT: incrementing further would reach the reserved
-                    // `usize::MAX` sentinel.
-                    None
-                } else {
-                    // Cannot overflow: guarded by the check above.
-                    Some(n.checked_add(1).expect("guarded by MAX_REFCOUNT bound"))
-                }
+                if n == 0 { None } else { checked_increment(n) }
             }) {
             Ok(_) => {}
             Err(current) => {

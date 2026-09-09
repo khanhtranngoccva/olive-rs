@@ -3,7 +3,7 @@
 //! Covers `Deref`, `TryClone`, `TryDefault`, `Default`, `Debug`, `Display`,
 //! `AsRef`, `Borrow`, and `Pointer`.
 
-use super::pointers::{self, MAX_REFCOUNT};
+use super::pointers::{self, checked_increment};
 use super::{Arc, Weak};
 use core::borrow::Borrow;
 use core::fmt::{self, Debug, Formatter};
@@ -12,20 +12,6 @@ use olive_core::alloc::Allocator;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-
-fn checked_increment(n: usize) -> Option<usize> {
-    if n >= MAX_REFCOUNT {
-        None
-    } else {
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "cannot overflow: guarded by the check above."
-        )]
-        {
-            Some(n + 1)
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Deref (?Sized)
