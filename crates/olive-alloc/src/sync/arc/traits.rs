@@ -1,11 +1,12 @@
 //! Trait implementations for [`Arc`](super::Arc) and [`Weak`](super::Weak).
 //!
-//! Covers `TryClone`, `TryDefault`, `Default`, `Debug`, `Display`, and
-//! `Deref`, and more.
+//! Covers `Deref`, `TryClone`, `TryDefault`, `Default`, `Debug`, `Display`,
+//! `AsRef`, `Borrow`, and `Pointer`.
 
 use super::pointers;
 use super::{Arc, Weak};
-use core::fmt::{self, Debug, Display, Formatter};
+use core::borrow::Borrow;
+use core::fmt::{self, Debug, Formatter};
 use core::ops::Deref;
 use olive_core::alloc::Allocator;
 use olive_core::alloc::AllocatorTryClone;
@@ -98,20 +99,32 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting (?Sized)
+// Pointer / AsRef / Borrow (?Sized)
 // ---------------------------------------------------------------------------
 
-impl<T: Debug + ?Sized, A: Allocator> Debug for Arc<T, A> {
+impl<T: ?Sized, A: Allocator> fmt::Pointer for Arc<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&**self, f)
+        fmt::Pointer::fmt(&Self::as_ptr(self), f)
     }
 }
 
-impl<T: Display + ?Sized, A: Allocator> Display for Arc<T, A> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&**self, f)
+impl<T: ?Sized, A: Allocator> AsRef<T> for Arc<T, A> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        self
     }
 }
+
+impl<T: ?Sized, A: Allocator> Borrow<T> for Arc<T, A> {
+    #[inline]
+    fn borrow(&self) -> &T {
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Formatting (?Sized)
+// ---------------------------------------------------------------------------
 
 // Mirrors std: printing a `Weak` would require upgrading it, which needs a
 // fallible allocator clone (`A: AllocatorTryClone`). Print only the marker
@@ -236,21 +249,31 @@ mod tests {
         assert_eq!(Arc::weak_count(&arc), 0);
     }
 
-    // --- Debug / Display -----------------------------------------------------
+    // --- Pointer / AsRef / Borrow ---------------------------------------------
 
     #[test]
-    fn arc_debug_delegates_to_inner() {
-        let arc = Arc::try_new(std::vec![1, 2, 3]).unwrap();
-        let dbg = std::format!("{:?}", arc);
-        assert_eq!(dbg, "[1, 2, 3]");
+    fn arc_pointer_formats_as_raw_ptr() {
+        let arc = Arc::try_new(42u32).unwrap();
+        let expected = std::format!("{:p}", Arc::as_ptr(&arc));
+        let actual = std::format!("{:p}", arc);
+        assert_eq!(expected, actual);
     }
 
     #[test]
-    fn arc_display_delegates_to_inner() {
+    fn arc_as_ref_yields_payload() {
+        let arc = Arc::try_new(String::from("hello")).unwrap();
+        let s: &String = arc.as_ref();
+        assert_eq!(s.as_str(), "hello");
+    }
+
+    #[test]
+    fn arc_borrow_yields_payload() {
         let arc = Arc::try_new(String::from("world")).unwrap();
-        let disp = std::format!("{}", arc);
-        assert_eq!(disp, "world");
+        let s: &String = Borrow::borrow(&arc);
+        assert_eq!(s.as_str(), "world");
     }
+
+    // --- Debug ----------------------------------------------------------------
 
     #[test]
     fn weak_debug_prints_marker() {

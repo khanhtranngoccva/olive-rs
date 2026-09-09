@@ -66,10 +66,12 @@ pub(crate) mod conversion;
 mod dst;
 /// Shared pointer/layout/refcount-header helpers for `ArcInner<T>`.
 pub(crate) mod pointers;
+/// Passthrough formatting impls for `Arc` (`Debug`, `Display`).
+mod passthrough;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
-/// Trait implementations: `Deref`, `TryClone`, `Debug`, `Display`,
-/// `Default`, `TryDefault`.
+/// Trait implementations: `Deref`, `TryClone`, `Pointer`, `AsRef`, `Borrow`,
+/// `Debug`, `Default`, `TryDefault`.
 mod traits;
 
 // Re-export the conversion error at the module root so callers of the public
