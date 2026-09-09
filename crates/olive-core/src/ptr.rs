@@ -26,18 +26,6 @@ pub trait PointerExt<T: ?Sized>: Sized {
     /// see [`Box::try_clone_from_ref_in`](../alloc/boxed/index.html) for the
     /// canonical consumer.
     ///
-    /// # Semantics
-    ///
-    /// A fat pointer is `(data_word, metadata_word)`. This method returns
-    /// `(self.data_word, old.metadata_word)` with the mutability of `Self`:
-    ///
-    /// - For **sized** `U` there is no metadata word; the result is simply
-    ///   `self` reinterpreted as `*const U` / `*mut U`.
-    /// - For **unsized** `U` the metadata travels from `old`. Crucially it is
-    ///   taken from the *source*, not inferred from the destination address — so
-    ///   relocating a `dyn Trait`'s vtable onto a different object's storage
-    ///   yields a pointer whose dynamic dispatch still resolves to `old`'s type.
-    ///
     /// # Safety
     ///
     /// Both arguments must be valid pointers for their respective types:
@@ -56,10 +44,6 @@ pub trait PointerExt<T: ?Sized>: Sized {
     ///   value there), and
     /// - the metadata carried by `old` is consistent with the value now stored
     ///   at `self` (same length / same dynamic type).
-    ///
-    /// In practice this means you should clone the payload pointed to by `old`
-    /// into the allocation backing `self` *before* calling this method, exactly
-    /// as `try_clone_from_ref_in` does.
     ///
     /// # Miri
     ///

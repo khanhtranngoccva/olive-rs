@@ -59,6 +59,9 @@ use olive_core::ptr::{self as ptr_ext, NonNull};
 mod construction;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
+/// Unsized (`?Sized`) payload construction: slices, `str`, and the
+/// `Arc<MaybeUninit<[T]>>` → `Arc<[T]>` bridge.
+mod dst;
 
 // ---------------------------------------------------------------------------
 // Shared internals

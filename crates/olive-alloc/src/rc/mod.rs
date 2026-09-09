@@ -1202,25 +1202,23 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Rc<T, A> {
 }
 
 // Convenience wrappers for common unsized types.
-
-impl<A: Allocator> Rc<[u8], A> {
-    /// Allocates a new `Rc<[u8]>` by copying the bytes from `src` into fresh
-    /// heap memory. Fallible analogue of std's `Rc::from(&bytes[..])`.
+impl<T: TryClone, A: Allocator> Rc<[T], A> {
+    /// Creates a new `Rc<[T]>` by cloning the slice of T items.
     ///
     /// # Errors
     ///
     /// Returns [`TryCloneError`] if the allocation fails.
     #[inline]
-    pub fn try_from_slice_in(src: &[u8], alloc: A) -> Result<Self, TryCloneError> {
+    pub fn try_from_slice_in(src: &[T], alloc: A) -> Result<Self, TryCloneError> {
         Self::try_clone_from_ref_in(src, alloc)
     }
 }
 
-impl Rc<[u8], Global> {
+impl<T: TryClone> Rc<[T], Global> {
     /// Convenience wrapper around [`Self::try_from_slice_in`]
     /// using the global allocator.
     #[inline]
-    pub fn try_from_slice(src: &[u8]) -> Result<Self, TryCloneError> {
+    pub fn try_from_slice(src: &[T]) -> Result<Self, TryCloneError> {
         Self::try_clone_from_ref(src)
     }
 }
@@ -2291,10 +2289,11 @@ mod tests {
     // carry such a length.
     #[test]
     fn absurd_payload_layout_reports_other_not_oom() {
-        // A payload of `isize::MAX - 8` bytes is itself a valid layout, but
-        // adding the 16-byte header pushes the total past what fits in an
-        // addressable block, so `extend` reports an overflow.
-        let huge = Layout::from_size_align(isize::MAX as usize - 8, 8)
+        let usize_size = size_of::<usize>();
+        let max_size = isize::MAX as usize - usize_size + 1;
+        // A hypothetical Rust tcype requires the size is divisible by its alignment
+        assert_eq!(max_size % usize_size, 0);
+        let huge = Layout::from_size_align(max_size, usize_size)
             .expect("payload layout alone is representable");
         let err = rc_inner_layout_for_value_layout(huge)
             .expect_err("absurd payload must fail layout computation");
