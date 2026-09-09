@@ -187,7 +187,7 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Arc<T, A> {
 // Uninit-slice construction (requires `T: Sized`)
 // ---------------------------------------------------------------------------
 
-impl<T, A: Allocator> Arc<T, A> {
+impl<T, A: Allocator> Arc<[T], A> {
     /// Allocates a new `Arc<[MaybeUninit<T>], A>` containing `len` slots of
     /// uninitialized memory, parameterized over the allocator.
     ///
@@ -234,6 +234,89 @@ impl<T, A: Allocator> Arc<T, A> {
             alloc,
             _marker: PhantomData,
         })
+    }
+
+    /// Allocates a new `Arc<[MaybeUninit<T>], A>` containing `len` slots of
+    /// zero-initialized memory, parameterized over the allocator.
+    ///
+    /// The elements are zero-filled. This is the slice analogue of
+    /// [`try_new_zeroed`](super::Arc::try_new_zeroed).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError::Alloc`] if the allocation fails, or
+    /// [`TryCloneError::Other`] if the combined layout overflows.
+    #[inline]
+    pub fn try_new_zeroed_slice_in(
+        len: usize,
+        alloc: A,
+    ) -> Result<Arc<[MaybeUninit<T>], A>, TryCloneError> {
+        // A zero-length slice needs no payload bytes; a positive-length one
+        // needs `len * size_of::<T>()` bytes at `align_of::<T>()`. Since
+        // `MaybeUninit<T>` shares `T`'s layout, sizing by `T` is exact.
+        let value_layout = Layout::array::<T>(len)
+            .map_err(|_| TryCloneError::Other("Arc slice layout overflow"))?;
+        let (layout, data_offset) = arc_inner_layout_for_value_layout(value_layout)
+            .map_err(|_| TryCloneError::Other("Arc payload layout overflow"))?;
+
+        // Zero-fill the whole block up front so every payload byte starts out as
+        // zero before the refcount headers are seeded on top of it.
+        let block = alloc.allocate_zeroed(layout)?;
+        let base: *mut u8 = block.cast::<u8>().as_ptr();
+
+        // Compute the address of the payload slot (after the header).
+        let payload_addr = unsafe { base.add(data_offset) };
+
+        // Build a fat `*mut ArcInner<[MaybeUninit<T>]>` whose data word is `base`
+        // and whose metadata carries the slice length.
+        let fat_at_payload: *const [MaybeUninit<T>] =
+            ptr::slice_from_raw_parts(payload_addr.cast::<MaybeUninit<T>>(), len);
+        // Casting is possible because both share the unsized tail `T`.
+        let meta_carrier = fat_at_payload as *const ArcInner<[MaybeUninit<T>]>;
+        let inner_fat: *mut ArcInner<[MaybeUninit<T>]> =
+            unsafe { base.cast_with_metadata(meta_carrier) };
+        let ptr = unsafe { NonNull::new_unchecked(inner_fat) };
+
+        // Seed the refcount headers to (1, 1) on top of the zero-filled block.
+        // SAFETY: `ptr` is a live, aligned block whose header fields are not yet
+        // initialized as valid atomics, and no other thread can observe it
+        // before this function returns.
+        unsafe { initialize_arcinner(ptr.as_ptr()) };
+
+        Ok(Arc {
+            ptr,
+            alloc,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T> Arc<[T], Global> {
+    /// Allocates a new `Arc<[MaybeUninit<T]]>` containing `len` slots of
+    /// uninitialized memory on the global allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError::Alloc`] if the allocation fails, or
+    /// [`TryCloneError::Other`] if the combined layout overflows.
+    #[inline]
+    pub fn try_new_uninit_slice(len: usize) -> Result<Arc<[MaybeUninit<T>]>, TryCloneError> {
+        Arc::try_new_uninit_slice_in(len, Global)
+    }
+
+    /// Allocates a new `Arc<[MaybeUninit<T>]>` containing `len` slots of
+    /// zero-initialized memory on the global allocator.
+    ///
+    /// The elements are zero-filled. This is the slice analogue of
+    /// [`try_new_zeroed`](super::Arc::try_new_zeroed).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError::Alloc`] if the allocation fails, or
+    /// [`TryCloneError::Other`] if the combined layout overflows.
+    #[inline]
+    pub fn try_new_zeroed_slice(len: usize) -> Result<Arc<[MaybeUninit<T>]>, TryCloneError> {
+        Arc::try_new_zeroed_slice_in(len, Global)
     }
 }
 
@@ -464,6 +547,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn try_new_zeroed_slice_oom_errors() {
+        let res: Result<Arc<[MaybeUninit<i32>], FailAlloc>, TryCloneError> =
+            Arc::try_new_zeroed_slice_in(4, FailAlloc);
+        assert!(
+            matches!(res, Err(TryCloneError::Alloc(_))),
+            "expected Alloc(OOM)"
+        );
+    }
+
     // --- Clone-failure rollback ----------------------------------------------
 
     /// An element whose every incarnation (source or clone) increments a shared
@@ -607,6 +700,39 @@ mod tests {
     }
 
     #[test]
+    fn zeroed_slice_yields_zeroed_payload() {
+        // Every byte of the payload must come back as zero; interpreting the
+        // slots as `u64` (whose all-bits-zero value is `0`) makes any stray
+        // nonzero bit observable.
+        let len = 8usize;
+        let zeroed: Arc<[MaybeUninit<u64>], Global> =
+            Arc::try_new_zeroed_slice_in(len, Global).unwrap();
+        assert_eq!(Arc::strong_count(&zeroed), 1);
+        assert_eq!(Arc::weak_count(&zeroed), 0);
+
+        let arc = unsafe { zeroed.assume_init() };
+        assert_eq!(peek(&arc), &[0u64; 8]);
+        assert_eq!(Arc::strong_count(&arc), 1);
+        assert_eq!(Arc::weak_count(&arc), 0);
+    }
+
+    #[test]
+    fn zeroed_slice_empty_and_zst_are_valid() {
+        // Empty slice: no payload bytes, but the fat pointer still reports 0.
+        let empty: Arc<[MaybeUninit<u8>], Global> =
+            Arc::try_new_zeroed_slice_in(0, Global).unwrap();
+        assert_eq!(Arc::strong_count(&empty), 1);
+        assert_eq!(Arc::weak_count(&empty), 0);
+        assert_eq!(empty.len(), 0);
+
+        // ZST elements: zero bytes to zero-fill, length metadata preserved.
+        let zst: Arc<[MaybeUninit<()>], Global> = Arc::try_new_zeroed_slice_in(5, Global).unwrap();
+        assert_eq!(Arc::strong_count(&zst), 1);
+        assert_eq!(Arc::weak_count(&zst), 0);
+        assert_eq!(zst.len(), 5);
+    }
+
+    #[test]
     fn uninit_slice_bridge_zst_elements() {
         let uninit: Arc<[MaybeUninit<()>], Global> =
             Arc::try_new_uninit_slice_in(5, Global).unwrap();
@@ -617,6 +743,41 @@ mod tests {
         assert_eq!(peek(&arc).len(), 5);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
+    }
+
+    // --- Global-allocator aliases ---------------------------------------------
+
+    #[test]
+    fn global_alias_matches_generic_constructor_for_uninit_slice() {
+        // The no-allocator alias must produce exactly the same node as passing
+        // `Global` explicitly to the generic form.
+        let via_alias: Arc<[MaybeUninit<i32>], Global> = Arc::try_new_uninit_slice(4).unwrap();
+        let via_generic: Arc<[MaybeUninit<i32>], Global> =
+            Arc::try_new_uninit_slice_in(4, Global).unwrap();
+        assert_eq!(via_alias.len(), via_generic.len());
+        assert_eq!(
+            Arc::strong_count(&via_alias),
+            Arc::strong_count(&via_generic)
+        );
+        assert_eq!(Arc::weak_count(&via_alias), Arc::weak_count(&via_generic));
+    }
+
+    #[test]
+    fn global_alias_matches_generic_constructor_for_zeroed_slice() {
+        // Same agreement check for the zeroed variant; both routes must yield an
+        // all-zero payload of the same length and refcount state.
+        let via_alias: Arc<[MaybeUninit<u64>], Global> = Arc::try_new_zeroed_slice(8).unwrap();
+        let via_generic: Arc<[MaybeUninit<u64>], Global> =
+            Arc::try_new_zeroed_slice_in(8, Global).unwrap();
+        assert_eq!(via_alias.len(), via_generic.len());
+        assert_eq!(
+            Arc::strong_count(&via_alias),
+            Arc::strong_count(&via_generic)
+        );
+        assert_eq!(Arc::weak_count(&via_alias), Arc::weak_count(&via_generic));
+
+        let aliased = unsafe { via_alias.assume_init() };
+        assert_eq!(peek(&aliased), &[0u64; 8]);
     }
 
     // --- Cross-checks ---------------------------------------------------------
