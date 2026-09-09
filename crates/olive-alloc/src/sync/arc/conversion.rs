@@ -26,8 +26,14 @@ use super::{Arc, Weak};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryArcError {
     /// A counter increment would exceed `usize::MAX` or a decrement would
-    /// underflow below zero. Indicates a logic error (unbalanced inc/dec) or
-    /// adversarial misuse of the raw pointer APIs.
+    /// underflow below zero.
+    ///
+    /// This can arise from a logic error (unbalanced inc/dec), adversarial
+    /// misuse of the raw pointer APIs, or — through the safe API alone — from
+    /// [`core::mem::forget`]ing enough `Arc`s that their skipped `Drop` leaves
+    /// the strong count stranded near `usize::MAX`; any further increment then
+    /// overflows. Such leaks are rare in practice but do make this variant
+    /// reachable without undefined behavior.
     OutOfBounds,
     /// Cloning the allocator handle failed.
     CloneAlloc(TryCloneError),

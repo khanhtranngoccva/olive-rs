@@ -254,15 +254,8 @@ impl Drop for LocalCountingAlloc {
     }
 }
 
-/// An [`Allocator`] whose allocation forwards to [`Global`] but whose
+/// An [`Allocator`] whose allocation forwards to `Global` but whose
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
-///
-/// This is the workhorse for exercising the `CloneAlloc` failure arm of the
-/// fallible refcount conversions (`try_downgrade` / `try_upgrade`) on `Arc` and
-/// `Rc`, which require their allocator handle to be `AllocatorTryClone`. A fresh
-/// budget of `n` allows exactly `n` successful clones (each downgrade/upgrade
-/// consumes one), then every further clone fails deterministically — letting a
-/// test place a clone failure at an exact point in a sequence.
 #[derive(Debug, Clone)]
 pub struct FlakyCloneAlloc {
     pub(crate) budget: Rc<CloneBudget>,

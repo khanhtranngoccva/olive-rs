@@ -68,8 +68,14 @@ use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryRcError {
     /// A counter increment would exceed `usize::MAX` or a decrement would
-    /// underflow below zero. Indicates a logic error (unbalanced inc/dec) or
-    /// adversarial misuse of the raw pointer APIs.
+    /// underflow below zero.
+    ///
+    /// This can arise from a logic error (unbalanced inc/dec), adversarial
+    /// misuse of the raw pointer APIs, or — through the safe API alone — from
+    /// [`core::mem::forget`]ing enough `Rc`s that their skipped `Drop` leaves
+    /// the strong count stranded near `usize::MAX`; any further increment then
+    /// overflows. Such leaks are rare in practice but do make this variant
+    /// reachable without undefined behavior.
     OutOfBounds,
     /// Cloning the allocator handle failed.
     CloneAlloc(TryCloneError),
@@ -110,8 +116,11 @@ impl core::error::Error for TryRcError {
 /// Error returned by fallible reference-count operations that only mutate a
 /// counter.
 ///
-/// Indicates a logic error (unbalanced inc/dec) or adversarial misuse of the
-/// raw pointer APIs.
+/// A counter increment would exceed `usize::MAX` or a decrement would underflow
+/// below zero. This can arise from a logic error (unbalanced inc/dec),
+/// adversarial misuse of the raw pointer APIs, or — through the safe API alone —
+/// from [`core::mem::forget`]ing enough `Rc`s that their skipped `Drop` strands
+/// the strong count near `usize::MAX`, so a further increment overflows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TryRcOutOfBoundsError;
 
