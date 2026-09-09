@@ -44,7 +44,6 @@
 //! the tree compiling and tested.
 
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
 use core::ptr;
 use core::sync::atomic::{
     self, AtomicUsize,
@@ -53,15 +52,18 @@ use core::sync::atomic::{
 
 use crate::alloc::{Allocator, Global, Layout};
 use olive_core::alloc::LayoutExt;
-use olive_core::ptr::{self as ptr_ext, NonNull};
+use olive_core::ptr::NonNull;
+use pointers::{is_dangling_weak, is_last_strong, ptr_get_data_mut};
 
 /// Fallible node-construction methods and the uninit→init bridge.
 mod construction;
-/// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
-mod query;
 /// Unsized (`?Sized`) payload construction: slices, `str`, and the
 /// `Arc<MaybeUninit<[T]>>` → `Arc<[T]>` bridge.
 mod dst;
+/// Shared pointer/layout/refcount-header helpers for `ArcInner<T>`.
+pub(crate) mod pointers;
+/// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
+mod query;
 
 // ---------------------------------------------------------------------------
 // Shared internals
@@ -141,112 +143,6 @@ impl WeakInner<'_> {
     #[inline]
     fn weak(&self) -> usize {
         self.weak.load(atomic::Ordering::Relaxed)
-    }
-}
-
-/// Returns true when the given strong count indicates the last strong
-/// reference has been released and the value should be destroyed.
-#[inline]
-fn is_last_strong(strong: usize) -> bool {
-    strong == 0
-}
-
-/// The sentinel address of a "dangling" [`Weak`] — one that never referred to a
-/// real allocation (see [`Weak::new`]).
-///
-/// This is deliberately **misaligned** (`usize::MAX` is odd, while `ArcInner`
-/// requires at least 2-alignment). No valid allocation can ever occupy a
-/// misaligned address, so comparing against this value reliably detects "was
-/// this weak ever attached to anything?" without any possibility of collision
-/// with a real pointer.
-const DANGLING_WEAK_ADDR: usize = usize::MAX;
-
-/// True if `p` points at the dangling sentinel produced by [`Weak::new`].
-#[inline]
-fn is_dangling_weak<T: ?Sized>(p: *const ArcInner<T>) -> bool {
-    p.addr() == DANGLING_WEAK_ADDR
-}
-
-// ---------------------------------------------------------------------------
-// Pointer helpers
-// ---------------------------------------------------------------------------
-
-/// Casts a pointer to `ArcInner<T>` to a pointer to the payload within it.
-///
-/// Implemented by projecting the `value` field out of the fat pointer rather
-/// than by forming a reference to the whole struct, to prevent the pointer from
-/// being tagged.
-///
-/// # Safety
-///
-/// - `p` must point to a valid `ArcInner<T>` allocation block.
-/// - The reference count fields must be initialized.
-/// - The `T` value does not have to be initialized.
-#[inline]
-unsafe fn ptr_get_data<T: ?Sized>(p: *const ArcInner<T>) -> *const T {
-    unsafe { &raw const (*p).value }
-}
-
-/// Mutable counterpart of [`ptr_get_data`]: yields a `*mut T` pointing at the
-/// payload slot without ever casting away constness from an immutable
-/// helper's result.
-///
-/// Mutating callers must go through this rather than doing
-/// `ptr_get_data(p) as *mut T`, which would silently launder a `*const T` into
-/// a `*mut T` and hide the fact that the caller is asserting write access.
-///
-/// # Safety
-///
-/// - `p` must point to a valid `ArcInner<T>` allocation block.
-/// - The reference count fields must be initialized.
-/// - The `T` value does not have to be initialized.
-/// - `p` must have strong == 1.
-#[inline]
-unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut ArcInner<T>) -> *mut T {
-    unsafe { &raw mut (*p).value }
-}
-
-/// Initializes the two reference-count headers of a freshly-allocated
-/// `ArcInner<T>` block to `(strong = 1, weak = 1)`.
-///
-/// The allocation is fresh (uninitialized), so the counters are seeded with a
-/// plain [`ptr::write`] of [`AtomicUsize::new(1)`] through a raw-mut reference
-/// projected off each field — rather than calling `.store()` on an atomic that
-/// has not yet been initialized, which would be undefined behavior. This mirrors
-/// the standard library's approach for seeding `RcInner`/`ArcInner` headers.
-///
-/// # Safety
-///
-/// - `p` must point to a valid, aligned `ArcInner<T>` allocation block whose
-///   header fields have not yet been initialized.
-/// - No other thread may observe the block until this function returns; the
-///   writes establish the initial counter state before the block escapes.
-#[inline]
-pub(super) unsafe fn initialize_arcinner<T: ?Sized>(p: *mut ArcInner<T>) {
-    unsafe {
-        ptr::write(&raw mut (*p).strong, AtomicUsize::new(1));
-        ptr::write(&raw mut (*p).weak, AtomicUsize::new(1));
-    }
-}
-
-/// Builds the dangling inner pointer stored by [`Weak::new`].
-///
-/// The address word is pinned to [`DANGLING_WEAK_ADDR`] (`usize::MAX`), which
-/// is deliberately **misaligned** relative to `ArcInner`'s required alignment.
-/// This guarantees the sentinel can never collide with a real allocation's
-/// address.
-#[inline]
-const fn dangling_inner_ptr<T: ?Sized>() -> NonNull<ArcInner<T>> {
-    // SAFETY: `DANGLING_WEAK_ADDR` is non-zero, satisfying `NonNull`'s
-    // invariant. The address is intentionally misaligned — no valid
-    // allocation could sit there. `Drop`, `upgrade`, and all other access
-    // paths check `is_dangling_weak` before touching memory, so the pointer
-    // is never dereferenced despite its misalignment.
-    unsafe {
-        let mut slot: MaybeUninit<*mut ArcInner<T>> = MaybeUninit::zeroed();
-        let data_offset = const { ptr_ext::address_word_offset::<T>() };
-        *slot.as_mut_ptr().byte_add(data_offset).cast::<usize>() = DANGLING_WEAK_ADDR;
-        NonNull::new_unchecked(slot.assume_init())
     }
 }
 

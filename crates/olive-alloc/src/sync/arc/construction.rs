@@ -22,7 +22,8 @@ use core::ptr;
 use crate::alloc::{Allocator, Global, Layout};
 use olive_core::ptr::NonNull;
 
-use super::{Arc, ArcInner, initialize_arcinner, ptr_get_data_mut};
+use super::pointers::{initialize_arcinner, ptr_get_data_mut};
+use super::{Arc, ArcInner};
 
 // ---------------------------------------------------------------------------
 // Global construction block

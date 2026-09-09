@@ -9,31 +9,14 @@ use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ptr;
 
-use crate::alloc::{Allocator, Global, Layout, LayoutError};
+use crate::alloc::{Allocator, Global, Layout};
 use olive_core::alloc::LayoutExt;
 use olive_core::ptr::{NonNull, PointerExt};
 use olive_core::try_traits::TryClone;
 use olive_core::try_traits::try_clone::{TryCloneError, TryCloneToUninit};
 
-use super::{Arc, ArcInner, initialize_arcinner};
-
-// ---------------------------------------------------------------------------
-// Layout helper
-// ---------------------------------------------------------------------------
-
-/// Computes the layout for an `ArcInner<T>` given the payload's layout.
-///
-/// Mirrors std's `arc_inner_layout_for_value_layout`: build the layout from the
-/// concrete `ArcInner<()>` header type, extend it by the value layout, and pad
-/// to the combined alignment. Returns the padded total layout and the byte
-/// offset at which the payload begins within the block.
-fn arc_inner_layout_for_value_layout(value_layout: Layout) -> Result<(Layout, usize), LayoutError> {
-    // The `LayoutError` is unreachable without UB — see the identical proof in
-    // `crate::rc::rc_inner_layout_for_value_layout`.
-    let header = Layout::new::<ArcInner<()>>();
-    let (extended, offset) = header.extend(value_layout)?;
-    Ok((extended.pad_to_align(), offset))
-}
+use super::pointers::{arc_inner_layout_for_value_layout, initialize_arcinner};
+use super::{Arc, ArcInner};
 
 // ---------------------------------------------------------------------------
 // UniqueArcUninit — intermediate allocation handle
