@@ -1881,9 +1881,9 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
 
     /// Gets a shared raw pointer to the underlying `T`.
     ///
-    /// The pointer may be dangling, or may be uninitialized if strong references 
+    /// The pointer may be dangling, or may be uninitialized if strong references
     /// have all vanished. In either case, it must not be dereferenced.
-    /// 
+    ///
     /// A weak that never referred to an allocation (from [`Weak::new`]) yields
     /// the deliberately misaligned dangling sentinel address, which can never
     /// collide with a real payload address.
@@ -2055,17 +2055,12 @@ impl<T: ?Sized, A: Allocator> fmt::Pointer for Weak<T, A> {
     }
 }
 
-// Unlike std (which prints only `(Weak)`), Olive's `Debug` shows the upgraded
-// value when available, falling back to `<defunct>` otherwise. This is strictly
-// more informative for debugging cyclic structures and weak-reference lifetimes.
-impl<T: Debug + ?Sized, A: AllocatorTryClone> Debug for Weak<T, A> {
+// Mirrors std: printing a `Weak` would require upgrading it, which needs a
+// fallible allocator clone (`A: AllocatorTryClone`). Print only the marker
+// instead.
+impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // Mirror std: show the upgraded value if possible, else "<defunct>".
-        // Debug must not fail, so any upgrade error is treated as defunct.
-        match self.try_upgrade().ok().flatten() {
-            Some(rc) => write!(f, "Weak({rc:?})"),
-            None => f.write_str("<defunct>"),
-        }
+        f.write_str("(Weak)")
     }
 }
 
@@ -2232,12 +2227,14 @@ mod tests {
     }
 
     #[test]
-    fn weak_debug_defunct_after_drop() {
+    fn weak_debug_prints_marker() {
+        // Like std, Debug prints only `(Weak)` — it must not require
+        // upgrading (which would demand `A: AllocatorTryClone`).
         let rc = Rc::try_new(1).unwrap();
         let weak = Rc::try_downgrade(&rc).unwrap();
+        assert_eq!(std::format!("{weak:?}"), "(Weak)");
         drop(rc);
-        let dbg = std::format!("{weak:?}");
-        assert!(dbg.contains("defunct"));
+        assert_eq!(std::format!("{weak:?}"), "(Weak)");
     }
 
     // -----------------------------------------------------------------------
