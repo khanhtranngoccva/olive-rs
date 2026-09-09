@@ -1872,8 +1872,9 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
 
     /// Gets a shared raw pointer to the underlying `T`.
     ///
-    /// The pointer may be dangling if the strong references have all vanished;
-    /// it must not be dereferenced unless [`try_upgrade`](Self::try_upgrade) succeeds.
+    /// The pointer may be dangling, or may be uninitialized if strong references 
+    /// have all vanished. In either case, it must not be dereferenced.
+    /// 
     /// A weak that never referred to an allocation (from [`Weak::new`]) yields
     /// the deliberately misaligned dangling sentinel address, which can never
     /// collide with a real payload address.
