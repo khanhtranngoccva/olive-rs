@@ -99,10 +99,27 @@ impl<T: ?Sized, A: AllocatorTryClone> Arc<T, A> {
     pub fn try_downgrade(this: &Self) -> Result<Weak<T, A>, TryArcError> {
         let alloc = A::try_clone(&this.alloc)?;
         let inner = Self::inner(this);
-        inner
-            .weak
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, checked_increment)
-            .map_err(|_| TryArcError::OutOfBounds)?;
+
+        loop {
+            // Unlike with Clone(), we need this to be an Acquire read to
+            // synchronize with the write coming from `is_unique`, so that the
+            // events prior to that write happen before this read.
+            match inner
+                .weak
+                .fetch_update(Ordering::Acquire, Ordering::Relaxed, checked_increment)
+            {
+                Ok(_) => break,
+                Err(current) if current == usize::MAX => {
+                    // The weak count is temporarily locked by `is_unique`. Spin
+                    // until the lock is released, then retry. This is acceptable
+                    // because `is_unique` always restores the count before
+                    // returning.
+                    core::hint::spin_loop();
+                }
+                Err(_) => return Err(TryArcError::OutOfBounds),
+            }
+        }
+
         Ok(Weak {
             ptr: this.ptr,
             alloc,

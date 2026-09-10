@@ -78,6 +78,38 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
             cnt.saturating_sub(1)
         }
     }
+
+    /// Returns `true` if there are no other [`Arc`] or [`Weak`] pointers to this
+    /// allocation.
+    #[inline]
+    pub fn is_unique(this: &Self) -> bool {
+        // Lock the weak pointer count if we appear to be the sole weak pointer
+        // holder.
+        //
+        // The acquire label here ensures a happens-before relationship with any
+        // writes to `strong` (in particular in `Weak::try_upgrade`) prior to decrements
+        // of the `weak` count (via `Weak::drop`, which uses release). If the upgraded
+        // weak ref was never dropped, the CAS here will fail so we do not care to synchronize.
+        if this
+            .inner()
+            .weak
+            .compare_exchange(1, usize::MAX, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            // This needs to be an `Acquire` to synchronize with the decrement of the `strong`
+            // counter in `drop` -- the only access that happens when any but the last reference
+            // is being dropped.
+            let unique = this.inner().strong.load(Ordering::Acquire) == 1;
+
+            // The release write here synchronizes with a read in `try_downgrade`,
+            // effectively preventing the above read of `strong` from happening
+            // after the write.
+            this.inner().weak.store(1, Ordering::Release); // release the lock
+            unique
+        } else {
+            false
+        }
+    }
 }
 
 impl<T: ?Sized, A: Allocator> Weak<T, A> {

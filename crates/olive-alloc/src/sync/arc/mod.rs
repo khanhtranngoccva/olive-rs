@@ -37,11 +37,13 @@
 //! header, and their `Drop` implementations. The fallible constructors (both
 //! the global-allocator and allocator-generic forms) live in the child
 //! [`construction`](self::construction) module, along with the uninit→init
-//! bridge; the query methods (`as_ptr`, `allocator`, `ptr_eq`, and the
-//! refcount reads) live in the child [`query`](self::query) module; and the
-//! raw-pointer splitting/reconstitution pairs (`into_raw` / `from_raw`) live
-//! in the child [`reconstitution`](self::reconstitution) module. Each step
-//! keeps the tree compiling and tested.
+//! bridge; the query methods (`as_ptr`, `allocator`, `ptr_eq`, `is_unique`,
+//! and the refcount reads) live in the child [`query`](self::query) module;
+//! the mutable-access methods (`get_mut`, `get_mut_unchecked`, `try_make_mut`)
+//! live in the child [`mutable`](self::mutable) module; and the raw-pointer
+//! splitting/reconstitution pairs (`into_raw` / `from_raw`) live in the child
+//! [`reconstitution`](self::reconstitution) module. Each step keeps the tree
+//! compiling and tested.
 
 use core::marker::PhantomData;
 use core::ptr;
@@ -64,6 +66,8 @@ pub(crate) mod conversion;
 /// Unsized (`?Sized`) payload construction: slices, `str`, and the
 /// `Arc<MaybeUninit<[T]>>` → `Arc<[T]>` bridge.
 mod dst;
+/// Mutable-access methods: `get_mut`, `get_mut_unchecked`, `try_make_mut`.
+mod mutable;
 /// Shared pointer/layout/refcount-header helpers for `ArcInner<T>`.
 pub(crate) mod pointers;
 /// Passthrough formatting impls for `Arc` (`Debug`, `Display`).
