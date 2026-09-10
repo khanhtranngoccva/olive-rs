@@ -70,9 +70,9 @@ pub trait PointerExt<T: ?Sized>: Sized {
     unsafe fn cast_with_metadata<U: ?Sized>(self, old: *const U) -> Self::CastedWithMetadata<U>;
 }
 
-/// The inner implementation of calculating the address field of an arbitrary thin or 
+/// The inner implementation of calculating the address field of an arbitrary thin or
 /// fat pointer.
-/// 
+///
 /// This implementation is ideally called exactly once per type per compilation cycle.
 const fn address_word_offset_inner<S: ?Sized>() -> usize
 where
@@ -121,7 +121,9 @@ fn stable_graft<D: ?Sized, U: ?Sized>(dest: *const D, src: *const U) -> *const U
     use core::mem::{MaybeUninit, size_of};
 
     // Fast path: thin pointer. No metadata exists; just emit `dest`'s address.
-    if size_of::<*const U>() == size_of::<usize>() {
+    // Const expression folds the function implementation into one path without
+    // any wrong branch misprediction.
+    if const { size_of::<*const U>() == size_of::<usize>() } {
         let mut out: MaybeUninit<*const U> = MaybeUninit::uninit();
         unsafe {
             *out.as_mut_ptr().cast::<usize>() = dest.addr();
@@ -139,7 +141,7 @@ fn stable_graft<D: ?Sized, U: ?Sized>(dest: *const D, src: *const U) -> *const U
     unsafe {
         out.as_mut_ptr().write(src);
         // Since this write tampers with the pointer's internal contents directly,
-        // the pointer no longer holds any compiler provenance data and it 
+        // the pointer no longer holds any compiler provenance data and it
         // correctly interferes with the compiler's provenance optimization.
         // Calling with_addr() does not achieve the same effect
         #[allow(
