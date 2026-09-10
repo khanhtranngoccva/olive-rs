@@ -270,8 +270,10 @@ mod tests {
     #[test]
     fn arc_into_raw_from_raw_roundtrip() {
         let arc = Arc::try_new(99u32).unwrap();
+        
         let raw = Arc::into_raw(arc);
         assert_eq!(unsafe { *raw }, 99);
+
         let arc = unsafe { Arc::from_raw(raw) };
         assert_eq!(*arc, 99);
         assert_eq!(Arc::strong_count(&arc), 1);
@@ -285,12 +287,15 @@ mod tests {
         let arc = Arc::try_new(7i64).unwrap();
         let cloned = arc.try_clone().unwrap();
         assert_eq!(Arc::strong_count(&arc), 2);
+
         let raw = Arc::into_raw(cloned);
         // The raw pointer now carries one of the two references.
         assert_eq!(Arc::strong_count(&arc), 2);
+
         let restored = unsafe { Arc::from_raw(raw) };
         assert_eq!(Arc::strong_count(&restored), 2);
         assert!(Arc::ptr_eq(&arc, &restored));
+
         drop(restored);
         assert_eq!(Arc::strong_count(&arc), 1);
         drop(arc);
@@ -302,11 +307,14 @@ mod tests {
         let drops = Rc::new(DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
+
         let (raw, alloc_out) = Arc::into_raw_with_allocator(arc);
         assert_eq!(unsafe { *raw }, 5);
+
         let arc = unsafe { Arc::from_raw_in(raw, alloc_out) };
         assert_eq!(*arc, 5);
         assert_eq!(Arc::strong_count(&arc), 1);
+
         drop(arc);
         // Dropping the reconstructed Arc destroys its embedded allocator handle
         // exactly once.
@@ -319,10 +327,12 @@ mod tests {
     fn arc_unsized_slice_into_raw_roundtrip() {
         let arr = [7u8, 8, 9];
         let arc: Arc<[u8]> = Arc::try_from_slice(&arr[..]).unwrap();
+
         let raw = Arc::into_raw(arc);
         let slice: &[u8] = unsafe { &*raw };
         assert_eq!(slice.len(), 3);
         assert_eq!(slice, [7, 8, 9]);
+
         let arc = unsafe { Arc::from_raw(raw) };
         assert_eq!(&*arc, [7, 8, 9]);
         assert_eq!(Arc::strong_count(&arc), 1);
@@ -331,9 +341,11 @@ mod tests {
     #[test]
     fn arc_unsized_str_into_raw_roundtrip() {
         let arc: Arc<str> = Arc::try_from_str("hello world").unwrap();
+
         let raw = Arc::into_raw(arc);
         let text: &str = unsafe { &*raw };
         assert_eq!(text, "hello world");
+
         let arc = unsafe { Arc::from_raw(raw) };
         assert_eq!(&*arc, "hello world");
         assert_eq!(Arc::strong_count(&arc), 1);
@@ -345,12 +357,15 @@ mod tests {
     fn weak_into_raw_from_raw_roundtrip() {
         let arc = Arc::try_new(11i32).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
+
         let raw = Weak::into_raw(weak);
         // The payload is still readable while a strong reference lives.
         assert_eq!(unsafe { *raw }, 11);
+
         let weak = unsafe { Weak::from_raw(raw) };
         assert_eq!(weak.weak_count(), 1);
         assert_eq!(weak.strong_count(), 1);
+
         drop(arc);
         // With no strong refs left the payload is gone; upgrade reports None.
         assert!(weak.try_upgrade().unwrap().is_none());
@@ -362,8 +377,10 @@ mod tests {
         // Arcs leaves the block alive until the reconstituted Weak is dropped.
         let arc = Arc::try_new(1u8).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
+
         let raw = Weak::into_raw(weak);
         drop(arc);
+
         // Strong count is now zero, but the block must still exist (held by the
         // outstanding weak reference). Reading the counters through the weak is
         // valid; reading the payload is not.
@@ -379,8 +396,10 @@ mod tests {
         // misaligned sentinel, and reconstituting it yields another dangling
         // weak that behaves identically.
         let w: Weak<u32, Global> = Weak::new();
+
         let raw = Weak::into_raw(w);
         assert_ne!(raw.addr(), 0);
+
         let w = unsafe { Weak::from_raw(raw) };
         assert!(w.try_upgrade().unwrap().is_none());
         assert_eq!(w.strong_count(), 0);
@@ -391,8 +410,10 @@ mod tests {
     fn weak_into_raw_with_allocator_roundtrip() {
         let drops = Rc::new(DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+
         let arc = Arc::try_new_in(2i32, alloc).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
+
         let (raw, alloc_out) = Weak::into_raw_with_allocator(weak);
         let weak = unsafe { Weak::from_raw_in(raw, alloc_out) };
         assert_eq!(weak.weak_count(), 1);
@@ -402,11 +423,7 @@ mod tests {
         // Three allocator handles are destroyed along the way: the one in `arc`
         // (dropped with it), the ephemeral one cloned by `try_upgrade` above
         // (dropped at end of statement), and the one handed back and moved into
-        // the reconstituted `Weak` (dropped here). The fourth — the clone
-        // `try_downgrade` made into the original `Weak` — is intentionally left
-        // behind when `into_raw_with_allocator` consumes that weak without
-        // running its `Drop`, mirroring std's behavior; it does not affect
-        // memory safety, only the bookkeeping counter.
+        // the reconstituted `Weak` (dropped here).
         assert_eq!(drops.get(), 3);
     }
 }

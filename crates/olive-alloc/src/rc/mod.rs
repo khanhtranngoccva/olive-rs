@@ -1525,8 +1525,8 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         Ok(unsafe { Self::get_mut_unchecked(this) })
     }
 
-    /// Same as [`increment_strong_count`](Self::increment_strong_count), but
-    /// parameterized over the allocator.
+    /// Same as [`try_increment_strong_count`](Self::try_increment_strong_count),
+    /// but parameterized over the allocator.
     ///
     /// # Errors
     ///
@@ -1541,13 +1541,16 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// - `ptr` must point to a block allocated by the `alloc`.
     /// - The `Rc` must be valid - the strong count must not be 0.
     #[inline]
-    pub unsafe fn increment_strong_count_in(
+    pub unsafe fn try_increment_strong_count_in(
         ptr: *const T,
         alloc: &A,
     ) -> Result<(), TryRcOutOfBoundsError> {
-        // NOTE: taking `alloc` by reference lets us wrap the temporary `Rc` in
-        // `ManuallyDrop` without leaking it, and avoids paying for an allocator
-        // clone that this operation does not need.
+        // NOTE: taking `alloc` by reference avoids paying for an allocator clone
+        // that this operation does not need and reduces the caller need to clone 
+        // the allocator. 
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // unintentional refcount decrement.
+        // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
         // `alloc`. Wrapping in `ManuallyDrop` prevents a panic during unwinding
         // from decrementing the refcount.
@@ -1560,8 +1563,8 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         Ok(())
     }
 
-    /// Same as [`decrement_strong_count`](Self::decrement_strong_count), but
-    /// parameterized over the allocator so the correct deallocator is used
+    /// Same as [`try_decrement_strong_count`](Self::try_decrement_strong_count),
+    /// but parameterized over the allocator so the correct deallocator is used
     /// when the last strong reference goes away.
     ///
     /// # Errors
@@ -1578,13 +1581,16 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// - The `Rc` must be valid - the strong count must not be 0.
     /// - This method can be used to free the [`Rc`] and its backing storage.
     #[inline]
-    pub unsafe fn decrement_strong_count_in(
+    pub unsafe fn try_decrement_strong_count_in(
         ptr: *const T,
         alloc: &A,
     ) -> Result<(), TryRcOutOfBoundsError> {
-        // NOTE: taking `alloc` by reference lets us wrap the temporary `Rc` in
-        // `ManuallyDrop` without leaking it, and avoids paying for an allocator
-        // clone that this operation does not need.
+        // NOTE: taking `alloc` by reference avoids paying for an allocator clone
+        // that this operation does not need and reduces the caller need to clone 
+        // the allocator. 
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // unintentional refcount decrement.
+        // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
         // `alloc`. Wrapping in `ManuallyDrop` prevents a panic during unwinding
         // from arbitrarily lowering the refcount.
@@ -1615,9 +1621,9 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - `ptr` must point to a block allocated by the global allocator.
     /// - The `Rc` must be valid - the strong count must not be 0.
     #[inline]
-    pub unsafe fn increment_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
+    pub unsafe fn try_increment_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation.
-        unsafe { Self::increment_strong_count_in(ptr, &Global) }
+        unsafe { Self::try_increment_strong_count_in(ptr, &Global) }
     }
 
     /// Decrements the strong count of the allocation backing `ptr`. When the
@@ -1637,10 +1643,10 @@ impl<T: ?Sized> Rc<T, Global> {
     /// - This method can be called to release the Rc and backing storage, similar to
     ///   calling [`Rc<T>::from_raw`] and dropping the value.
     #[inline]
-    pub unsafe fn decrement_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
+    pub unsafe fn try_decrement_strong_count(ptr: *const T) -> Result<(), TryRcOutOfBoundsError> {
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
         // the global allocator.
-        unsafe { Self::decrement_strong_count_in(ptr, &Global) }
+        unsafe { Self::try_decrement_strong_count_in(ptr, &Global) }
     }
 }
 
@@ -2764,7 +2770,7 @@ mod tests {
         let arr = [1u8, 2, 3];
         let mut rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
         let other = rc.try_clone().unwrap();
-        
+
         let old_addr = Rc::as_ptr(&rc).cast::<u8>() as usize;
 
         let m = Rc::try_make_mut(&mut rc).unwrap();

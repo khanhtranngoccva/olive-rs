@@ -68,15 +68,19 @@ pub(crate) mod conversion;
 mod dst;
 /// Mutable-access methods: `get_mut`, `get_mut_unchecked`, `try_make_mut`.
 mod mutable;
-/// Shared pointer/layout/refcount-header helpers for `ArcInner<T>`.
-pub(crate) mod pointers;
 /// Passthrough formatting impls for `Arc` (`Debug`, `Display`).
 mod passthrough;
+/// Shared pointer/layout/refcount-header helpers for `ArcInner<T>`.
+pub(crate) mod pointers;
 /// Query methods (`as_ptr`, `allocator`, `ptr_eq`, refcount reads).
 mod query;
 /// Raw-pointer splitting and reconstitution (`into_raw` / `from_raw` pairs for
 /// both `Arc` and `Weak`).
 mod reconstitution;
+/// Direct, fallible strong-reference-count manipulation through raw pointers
+/// (`try_increment_strong_count` / `try_decrement_strong_count` and their `_in`
+/// variants), the atomic counterparts of the same-named `Rc` methods.
+mod refcount;
 /// Trait implementations: `Deref`, `TryClone`, `Pointer`, `AsRef`, `Borrow`,
 /// `Debug`, `Default`, `TryDefault`.
 mod traits;
@@ -272,6 +276,14 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
             Some(inner) => inner,
             None => return,
         };
+
+        // If we find out that we were the last weak pointer, then its time to
+        // deallocate the data entirely. See the discussion in Arc::drop() about
+        // the memory orderings
+        //
+        // It's not necessary to check for the locked state here, because the
+        // weak count can only be locked if there was precisely one implicit weak 
+        // ref (in Arc::is_unique), meaning that only Arcs exist.
 
         // Because `fetch_sub` is already atomic, we do not need to synchronize
         // with other threads unless we are going to delete the object. If we
