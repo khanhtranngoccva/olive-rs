@@ -40,9 +40,9 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
         alloc: &A,
     ) -> Result<(), TryArcError> {
         // NOTE: taking `alloc` by reference avoids paying for an allocator clone
-        // that this operation does not need and reduces the caller need to clone 
-        // the allocator. 
-        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // that this operation does not need and reduces the caller need to clone
+        // the allocator.
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an
         // unintentional refcount decrement.
         // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Arc` allocation backed by
@@ -80,6 +80,8 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
     ///   by [`Arc<T>::from_raw_in`].
     /// - `ptr` must point to a block allocated by `alloc`.
     /// - The `Arc` must be valid — the strong count must not be 0.
+    /// - Decrementing must not leave other owned `Arc`s without a unit to
+    ///   decrement.
     /// - This method can be used to free the [`Arc`] and its backing storage.
     #[inline]
     pub unsafe fn try_decrement_strong_count_in(
@@ -87,9 +89,9 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
         alloc: &A,
     ) -> Result<(), TryArcError> {
         // NOTE: taking `alloc` by reference avoids paying for an allocator clone
-        // that this operation does not need and reduces the caller need to clone 
-        // the allocator. 
-        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // that this operation does not need and reduces the caller need to clone
+        // the allocator.
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an
         // unintentional refcount decrement.
         // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Arc` allocation backed by
@@ -149,6 +151,8 @@ impl<T: ?Sized> Arc<T, Global> {
     ///   by [`Arc<T>::from_raw`].
     /// - `ptr` must point to a block allocated by the global allocator.
     /// - The `Arc` must be valid — the strong count must not be 0.
+    /// - Decrementing must not leave other owned `Arc`s without a unit to
+    ///   decrement.
     #[inline]
     pub unsafe fn try_increment_strong_count(ptr: *const T) -> Result<(), TryArcError> {
         // SAFETY: caller guarantees `ptr` is a live `Arc` allocation.
@@ -261,7 +265,7 @@ mod tests {
         let probe = unsafe { Arc::from_raw_in(raw, probe_alloc) };
         assert_eq!(Arc::strong_count(&probe), 2);
         drop(probe);
-        
+
         unsafe { Arc::<DropRecorder, _>::try_decrement_strong_count_in(raw, &alloc_out) }.unwrap();
         // Final release destroyed the payload exactly once.
         assert_eq!(drops.get(), 1);

@@ -105,7 +105,7 @@ pub mod mem;
 #[doc(hidden)]
 pub mod prelude;
 /// Pointer extension APIs layered on top of [`core::ptr`], including the
-/// [`PointerExt`](ptr::PointerExt) trait for relocating a fat pointer's data
+/// [`PointerExt`](crate::ptr::PointerExt) trait for relocating a fat pointer's data
 /// address while preserving its metadata.
 pub mod ptr;
 

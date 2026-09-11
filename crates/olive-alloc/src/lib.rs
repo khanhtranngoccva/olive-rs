@@ -25,6 +25,7 @@ extern crate alloc as stock_alloc;
 pub mod alloc;
 pub mod borrow;
 pub mod boxed;
+pub mod collections;
 mod raw_vec;
 pub mod rc;
 pub mod string;
