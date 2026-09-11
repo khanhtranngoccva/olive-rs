@@ -10,7 +10,9 @@
 //! * Element cloning uses the fallible [`TryClone`](olive_core::try_traits::try_clone::TryClone)
 //!   trait throughout.
 
+mod allocation;
 mod construction;
+mod mutation;
 mod query;
 mod wrapped_index;
 

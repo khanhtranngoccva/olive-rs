@@ -889,9 +889,7 @@ impl<T, A: Allocator> Vec<T, A> {
     }
 
     /// Ensures the vector has room for at least `total` elements *in total*
-    /// (an absolute target, not an increment). This is the shape callers need
-    /// when they already hold a desired final size — e.g. sizing from an
-    /// iterator's `size_hint`.
+    /// (an absolute target, not an increment).
     ///
     /// `total < len` results in a no-op.
     ///

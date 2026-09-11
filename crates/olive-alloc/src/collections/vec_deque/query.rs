@@ -16,7 +16,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// - Both indexes must be either less than the capacity,
     ///   or must be equal to 0 if the capacity is 0.
     #[inline]
-    unsafe fn wrap_add(&self, idx: WrappedIndex, addend: usize) -> WrappedIndex {
+    pub(super) unsafe fn wrap_add(&self, idx: WrappedIndex, addend: usize) -> WrappedIndex {
         let idx = idx.as_index();
         let cap = self.capacity();
         debug_assert!(idx < cap || idx == 0);
@@ -67,9 +67,8 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// # Safety
     /// - Both indexes must be either less than the capacity,
     ///   or must be equal to 0 if the capacity is 0.
-    #[expect(unused, reason = "used by pop_front/remove, which have not landed yet")]
     #[inline]
-    unsafe fn wrap_sub(&self, idx: WrappedIndex, subtrahend: usize) -> WrappedIndex {
+    pub(super) unsafe fn wrap_sub(&self, idx: WrappedIndex, subtrahend: usize) -> WrappedIndex {
         let idx = idx.as_index();
         let cap = self.capacity();
         debug_assert!(idx < cap || idx == 0);
@@ -113,6 +112,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
             ptr::slice_from_raw_parts_mut(self.buf.ptr().add(range.start), range.end - range.start)
         }
     }
+
 }
 
 impl<T, A: Allocator> VecDeque<T, A> {
