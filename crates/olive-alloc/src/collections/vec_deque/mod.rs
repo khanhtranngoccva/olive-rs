@@ -70,17 +70,6 @@ impl<T, A: Allocator> Drop for VecDeque<T, A> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Trait impls
-// ---------------------------------------------------------------------------
-
-impl<T> Default for VecDeque<T, Global> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // SAFETY: `VecDeque` never hands out references that outlive the buffer, and
 // moving a `VecDeque` moves its whole allocation. Sound iff `T` itself is
 // `Send`/`Sync`.

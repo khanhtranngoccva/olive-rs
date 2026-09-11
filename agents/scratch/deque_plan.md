@@ -121,7 +121,25 @@ pointer identity against `try_with_capacity` buffers.
 TODO(deque-step-5): `as_slices` ordering assertions need a populated deque;
 cover those cases in Step 5's tests.
 
-## Step 4 — Construction behaviors
+## Step 4 — Construction behaviors (LANDED)
+
+Landed in `crates/olive-alloc/src/collections/vec_deque/construction.rs` with
+colocated tests. Notes on deviations from this plan:
+
+- `Default` was already implemented in `mod.rs`; `TryDefault` is implemented
+  generically as `impl<T, A: Allocator + TryDefault> TryDefault for
+  VecDeque<T, A>`, defaulting the allocator itself and delegating to
+  `new_in`. The impl is still effectively infallible in practice (`Global`
+  and the test allocators all implement `TryDefault` without failure), but a
+  failing allocator default propagates as an error.
+- Tests cover: empty/unallocated state of `new`/`new_in`, allocator-handle
+  drop-exactly-once via `LocalCountingAlloc`, zero-capacity no-allocation, ZST
+  capacity (`usize::MAX`) without allocation, overflow →
+  `CapacityOverflow`, OOM → AllocError-kind error via `FailAlloc`, and
+  global-vs-generic agreement. No `TODO(deque-step-N)` markers were needed:
+  every assertion uses only getters that already exist.
+
+Original plan text:
 
 - `new()` / `new_in(alloc)` — empty deque, no allocation
   (`RawVec::new_in`, `head = 0`, `len = 0`).
