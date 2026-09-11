@@ -10,13 +10,13 @@
 //! * Element cloning uses the fallible [`TryClone`](olive_core::try_traits::try_clone::TryClone)
 //!   trait throughout.
 
+mod construction;
 mod query;
 mod wrapped_index;
 
 use crate::alloc::{Allocator, Global};
 use crate::collections::vec_deque::wrapped_index::WrappedIndex;
 use crate::raw_vec::RawVec;
-use core::ptr;
 
 // ---------------------------------------------------------------------------
 // VecDeque
@@ -41,49 +41,32 @@ pub struct VecDeque<T, A: Allocator = Global> {
 
 impl<T, A: Allocator> Drop for VecDeque<T, A> {
     fn drop(&mut self) {
-        todo!();
-        let cap = self.buf.capacity();
-        if cap == 0 || self.len == 0 {
-            return;
-        }
+        /// Runs the destructor for all items in the slice when it gets dropped (normally or
+        /// during unwinding).
+        struct Dropper<'a, T>(&'a mut [T]);
 
-        // The live elements occupy `self.len` consecutive slots starting at
-        // physical index `self.head`, wrapping around the buffer boundary.
-        // There are at most two contiguous regions to drop:
-        //   Region 1: [head .. min(head + len, cap))
-        //   Region 2 (if wrapped): [0 .. (head + len) - cap)
-        //
-        // Arithmetic safety: `head < cap` and `len <= cap`, so `head + len < 2*cap`.
-        // For any realistic allocation `2*cap < usize::MAX`, so no overflow.
-        // All subtractions are ordered (larger minus smaller).
+        // SAFETY: `Dropper` only ever calls `drop_in_place` on its held slice;
+        // it never stores or returns the reference, so the lifetime is purely
+        // a borrow-duration marker and can be erased from the type signature.
         #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "head < cap, len <= cap ⇒ head+len < 2*cap < usize::MAX; subtractions are ordered"
+            clippy::needless_lifetimes,
+            reason = "lifetime is a borrow-duration marker"
         )]
-        unsafe {
-            let head = self.head.as_index();
-            let end = head + self.len;
-
-            if end <= cap {
-                // Non-wrapped: single contiguous region [head..end).
-                let count = end - head;
-                let start = self.buf.ptr().add(head);
-                let slice = ptr::slice_from_raw_parts_mut(start, count);
-                ptr::drop_in_place(slice);
-            } else {
-                // Wrapped: two regions [head..cap) and [0..end-cap).
-                let first_count = cap - head;
-                let first_start = self.buf.ptr().add(head);
-                let first_slice = ptr::slice_from_raw_parts_mut(first_start, first_count);
-                ptr::drop_in_place(first_slice);
-
-                let second_count = end - cap;
-                let second_slice = ptr::slice_from_raw_parts_mut(self.buf.ptr(), second_count);
-                ptr::drop_in_place(second_slice);
+        impl<'a, T> Drop for Dropper<'a, T> {
+            fn drop(&mut self) {
+                unsafe {
+                    core::ptr::drop_in_place(self.0);
+                }
             }
         }
-        // The buffer itself is freed by `RawVec`'s `Drop` immediately after
-        // this method returns.
+
+        let (front, back) = self.as_mut_slices();
+        unsafe {
+            let _back_dropper = Dropper(back);
+            // use drop for [T]
+            core::ptr::drop_in_place(front);
+        }
+        // RawVec handles deallocation
     }
 }
 
@@ -91,8 +74,20 @@ impl<T, A: Allocator> Drop for VecDeque<T, A> {
 // Trait impls
 // ---------------------------------------------------------------------------
 
+impl<T> Default for VecDeque<T, Global> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // SAFETY: `VecDeque` never hands out references that outlive the buffer, and
 // moving a `VecDeque` moves its whole allocation. Sound iff `T` itself is
 // `Send`/`Sync`.
 unsafe impl<T: Send, A: Allocator + Send> Send for VecDeque<T, A> {}
 unsafe impl<T: Sync, A: Allocator + Sync> Sync for VecDeque<T, A> {}
+
+// Tests are intentionally absent for now: without the mutation methods
+// (`push_back`, `pop_front`, ...) there is no public way to set up the
+// interesting states (wrapped heads, partially-filled buffers, growth), so
+// meaningful coverage has to wait until those land.

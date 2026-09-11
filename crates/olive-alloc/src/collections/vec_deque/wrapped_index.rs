@@ -18,7 +18,12 @@ impl WrappedIndex {
         Self(index)
     }
 
-    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque
+    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque.
+    /// Used by mutation methods (push/pop/remove), which have not landed yet.
+    #[expect(
+        unused,
+        reason = "used by push/pop/remove, which have not landed yet"
+    )]
     #[inline(always)]
     pub(super) unsafe fn add(self, offset: usize) -> Self {
         #[allow(
@@ -28,7 +33,12 @@ impl WrappedIndex {
         Self(self.0 + offset)
     }
 
-    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque
+    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque.
+    /// Used by mutation methods (push/pop/remove), which have not landed yet.
+    #[expect(
+        unused,
+        reason = "used by push/pop/remove, which have not landed yet"
+    )]
     #[inline(always)]
     pub(super) unsafe fn sub(self, offset: usize) -> Self {
         debug_assert!(self.0 >= offset);
@@ -46,6 +56,11 @@ impl WrappedIndex {
         Self(0)
     }
 
+    /// Used by mutation methods (push/pop/remove), which have not landed yet.
+    #[expect(
+        unused,
+        reason = "used by push/pop/remove, which have not landed yet"
+    )]
     #[inline(always)]
     pub(super) fn abs_diff(self, other: Self) -> usize {
         self.0.abs_diff(other.0)
@@ -56,6 +71,11 @@ impl WrappedIndex {
         self.0
     }
 
+    /// Used by mutation methods (push/pop/remove), which have not landed yet.
+    #[expect(
+        unused,
+        reason = "used by push/pop/remove, which have not landed yet"
+    )]
     #[inline(always)]
     pub(super) fn is_zero(self) -> bool {
         self.0 == 0
