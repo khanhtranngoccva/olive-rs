@@ -230,6 +230,46 @@ mod tests {
     }
 
     #[test]
+    fn reserve_exact_overflow_returns_capacity_overflow() {
+        let mut dq: VecDeque<u8> = VecDeque::new();
+        let err = match dq.try_reserve_exact(usize::MAX) {
+            Err(e) => e,
+            Ok(_) => panic!("expected capacity overflow"),
+        };
+        assert!(err.is_capacity_overflow());
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn reserve_total_above_len_grows() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        // Requesting a total of 10 should grow from cap 4 to at least 10.
+        assert_eq!(dq.try_reserve_total(10), Ok(()));
+        assert!(dq.capacity() >= 10);
+        // Existing element is still intact.
+        assert_eq!(dq.get(0), Some(&1));
+    }
+
+    #[test]
+    fn reserve_preserves_elements_across_growth() {
+        // Build a wrapped state: push back 3, push front 2 → head retreats,
+        // elements span two physical segments.
+        let mut dq = VecDeque::<i32>::try_with_capacity(5).expect("allocation ok");
+        assert_eq!(dq.try_push_back(10), Ok(()));
+        assert_eq!(dq.try_push_back(20), Ok(()));
+        assert_eq!(dq.try_push_back(30), Ok(()));
+        assert_eq!(dq.try_push_front(40), Ok(()));
+        assert_eq!(dq.try_push_front(50), Ok(()));
+        // Logical order: [50, 40, 10, 20, 30], len=5, cap=5 (full).
+        // Now force a growth that triggers handle_capacity_increase.
+        assert_eq!(dq.try_reserve(5), Ok(()));
+        assert!(dq.capacity() > 5);
+        // All five elements must survive in order.
+        assert_eq!(collect_into_array::<5>(&dq), Some([50, 40, 10, 20, 30]));
+    }
+
+    #[test]
     fn reserve_oom_returns_alloc_error_kind() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let err = match dq.try_reserve(4) {
@@ -305,6 +345,17 @@ mod tests {
         assert_eq!(dq.back(), Some(&9));
     }
 
+    #[test]
+    fn push_back_give_back_triggers_growth_then_succeeds() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        assert_eq!(dq.try_push_back(2), Ok(()));
+        // Buffer full; give_back must grow internally and still succeed.
+        assert_eq!(dq.try_push_back_give_back(3), Ok(()));
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
     // --- try_push_front / give_back --------------------------------------------
 
     #[test]
@@ -340,6 +391,24 @@ mod tests {
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
         assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn push_front_give_back_succeeds_when_space_exists() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_front_give_back(9), Ok(()));
+        assert_eq!(dq.front(), Some(&9));
+    }
+
+    #[test]
+    fn push_front_give_back_triggers_growth_then_succeeds() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_front(1), Ok(()));
+        assert_eq!(dq.try_push_front(2), Ok(()));
+        // Buffer full; give_back must grow internally and still succeed.
+        assert_eq!(dq.try_push_front_give_back(0), Ok(()));
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([0, 2, 1]));
     }
 
     // --- Mixed sequences ---------------------------------------------------------
@@ -378,6 +447,17 @@ mod tests {
         }
         assert_eq!(dq.len(), 200);
         assert_eq!(size_of::<()>(), 0);
+    }
+
+    #[test]
+    fn zst_pushes_report_max_capacity() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        assert_eq!(dq.capacity(), usize::MAX);
+        assert_eq!(dq.try_push_back(()), Ok(()));
+        assert_eq!(dq.try_push_front(()), Ok(()));
+        // Capacity stays at max; no allocation ever happens.
+        assert_eq!(dq.capacity(), usize::MAX);
+        assert_eq!(dq.len(), 2);
     }
 
     #[test]
