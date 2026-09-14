@@ -12,6 +12,7 @@
 
 mod allocation;
 mod construction;
+mod iter;
 mod mutation;
 mod query;
 mod wrapped_index;
@@ -21,6 +22,7 @@ use crate::collections::vec_deque::wrapped_index::WrappedIndex;
 use crate::raw_vec::RawVec;
 
 pub use allocation::TryVecDequeInsertError;
+pub use iter::{Iter, IterMut};
 pub use mutation::{TryInsertWithinCapacityError, TryPushWithinCapacityError};
 
 // ---------------------------------------------------------------------------
