@@ -195,9 +195,11 @@ mod tests {
     use crate::test_helpers::LocalCountingAlloc;
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::sync::Arc as StdArc;
 
     /// A payload that records how many times it was dropped, so a test can prove
     /// the final strong release actually destroyed the value exactly once.
+    /// Single-threaded local fixture, hence `Rc` (no cross-thread sharing).
     struct DropRecorder(Rc<Cell<usize>>);
     impl DropRecorder {
         fn new(counter: Rc<Cell<usize>>) -> Self {
@@ -252,7 +254,7 @@ mod tests {
     #[test]
     fn generic_forms_match_global_behaviour() {
         let drops = Rc::new(Cell::new(0));
-        let alloc_counter = Rc::new(crate::test_helpers::DropCounter::new());
+        let alloc_counter = StdArc::new(crate::test_helpers::DropCounter::new());
         let alloc = LocalCountingAlloc::new(alloc_counter);
         let arc = Arc::try_new_in(DropRecorder::new(drops.clone()), alloc).unwrap();
 

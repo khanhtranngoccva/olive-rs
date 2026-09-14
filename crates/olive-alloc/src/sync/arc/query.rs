@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn allocator_returns_backing_handle() {
-        let drops = std::rc::Rc::new(crate::test_helpers::DropCounter::new());
+        let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(1i32, alloc).unwrap();
         // The returned reference must alias the exact handle stored inside the
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn weak_allocator_returns_backing_handle() {
         // The returned reference aliases the exact handle stored inside the Weak.
-        let drops = std::rc::Rc::new(crate::test_helpers::DropCounter::new());
+        let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let w: Weak<u64, _> = Weak::new_in(alloc);
         let got: &crate::test_helpers::LocalCountingAlloc = w.allocator();

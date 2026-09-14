@@ -173,7 +173,7 @@ mod tests {
     use crate::alloc::Global;
     use crate::test_helpers::allocators::FailDefaultAlloc;
     use crate::test_helpers::{CloneBudget, FailAlloc, FlakyCloneAlloc};
-    use std::rc::Rc;
+    use std::sync::Arc as StdArc;
     use std::string::String;
 
     // --- Deref ---------------------------------------------------------------
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn try_clone_alloc_failure_leaves_counts_untouched() {
-        let alloc = FlakyCloneAlloc::new(Rc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(0)));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let res = arc.try_clone();
         assert!(res.is_err());
@@ -225,7 +225,7 @@ mod tests {
     fn weak_try_clone_alloc_failure_leaves_counts_untouched() {
         // Budget of 1: the initial downgrade consumes it, so the subsequent
         // weak try_clone's allocator clone fails before bumping the weak count.
-        let alloc = FlakyCloneAlloc::new(Rc::new(CloneBudget::new(1)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(1)));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let w = Arc::try_downgrade(&arc).unwrap(); // consumes the last budget unit
         let res = w.try_clone();

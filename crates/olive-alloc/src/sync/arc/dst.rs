@@ -430,7 +430,7 @@ mod tests {
     use super::*;
     use crate::string::String;
     use crate::test_helpers::{CloneBudget, FailAlloc, FlakyTrackedItem, Ledger};
-    use std::rc::Rc as StdRc;
+    use std::sync::Arc as StdArc;
     use std::vec::Vec;
 
     // --- Slice construction --------------------------------------------------
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn try_from_slice_in_custom_allocator_drops_handle_once() {
-        let drops = StdRc::new(crate::test_helpers::DropCounter::new());
+        let drops = StdArc::new(crate::test_helpers::DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arr = [9u8, 8, 7];
         let arc = Arc::try_from_slice_in(&arr[..], alloc).unwrap();
@@ -551,8 +551,8 @@ mod tests {
         // ids (3..6). While the Arc is alive no clone has been dropped yet;
         // dropping the Arc must destroy the three clones exactly once, then
         // dropping the source vec destroys the three originals exactly once.
-        let ledger = StdRc::new(Ledger::new());
-        let budget = StdRc::new(CloneBudget::new(u32::MAX));
+        let ledger = StdArc::new(Ledger::new());
+        let budget = StdArc::new(CloneBudget::new(u32::MAX));
         let mut src: Vec<FlakyTrackedItem> = Vec::new();
         for _ in 0..3 {
             let id = ledger.allocate();
@@ -560,7 +560,7 @@ mod tests {
             src.push(FlakyTrackedItem {
                 id,
                 ledger: ledger.clone(),
-                budget: budget.clone(),
+                inner: (*budget).share(),
             });
         }
 
@@ -592,8 +592,8 @@ mod tests {
         // Shared budget allows exactly 2 clones; a 3-element slice forces a
         // failure at element index 2. Rollback must discard the two transient
         // clones without leaking or double-freeing anything.
-        let ledger = StdRc::new(Ledger::new());
-        let budget = StdRc::new(CloneBudget::new(2));
+        let ledger = StdArc::new(Ledger::new());
+        let budget = StdArc::new(CloneBudget::new(2));
         let mut src: Vec<FlakyTrackedItem> = Vec::new();
         for _ in 0..3 {
             let id = ledger.allocate();
@@ -601,7 +601,7 @@ mod tests {
             src.push(FlakyTrackedItem {
                 id,
                 ledger: ledger.clone(),
-                budget: budget.clone(),
+                inner: (*budget).share(),
             });
         }
         let res: Result<Arc<[FlakyTrackedItem]>, TryCloneError> =

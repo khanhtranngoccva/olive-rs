@@ -1365,10 +1365,10 @@ mod tests {
     // --- destructor accounting --------------------------------------------------
 
     use crate::test_helpers::DropCounter;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     #[allow(dead_code)]
-    struct Tracked(u32, Rc<DropCounter>);
+    struct Tracked(u32, Arc<DropCounter>);
     impl Drop for Tracked {
         fn drop(&mut self) {
             self.1.record_drop();
@@ -1377,7 +1377,7 @@ mod tests {
 
     #[test]
     fn pop_drops_removed_element_exactly_once() {
-        let counter = Rc::new(DropCounter::new());
+        let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..4u32 {
             assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
@@ -1396,7 +1396,7 @@ mod tests {
 
     #[test]
     fn truncate_drops_only_the_removed_tail() {
-        let counter = Rc::new(DropCounter::new());
+        let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..5u32 {
             assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
@@ -1413,7 +1413,7 @@ mod tests {
 
     #[test]
     fn clear_drops_everything() {
-        let counter = Rc::new(DropCounter::new());
+        let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..5u32 {
             assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));

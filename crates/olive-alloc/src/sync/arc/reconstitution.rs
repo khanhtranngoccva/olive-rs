@@ -263,7 +263,7 @@ mod tests {
     use super::*;
     use crate::test_helpers::DropCounter;
     use olive_core::try_traits::TryClone;
-    use std::rc::Rc;
+    use std::sync::Arc as StdArc;
 
     // --- Sized round-trips ---------------------------------------------------
 
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn arc_into_raw_with_allocator_roundtrip() {
-        let drops = Rc::new(DropCounter::new());
+        let drops = StdArc::new(DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn weak_into_raw_with_allocator_roundtrip() {
-        let drops = Rc::new(DropCounter::new());
+        let drops = StdArc::new(DropCounter::new());
         let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
 
         let arc = Arc::try_new_in(2i32, alloc).unwrap();

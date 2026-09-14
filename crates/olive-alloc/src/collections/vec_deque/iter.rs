@@ -144,6 +144,18 @@ impl<T> ExactSizeIterator for Iter<'_, T> {
 
 impl<T> core::iter::FusedIterator for Iter<'_, T> {}
 
+// Borrowed iteration delegates to the slice methods, mirroring std's
+// `IntoIterator` impls for `&VecDeque` and `&mut VecDeque`.
+impl<'a, T, A: Allocator> IntoIterator for &'a VecDeque<T, A> {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IterMut
 // ---------------------------------------------------------------------------
@@ -256,6 +268,16 @@ impl<T> ExactSizeIterator for IterMut<'_, T> {
 }
 
 impl<T> core::iter::FusedIterator for IterMut<'_, T> {}
+
+impl<'a, T, A: Allocator> IntoIterator for &'a mut VecDeque<T, A> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Construction

@@ -170,7 +170,12 @@ impl<T, A: Allocator> Iterator for IntoIter<T, A> {
     }
 }
 
-impl<T, A: Allocator> ExactSizeIterator for IntoIter<T, A> {}
+impl<T, A: Allocator> ExactSizeIterator for IntoIter<T, A> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.remaining()
+    }
+}
 
 impl<T, A: Allocator> FusedIterator for IntoIter<T, A> {}
 

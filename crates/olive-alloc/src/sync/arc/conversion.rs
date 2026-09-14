@@ -197,7 +197,7 @@ mod tests {
     use crate::alloc::Global;
     use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::fmt::Write as _;
-    use std::rc::Rc;
+    use std::sync::Arc as StdArc;
     use std::string::String;
 
     // --- Happy paths --------------------------------------------------------
@@ -281,7 +281,7 @@ mod tests {
         // An allocator whose clone budget is exhausted up front forces the
         // `try_clone` to fail *before* any counter is bumped. The strong and
         // weak counts must therefore be exactly what they were before the call.
-        let alloc = FlakyCloneAlloc::new(Rc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(0)));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let res = Arc::try_downgrade(&arc);
         assert!(matches!(res, Err(TryArcError::CloneAlloc(_))));
@@ -297,7 +297,7 @@ mod tests {
         // count is bumped. The failed upgrade must therefore leave no extra
         // strong owner behind: after dropping `arc`, the strong count falls all
         // the way to zero (no leaked phantom ref keeping the payload alive).
-        let alloc = FlakyCloneAlloc::new(Rc::new(CloneBudget::new(1)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(1)));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap(); // consumes the last budget unit
         let res = weak.try_upgrade();
@@ -311,7 +311,7 @@ mod tests {
         // A fresh budget of 2 allows exactly two downgrades, then fails. This
         // sanity-checks the harness and shows the failure lands at a predictable
         // point in a sequence of conversions.
-        let alloc = FlakyCloneAlloc::new(Rc::new(CloneBudget::new(2)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(2)));
         let arc = Arc::try_new_in(1i32, alloc).unwrap();
         assert!(Arc::try_downgrade(&arc).is_ok());
         assert!(Arc::try_downgrade(&arc).is_ok());

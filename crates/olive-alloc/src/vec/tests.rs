@@ -18,7 +18,7 @@ use crate::test_helpers::{
     LocalCountingAlloc, PanicArmer,
 };
 use std::format;
-use std::rc::Rc;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -440,10 +440,10 @@ fn from_iter_in_fail_alloc_reports_reserve() {
 
 #[test]
 fn resize_rollbacks_partial_on_clone_failure() {
-    let ledger = Rc::new(Ledger::new());
+    let ledger = Arc::new(Ledger::new());
     // Budget of 2: the standalone clone below consumes 1, leaving 1 for the
     // resize loop — so the loop appends one element then fails on the next.
-    let budget = Rc::new(CloneBudget::new(2));
+    let budget = Arc::new(CloneBudget::new(2));
 
     // Seed one live payload (id 0).
     let seed_id = ledger.allocate();
@@ -452,7 +452,7 @@ fn resize_rollbacks_partial_on_clone_failure() {
     v.try_push(FlakyTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
-        budget: budget.clone(),
+        inner: (*budget).share(),
     })
     .unwrap();
 
@@ -490,8 +490,8 @@ fn resize_rollbacks_partial_on_clone_failure() {
 
 #[test]
 fn extend_from_slice_rolls_back_on_clone_failure() {
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(2));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(2));
 
     // One live seed in the destination (id 0).
     let seed_id = ledger.allocate();
@@ -500,7 +500,7 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     v.try_push(FlakyTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
-        budget: budget.clone(),
+        inner: (*budget).share(),
     })
     .unwrap();
 
@@ -514,7 +514,7 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
         fv.try_push(FlakyTrackedItem {
             id,
             ledger: ledger.clone(),
-            budget: budget.clone(),
+            inner: (*budget).share(),
         })
         .unwrap();
     }
@@ -711,8 +711,8 @@ fn into_iter_size_hint() {
 /// specific ids were dropped so we can prove no id is ever dropped twice.
 #[test]
 fn into_iter_drop_mid_way_drops_only_tail() {
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
 
     // Yield two elements, then drop the iterator while three remain.
     {
@@ -722,7 +722,7 @@ fn into_iter_drop_mid_way_drops_only_tail() {
             v.try_push(FlakyTrackedItem {
                 id: i,
                 ledger: ledger.clone(),
-                budget: budget.clone(),
+                inner: (*budget).share(),
             })
             .unwrap();
         }
@@ -864,7 +864,7 @@ fn into_iter_zst_as_slice_length_matches_len() {
 // then assert the count is exactly one after the iterator goes out of scope.
 #[test]
 fn into_iter_drops_allocator_exactly_once() {
-    let counter = Rc::new(DropCounter::new());
+    let counter = Arc::new(DropCounter::new());
     let alloc = LocalCountingAlloc::new(counter.clone());
     let mut v: Vec<i32, LocalCountingAlloc> = Vec::new_in(alloc);
     for i in 0..5i32 {
@@ -1102,15 +1102,15 @@ fn into_raw_parts_roundtrip() {
 
 #[test]
 fn drop_runs_each_element_once() {
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
     let mut v: Vec<FlakyTrackedItem> = Vec::new();
     for i in 0..5u32 {
         ledger.register(i);
         v.try_push(FlakyTrackedItem {
             id: i,
             ledger: ledger.clone(),
-            budget: budget.clone(),
+            inner: (*budget).share(),
         })
         .unwrap();
     }
@@ -1135,8 +1135,8 @@ fn drop_runs_each_element_once() {
 /// survivors destroyed on unwind) with neither leak nor double-free.
 #[test]
 fn dedup_by_panic_is_safe() {
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();
@@ -1148,7 +1148,7 @@ fn dedup_by_panic_is_safe() {
                 v.try_push(FlakyTrackedItem {
                     id: i as u32,
                     ledger: l.clone(),
-                    budget: b.clone(),
+                    inner: (*b).share(),
                 })
                 .unwrap();
             }
@@ -1184,14 +1184,14 @@ fn dedup_by_panic_is_safe() {
 /// though one destructor panics mid-truncation.
 #[test]
 fn truncate_panicking_drop_is_safe() {
-    let ledger = Rc::new(Ledger::new());
-    let armer = Rc::new(PanicArmer::new());
+    let ledger = Arc::new(Ledger::new());
+    let armer = Arc::new(PanicArmer::new());
 
     /// Panics exactly once, the first time it runs while armed; records its id.
     struct PanicDrop {
         id: u32,
-        ledger: Rc<Ledger>,
-        armer: Rc<PanicArmer>,
+        ledger: Arc<Ledger>,
+        armer: Arc<PanicArmer>,
     }
     impl Drop for PanicDrop {
         fn drop(&mut self) {
@@ -1617,10 +1617,10 @@ fn drain_interleaved_drop_destroys_correct_hole() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    // Shared sink. Every `Rec` holds an `Option<Rc<_>>` clone; `disarm()` pulls
-    // that clone out so the destructor won't record the element. Because the
-    // reference is simply moved (not forgotten), every strong ref is eventually
-    // released by a normal drop — nothing leaks.
+    // Single-threaded local sink. Every `Rec` holds an `Option<Rc<_>>` clone;
+    // `disarm()` pulls that clone out so the destructor won't record the
+    // element. Because the reference is simply moved (not forgotten), every
+    // strong ref is eventually released by a normal drop — nothing leaks.
     let sink: Rc<RefCell<std::vec::Vec<u32>>> = Rc::new(RefCell::new(std::vec::Vec::new()));
 
     struct Rec(u32, Option<Rc<RefCell<std::vec::Vec<u32>>>>);
@@ -1872,8 +1872,8 @@ fn drain_exhausted_from_back_at_tail_is_safe() {
 #[cfg_attr(miri, ignore)]
 #[test]
 fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
 
     let mut v: Vec<FlakyTrackedItem> = Vec::new();
     for i in 0..6u32 {
@@ -1881,7 +1881,7 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
         v.try_push(FlakyTrackedItem {
             id: i,
             ledger: ledger.clone(),
-            budget: budget.clone(),
+            inner: (*budget).share(),
         })
         .unwrap();
     }
@@ -1925,10 +1925,10 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
 // drain compacts the vec correctly and drops every element exactly once.
 #[test]
 fn drain_fully_collected_compacts_and_drops_once() {
-    let counter = Rc::new(DropCounter::new());
+    let counter = Arc::new(DropCounter::new());
 
     #[allow(dead_code)]
-    struct Tracked(u32, Rc<DropCounter>);
+    struct Tracked(u32, Arc<DropCounter>);
     impl Drop for Tracked {
         fn drop(&mut self) {
             self.1.record_drop();
@@ -1973,11 +1973,11 @@ fn drain_fully_collected_compacts_and_drops_once() {
 // dropped exactly once.
 #[test]
 fn drain_panic_in_destructor_still_compacts() {
-    let armer = Rc::new(PanicArmer::new());
-    let counter = Rc::new(DropCounter::new());
+    let armer = Arc::new(PanicArmer::new());
+    let counter = Arc::new(DropCounter::new());
 
     #[allow(dead_code)]
-    struct Panicky(u32, Rc<PanicArmer>, Rc<DropCounter>);
+    struct Panicky(u32, Arc<PanicArmer>, Arc<DropCounter>);
     impl Drop for Panicky {
         fn drop(&mut self) {
             self.2.record_drop();
@@ -2092,8 +2092,8 @@ fn split_off_moves_all_elements_exactly_once() {
     // Track each element by id so we can prove the split moved ownership without
     // dropping anything, and that each element is destroyed exactly once when
     // its owning vec finally goes away — no double-free, no leak.
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
 
     let mut v: Vec<FlakyTrackedItem> = Vec::new();
     for i in 0..6u32 {
@@ -2101,7 +2101,7 @@ fn split_off_moves_all_elements_exactly_once() {
         v.try_push(FlakyTrackedItem {
             id: i,
             ledger: ledger.clone(),
-            budget: budget.clone(),
+            inner: (*budget).share(),
         })
         .unwrap();
     }
@@ -2247,8 +2247,8 @@ fn extend_from_within_panic_is_safe() {
     /// survives that call.
     struct PanickingItem {
         pub id: u32,
-        pub ledger: Rc<Ledger>,
-        pub budget: Rc<CloneBudget>,
+        pub ledger: Arc<Ledger>,
+        pub budget: Arc<CloneBudget>,
     }
 
     impl Drop for PanickingItem {
@@ -2277,8 +2277,8 @@ fn extend_from_within_panic_is_safe() {
         }
     }
 
-    let ledger = Rc::new(Ledger::new());
-    let budget = Rc::new(CloneBudget::new(u32::MAX));
+    let ledger = Arc::new(Ledger::new());
+    let budget = Arc::new(CloneBudget::new(u32::MAX));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();

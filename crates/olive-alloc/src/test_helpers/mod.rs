@@ -1,17 +1,23 @@
 //! Shared test helpers for the `olive-alloc` crate.
 //!
 //! These utilities replace per-test-file static atomics with per-test
-//! `Rc<RefCell<_>>` instances, eliminating cross-test interference when tests
-//! run in parallel threads.
+//! thread-safe shared handles (`Arc` over atomics / `RwLock`), eliminating
+//! cross-test interference when tests run in parallel threads and allowing the
+//! scaffolding to be moved across threads for multi-threaded tests.
 
 pub mod allocators;
-mod ledger;
-pub use ledger::{Ledger, FlakyTrackedItem};
+pub mod ledger;
+// `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
+// exported so future tests can instantiate it with other clone policies (e.g.
+// an infallible one) without touching the tracking machinery. Not referenced by
+// name in current tests, hence the allow.
+#[allow(unused_imports)]
+pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
 
 extern crate std;
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -20,10 +26,11 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// A per-test drop counter. Each test constructs its own instance so there is
-/// no cross-test interference from parallel execution.
+/// no cross-test interference from parallel execution. Backed by an atomic so a
+/// shared [`Arc<DropCounter>`] can be dropped from multiple threads.
 #[derive(Debug, Default)]
 pub struct DropCounter {
-    count: RefCell<usize>,
+    count: AtomicUsize,
 }
 
 impl DropCounter {
@@ -31,22 +38,23 @@ impl DropCounter {
         Self::default()
     }
 
-    /// Increments the counter (call from a `Drop` impl via the shared `Rc`).
+    /// Increments the counter (call from a `Drop` impl via the shared `Arc`).
     pub fn record_drop(&self) {
-        *self.count.borrow_mut() += 1;
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns the current drop count.
     pub fn get(&self) -> usize {
-        *self.count.borrow()
+        self.count.load(Ordering::Relaxed)
     }
 }
 
 /// A per-test panic armer. Starts disarmed; the test arms it before triggering
-/// the code path under test and can disarm it afterwards.
+/// the code path under test and can disarm it afterwards. Backed by an atomic
+/// so a shared [`Arc<PanicArmer>`] can be observed across threads.
 #[derive(Debug, Default)]
 pub struct PanicArmer {
-    armed: RefCell<bool>,
+    armed: AtomicBool,
 }
 
 impl PanicArmer {
@@ -55,77 +63,97 @@ impl PanicArmer {
     }
 
     pub fn arm(&self) {
-        *self.armed.borrow_mut() = true;
+        self.armed.store(true, Ordering::Relaxed);
     }
 
     pub fn disarm(&self) {
-        *self.armed.borrow_mut() = false;
+        self.armed.store(false, Ordering::Relaxed);
     }
 
     pub fn is_armed(&self) -> bool {
-        *self.armed.borrow()
+        self.armed.load(Ordering::Relaxed)
     }
 }
 
 /// A per-test clone budget shared by all instances of [`BudgetedFlaky`].
 /// Counts down from a configured threshold; when it reaches zero, clones fail.
-#[derive(Debug, PartialEq, Eq)]
+///
+/// The counter lives in an [`Arc<AtomicU32>`] so every handle produced by
+/// [`TryClone`] observes and mutates the *same* remaining budget — that sharing
+/// is what lets a single collection draw down one budget across all of its
+/// elements, safely across threads.
+#[derive(Debug)]
 pub struct CloneBudget {
-    remaining: RefCell<u32>,
+    remaining: Arc<AtomicU32>,
 }
 
 impl CloneBudget {
     pub fn new(remaining: u32) -> Self {
         Self {
-            remaining: RefCell::new(remaining),
+            remaining: Arc::new(AtomicU32::new(remaining)),
         }
     }
 
     /// Attempts to consume one unit of budget. Returns `true` if a clone is
-    /// allowed, `false` if the budget is exhausted.
+    /// allowed, `false` if the budget is exhausted. Atomic so concurrent
+    /// consumers can't overdraw the shared budget.
     pub fn try_consume(&self) -> bool {
-        let mut r = self.remaining.borrow_mut();
-        if *r == 0 {
-            false
-        } else {
-            *r -= 1;
-            true
-        }
-    }
-}
-
-/// A value whose `try_clone` succeeds while the shared budget has remaining
-/// units, then fails forever. Per-test isolation via `Rc<CloneBudget>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BudgetedFlaky {
-    pub(crate) budget: Rc<CloneBudget>,
-}
-
-impl TryClone for BudgetedFlaky {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        if self.budget.try_consume() {
-            Ok(BudgetedFlaky {
-                budget: self.budget.clone(),
+        // `fetch_update` retries on contention; the closure rejects only when
+        // the counter is already zero, so the sole failure value is `Err(0)`.
+        self.remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                if cur > 0 {
+                    Some(cur - 1)
+                } else {
+                    None
+                }
             })
-        } else {
-            Err(TryCloneError::Other("budget exhausted"))
+            .is_ok()
+    }
+
+    /// Obtains a new handle sharing this budget's counter *without* drawing
+    /// from it. Used to seed collection elements at construction time, where
+    /// creating the payload must not count against the clone budget — only
+    /// actual [`TryClone`]s do.
+    #[inline]
+    pub fn share(&self) -> Self {
+        Self {
+            remaining: self.remaining.clone(),
         }
     }
 }
+
+// A `CloneBudget` doubles as a clone *policy*: cloning it draws one unit from
+// the shared counter and hands back a handle that observes the same remaining
+// budget. When the budget is exhausted the clone fails — this is exactly the
+// deterministic mid-operation failure the flaky tests drive. Sharing the
+// counter via `Arc` keeps every instance in a collection on one budget.
+impl TryClone for CloneBudget {
+    #[inline]
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if !self.try_consume() {
+            return Err(TryCloneError::Other("budget exhausted"));
+        }
+        Ok(Self {
+            remaining: self.remaining.clone(),
+        })
+    }
+}
+
 
 /// A pass-through allocator whose own `Drop` is recorded by a shared counter, so
 /// a test can verify the allocator instance was destroyed exactly once (neither
 /// leaked nor double-dropped), e.g. after being moved into a container and back
 /// out. Delegates all memory operations to `Global`. Per-test isolation via the
-/// `Rc` shared with the test body.
+/// `Arc` shared with the test body.
 #[derive(Debug, Clone)]
 pub struct LocalCountingAlloc {
-    drops: Rc<DropCounter>,
+    drops: Arc<DropCounter>,
 }
 
 impl LocalCountingAlloc {
     /// Builds a counting allocator sharing one drop counter with the test.
-    pub fn new(drops: Rc<DropCounter>) -> Self {
+    pub fn new(drops: Arc<DropCounter>) -> Self {
         Self { drops }
     }
 }
@@ -149,14 +177,14 @@ impl Drop for LocalCountingAlloc {
 
 impl TryClone for LocalCountingAlloc {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        // Cloning an `Rc` never fails in this framework's test harness.
+        // Cloning an `Arc` never fails in this framework's test harness.
         Ok(Self {
             drops: self.drops.clone(),
         })
     }
 }
 
-// SAFETY: cloning is infallible (the shared `Rc` clone cannot fail) and all
+// SAFETY: cloning is infallible (the shared `Arc` clone cannot fail here) and all
 // memory operations delegate to `Global`, so a cloned handle is equivalent to
 // the original.
 unsafe impl AllocatorTryClone for LocalCountingAlloc {}
@@ -165,12 +193,12 @@ unsafe impl AllocatorTryClone for LocalCountingAlloc {}
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
 #[derive(Debug, Clone)]
 pub struct FlakyCloneAlloc {
-    pub(crate) budget: Rc<CloneBudget>,
+    pub(crate) budget: Arc<CloneBudget>,
 }
 
 impl FlakyCloneAlloc {
     /// Builds an allocator sharing one clone budget with the test.
-    pub fn new(budget: Rc<CloneBudget>) -> Self {
+    pub fn new(budget: Arc<CloneBudget>) -> Self {
         Self { budget }
     }
 }
@@ -225,18 +253,18 @@ impl TryDefault for FailAlloc {
 /// allocator and then deterministically trigger an OOM on the next growth —
 /// without any buffer surgery or transmute.
 ///
-/// The budget is shared via [`Rc`] so the same limit can be observed from
-/// multiple handles if needed.
+/// The budget is shared via [`Arc<AtomicUsize>`] so the same limit can be
+/// observed from multiple handles, safely across threads.
 #[derive(Debug, Clone)]
 pub struct BudgetedAlloc {
-    pub(crate) remaining: Rc<Cell<usize>>,
+    pub(crate) remaining: Arc<AtomicUsize>,
 }
 
 impl BudgetedAlloc {
     /// Builds an allocator allowing exactly `budget` successful allocations.
     pub fn new(budget: usize) -> Self {
         Self {
-            remaining: Rc::new(Cell::new(budget)),
+            remaining: Arc::new(AtomicUsize::new(budget)),
         }
     }
 }
@@ -246,10 +274,18 @@ impl BudgetedAlloc {
 // (all owned by `Global`) are freed.
 unsafe impl Allocator for BudgetedAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let had_budget = self.remaining.get() > 0;
-        if had_budget {
-            self.remaining.set(self.remaining.get() - 1);
-        }
+        // Atomically draw one unit; `fetch_update` rejects when already zero so
+        // concurrent allocators can't overdraw past the budget.
+        let had_budget = self
+            .remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                if cur > 0 {
+                    Some(cur - 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
         if !had_budget {
             return Err(AllocError);
         }

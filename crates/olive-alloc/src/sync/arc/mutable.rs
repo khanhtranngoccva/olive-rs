@@ -190,7 +190,7 @@ mod tests {
     use crate::test_helpers::FlakyCloneAlloc;
     use crate::vec::Vec;
     use olive_core::try_traits::TryClone;
-    use std::rc::Rc;
+    use std::sync::Arc as StdArc;
 
     // --- get_mut -------------------------------------------------------------
 
@@ -308,7 +308,7 @@ mod tests {
     fn try_make_mut_shared_oom_on_alloc_clone() {
         // Budget of 1: try_clone consumes it, leaving 0 for try_make_mut's
         // internal allocator clone.
-        let alloc = FlakyCloneAlloc::new(Rc::new(crate::test_helpers::CloneBudget::new(1)));
+        let alloc = FlakyCloneAlloc::new(StdArc::new(crate::test_helpers::CloneBudget::new(1)));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let arc2 = arc.try_clone().unwrap(); // consumes the last budget unit
         let mut arc = arc;
@@ -326,8 +326,8 @@ mod tests {
         // Budget of 2: arc.try_clone() consumes 1, try_make_mut's internal
         // allocator clone consumes the last one, leaving 0 for the element
         // clones inside try_clone_from_ref_in.
-        let ledger = Rc::new(crate::test_helpers::Ledger::new());
-        let budget = Rc::new(crate::test_helpers::CloneBudget::new(2));
+        let ledger = StdArc::new(crate::test_helpers::Ledger::new());
+        let budget = StdArc::new(crate::test_helpers::CloneBudget::new(2));
         let alloc = FlakyCloneAlloc::new(budget.clone());
 
         // Build a 2-element slice payload; each item shares the same budget.
@@ -338,7 +338,7 @@ mod tests {
             src.try_push(crate::test_helpers::FlakyTrackedItem {
                 id,
                 ledger: ledger.clone(),
-                budget: budget.clone(),
+                inner: (*budget).share(),
             })
             .unwrap();
         }
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn try_make_mut_steal_oom_on_allocation() {
-        let budget = Rc::new(crate::test_helpers::CloneBudget::new(1));
+        let budget = StdArc::new(crate::test_helpers::CloneBudget::new(1));
         let flaky = FlakyCloneAlloc::new(budget.clone());
         let arc = Arc::try_new_in(99i32, flaky).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
