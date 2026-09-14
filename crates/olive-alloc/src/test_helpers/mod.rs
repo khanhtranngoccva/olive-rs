@@ -10,7 +10,7 @@ pub use ledger::{Ledger, FlakyTrackedItem};
 
 extern crate std;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use core::alloc::Layout;
@@ -217,6 +217,53 @@ impl TryDefault for FailAlloc {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(Self)
+    }
+}
+
+/// An allocator that succeeds for its first `budget` allocations and fails
+/// forever after. Lets a test build a populated collection under a working
+/// allocator and then deterministically trigger an OOM on the next growth —
+/// without any buffer surgery or transmute.
+///
+/// The budget is shared via [`Rc`] so the same limit can be observed from
+/// multiple handles if needed.
+#[derive(Debug, Clone)]
+pub struct BudgetedAlloc {
+    pub(crate) remaining: Rc<Cell<usize>>,
+}
+
+impl BudgetedAlloc {
+    /// Builds an allocator allowing exactly `budget` successful allocations.
+    pub fn new(budget: usize) -> Self {
+        Self {
+            remaining: Rc::new(Cell::new(budget)),
+        }
+    }
+}
+
+// SAFETY: while budget remains, delegates all operations to `Global`; once
+// exhausted, no new blocks are handed out and only previously allocated ones
+// (all owned by `Global`) are freed.
+unsafe impl Allocator for BudgetedAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let had_budget = self.remaining.get() > 0;
+        if had_budget {
+            self.remaining.set(self.remaining.get() - 1);
+        }
+        if !had_budget {
+            return Err(AllocError);
+        }
+        crate::alloc::Global.allocate(layout)
+    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+    }
+}
+
+impl TryDefault for BudgetedAlloc {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::new(0))
     }
 }
 

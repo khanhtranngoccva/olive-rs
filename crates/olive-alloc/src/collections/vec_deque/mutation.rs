@@ -5,6 +5,8 @@
 //! push methods in `allocation.rs` build on top of them, securing space first
 //! when needed.
 
+use core::cmp;
+
 use super::VecDeque;
 use super::wrapped_index::WrappedIndex;
 use olive_core::alloc::Allocator;
@@ -26,6 +28,45 @@ impl core::fmt::Display for TryPushWithinCapacityError {
 }
 
 impl core::error::Error for TryPushWithinCapacityError {}
+
+/// Error returned by the within-capacity insert primitives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TryInsertWithinCapacityError {
+    /// The buffer is full (`len == capacity`); no room to shift.
+    Full {
+        /// The current length (equal to capacity).
+        len: usize,
+    },
+    /// The provided index exceeded the deque's length.
+    OutOfBounds,
+}
+
+impl core::fmt::Debug for TryInsertWithinCapacityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Full { len } => f
+                .debug_struct("TryInsertWithinCapacityError::Full")
+                .field("len", len)
+                .finish(),
+            Self::OutOfBounds => f
+                .debug_tuple("TryInsertWithinCapacityError::OutOfBounds")
+                .finish(),
+        }
+    }
+}
+
+impl core::fmt::Display for TryInsertWithinCapacityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Full { len } => {
+                write!(f, "no spare capacity: deque is full at length {len}")
+            }
+            Self::OutOfBounds => write!(f, "insert index out of bounds"),
+        }
+    }
+}
+
+impl core::error::Error for TryInsertWithinCapacityError {}
 
 // ---------------------------------------------------------------------------
 // Within-capacity pushes
@@ -70,7 +111,194 @@ impl<T, A: Allocator> VecDeque<T, A> {
         Ok(())
     }
 
-    /// Writes `value` into the next back slot and advances `len`.
+    // FIXME: mut and give_back variants
+
+    // -----------------------------------------------------------------------
+    // Within-capacity inserts
+    // -----------------------------------------------------------------------
+
+    /// Inserts an element at position `index` without attempting to grow the
+    /// buffer. Succeeds only if there is already spare capacity and the index
+    /// is in bounds.
+    ///
+    /// On failure the deque is left unchanged and `value` is dropped. Use
+    /// [`Self::try_insert_within_capacity_give_back`] to recover the value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TryInsertWithinCapacityError::OutOfBounds`] — `index > len`.
+    /// * [`TryInsertWithinCapacityError::Full`] — `len == capacity`.
+    pub fn try_insert_within_capacity(
+        &mut self,
+        index: usize,
+        value: T,
+    ) -> Result<(), TryInsertWithinCapacityError> {
+        self.try_insert_mut_within_capacity_give_back(index, value)
+            .map(|_| ())
+            .map_err(|(_returned, e)| e)
+    }
+
+    /// Like [`Self::try_insert_within_capacity`], but returns the value back
+    /// on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(T, TryInsertWithinCapacityError)` on failure.
+    pub fn try_insert_within_capacity_give_back(
+        &mut self,
+        index: usize,
+        value: T,
+    ) -> Result<(), (T, TryInsertWithinCapacityError)> {
+        self.try_insert_mut_within_capacity_give_back(index, value)
+            .map(|_| ())
+    }
+
+    /// Inserts an element at position `index` and returns a mutable reference
+    /// to it, without attempting to grow the buffer.
+    ///
+    /// # Errors
+    ///
+    /// * [`TryInsertWithinCapacityError::OutOfBounds`] — `index > len`.
+    /// * [`TryInsertWithinCapacityError::Full`] — `len == capacity`.
+    pub fn try_insert_mut_within_capacity(
+        &mut self,
+        index: usize,
+        value: T,
+    ) -> Result<&mut T, TryInsertWithinCapacityError> {
+        self.try_insert_mut_within_capacity_give_back(index, value)
+            .map_err(|(_returned, err)| err)
+    }
+
+    /// Like [`Self::try_insert_mut_within_capacity`], but returns the value
+    /// back on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(&mut T, (T, TryInsertWithinCapacityError))` on failure.
+    pub fn try_insert_mut_within_capacity_give_back(
+        &mut self,
+        index: usize,
+        value: T,
+    ) -> Result<&mut T, (T, TryInsertWithinCapacityError)> {
+        if index > self.len {
+            return Err((value, TryInsertWithinCapacityError::OutOfBounds));
+        }
+        if self.len >= self.capacity() {
+            return Err((value, TryInsertWithinCapacityError::Full { len: self.len }));
+        }
+        // SAFETY: both preconditions upheld above.
+        let ptr = unsafe { self.insert_within_cap(index, value) };
+        // SAFETY: `ptr` points to the freshly-written, in-bounds slot.
+        Ok(unsafe { &mut *ptr })
+    }
+
+    /// Inserts `value` at logical position `index` and returns a raw pointer
+    /// to the newly-inserted element. Assumes the buffer already has spare
+    /// capacity and the index is in bounds.
+    ///
+    /// This is the canonical unchecked insert primitive shared by both the
+    /// within-capacity safe wrappers and the fallible (may-grow) variants in
+    /// `allocation.rs`.
+    ///
+    /// Uses the same strategy as std: shift the shorter side (tail forward or
+    /// head backward) via `wrap_copy`, then write the new value into the
+    /// vacated slot.
+    ///
+    /// # Safety
+    ///
+    /// - `index <= self.len`
+    /// - `self.len < self.capacity()`
+    ///
+    /// Both conditions guarantee that all physical slots touched during the
+    /// shift and the final write are in-bounds.
+    #[inline]
+    pub(super) unsafe fn insert_within_cap(&mut self, index: usize, value: T) -> *mut T {
+        debug_assert!(index <= self.len);
+        debug_assert!(self.len < self.capacity());
+        if index == self.len {
+            // Fast path: equivalent to push_back.
+            return unsafe { self.push_back_within_cap(value) };
+        }
+        if size_of::<T>() == 0 {
+            // ZST: no physical slots to shift; just bump length and write to
+            // the dangling base pointer (which is aligned and sufficient for
+            // a zero-sized write).
+            let dest = self.buf.ptr().cast::<T>();
+            unsafe { dest.write(value) };
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted self.len < self.capacity <= usize::MAX"
+            )]
+            {
+                self.len += 1;
+            }
+            return dest;
+        }
+        // Choose the cheaper direction: shift the tail forward (k elements)
+        // or shift the head backward (index elements).
+        // SAFETY: `index < self.len` (the equal case returned above), so this
+        // cannot underflow.
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted index < self.len")]
+        let k = self.len - index;
+        // Tail is shifted if tail < head
+        // Head is shifted if head <= tail or tail >= head.
+        if k < index {
+            // Shift tail `[index..len]` forward by one.
+            // SAFETY: `index < len` (the equal case returned above), so
+            // `to_wrapped_index(index + 1)` is valid. The overlap constraint
+            // holds because we're shifting by exactly one slot with spare
+            // capacity available.
+            unsafe {
+                self.wrap_copy(
+                    self.to_wrapped_index(index),
+                    // SAFETY: `index < len <= capacity`, so `index + 1` is in-bounds.
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "asserted index < len <= cap"
+                    )]
+                    self.to_wrapped_index(index + 1),
+                    k,
+                );
+            }
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted self.len < self.capacity <= usize::MAX"
+            )]
+            {
+                self.len += 1;
+            }
+            // SAFETY: slot at `index` was vacated by the shift; writing here
+            // initializes a previously-uninitialized in-bounds slot.
+            let ptr = unsafe { self.buf.ptr().add(self.to_wrapped_index(index).as_index()) };
+            unsafe { ptr.write(value) };
+            ptr
+        } else {
+            // Shift head `[0..index]` backward by one: retreat `head`.
+            let old_head = self.head;
+            self.head = unsafe { self.wrap_sub(self.head, 1) };
+            // SAFETY: the overlap constraint holds — we're shifting `index`
+            // elements from `old_head` to `head` (one slot earlier), and
+            // `len < capacity` guarantees the destination is in-bounds.
+            unsafe {
+                self.wrap_copy(old_head, self.head, index);
+            }
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted self.len < self.capacity <= usize::MAX"
+            )]
+            {
+                self.len += 1;
+            }
+            // SAFETY: slot at logical `index` is now vacant (elements before
+            // it were shifted backward, freeing it).
+            let ptr = unsafe { self.buf.ptr().add(self.to_wrapped_index(index).as_index()) };
+            unsafe { ptr.write(value) };
+            ptr
+        }
+    }
+
+    /// Writes `value` into the next back slot, advances `len`, and returns a
+    /// raw pointer to the newly-inserted element.
     ///
     /// # Safety
     ///
@@ -79,20 +307,21 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// slot is always the dangling base pointer, so no index arithmetic is
     /// performed at all.
     #[inline]
-    unsafe fn push_back_within_cap(&mut self, value: T) {
+    pub(super) unsafe fn push_back_within_cap(&mut self, value: T) -> *mut T {
         debug_assert!(
             self.len < self.capacity(),
             "push_back_within_cap requires spare capacity"
         );
-        if size_of::<T>() == 0 {
+        let dest = if size_of::<T>() == 0 {
             // ZST: every "slot" is the same dangling address; nothing to move.
-            unsafe { self.buf.ptr().cast::<T>().write(value) };
+            self.buf.ptr().cast::<T>()
         } else {
             // SAFETY: `len < capacity`, so this wraps correctly.
             let idx = unsafe { self.wrap_add(self.head, self.len) };
             // SAFETY: `idx < capacity`, so the slot is writable.
-            unsafe { self.buf.ptr().add(idx.as_index()).write(value) };
-        }
+            unsafe { self.buf.ptr().add(idx.as_index()) }
+        };
+        unsafe { dest.write(value) };
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "asserted self.len < self.capacity <= usize::MAX"
@@ -100,9 +329,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
         {
             self.len += 1;
         }
+        dest
     }
 
-    /// Retreats `head` by one, writes `value` there, and advances `len`.
+    /// Retreats `head` by one, writes `value` there, advances `len`, and
+    /// returns a raw pointer to the newly-inserted element.
     ///
     /// # Safety
     ///
@@ -111,21 +342,22 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// For zero-sized types `head` never moves and the write goes to the
     /// dangling base pointer.
     #[inline]
-    unsafe fn push_front_within_cap(&mut self, value: T) {
+    pub(super) unsafe fn push_front_within_cap(&mut self, value: T) -> *mut T {
         debug_assert!(
             self.len < self.capacity(),
             "push_front_within_cap requires spare capacity"
         );
-        if size_of::<T>() == 0 {
-            // ZST: head is pinned at 0; just bump the length.
-            unsafe { self.buf.ptr().cast::<T>().write(value) };
+        let dest = if size_of::<T>() == 0 {
+            // ZST: head is pinned at 0; just use the dangling base pointer.
+            self.buf.ptr().cast::<T>()
         } else {
             // SAFETY: `len < capacity` guarantees there is a free slot before
             // `head`; `wrap_sub` with subtrahend 1 keeps the result in-bounds.
             self.head = unsafe { self.wrap_sub(self.head, 1) };
             // SAFETY: `head < capacity`, so the slot holds writable memory.
-            unsafe { self.buf.ptr().add(self.head.as_index()).write(value) };
-        }
+            unsafe { self.buf.ptr().add(self.head.as_index()) }
+        };
+        unsafe { dest.write(value) };
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "asserted self.len < self.capacity <= usize::MAX"
@@ -133,6 +365,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         {
             self.len += 1;
         }
+        dest
     }
 
     /// Copies a contiguous block of memory `len` long from `src` to `dst`.
@@ -177,7 +410,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// - Both `src + len` and `dst + len` must not exceed `self.capacity()`.
     #[inline]
     #[allow(clippy::arithmetic_side_effects, reason = "debug assertions only")]
-    unsafe fn copy(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
+    pub(super) unsafe fn copy(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
         debug_assert!(
             dst.as_index() + len <= self.capacity(),
             "cpy dst={} src={} len={} cap={}",
@@ -201,6 +434,184 @@ impl<T, A: Allocator> VecDeque<T, A> {
                 self.buf.ptr().add(dst.as_index()),
                 len,
             );
+        }
+    }
+
+    /// Copies a potentially wrapping block of memory `len` long from `src` to
+    /// `dst`, handling all combinations of wrap-around and overlap correctly.
+    ///
+    /// Ported directly from std's `VecDeque::wrap_copy`. The invariant is that
+    /// there is at most one continuous overlapping region between `src` and
+    /// `dst`: `(abs(dst - src) + len) <= capacity()`.
+    ///
+    /// # Safety
+    ///
+    /// - `src` and `dst` must be valid `WrappedIndex` values (< capacity).
+    /// - The ranges `[src, src+len)` and `[dst, dst+len)` must satisfy the
+    ///   overlap constraint above (at most one overlapping region).
+    /// - All destination slots must be initialized or about-to-be-initialized
+    ///   (this is an overlapping `memcpy`, not `memmove`-free).
+    #[inline]
+    #[allow(clippy::arithmetic_side_effects, reason = "debug assertions only")]
+    unsafe fn wrap_copy(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
+        debug_assert!(
+            cmp::min(src.abs_diff(dst), self.capacity() - src.abs_diff(dst)) + len
+                <= self.capacity(),
+            "wrc dst={} src={} len={} cap={}",
+            dst,
+            src,
+            len,
+            self.capacity()
+        );
+
+        // If T is a ZST, don't do any copying.
+        if size_of::<T>() == 0 || src == dst || len == 0 {
+            return;
+        }
+
+        // Checks if the dst is after [src, src + len) slice.
+        let dst_after_src = unsafe { self.wrap_sub(dst, src.as_index()) } < len;
+
+        let src_pre_wrap_len = self.capacity() - src.as_index();
+        let dst_pre_wrap_len = self.capacity() - dst.as_index();
+        // This checks if the source slice wraps (not enough pre-wrap space for `len` elements)
+        let src_wraps = src_pre_wrap_len < len;
+        // This checks if the destination slice wraps (not enough pre-wrap space for `len` elements)
+        let dst_wraps = dst_pre_wrap_len < len;
+
+        match (dst_after_src, src_wraps, dst_wraps) {
+            (_, false, false) => {
+                // src doesn't wrap, dst doesn't wrap
+                //
+                //        S . . .
+                // 1 [_ _ A A B B C C _]
+                // 2 [_ _ A A A A B B _]
+                //            D . . .
+                //
+                unsafe {
+                    self.copy(src, dst, len);
+                }
+            }
+            (false, false, true) => {
+                // dst before src, src doesn't wrap, dst wraps
+                //
+                //    S . . .
+                // 1 [A A B B _ _ _ C C]
+                // 2 [A A B B _ _ _ A A]
+                // 3 [B B B B _ _ _ A A]
+                //    . .           D .
+                //
+                unsafe {
+                    self.copy(src, dst, dst_pre_wrap_len);
+                    self.copy(
+                        src.add(dst_pre_wrap_len),
+                        WrappedIndex::zero(),
+                        len - dst_pre_wrap_len,
+                    );
+                }
+            }
+            (true, false, true) => {
+                // src before dst, src doesn't wrap, dst wraps
+                //
+                //              S . . .
+                // 1 [C C _ _ _ A A B B]
+                // 2 [B B _ _ _ A A B B]
+                // 3 [B B _ _ _ A A A A]
+                //    . .           D .
+                //
+                unsafe {
+                    self.copy(
+                        src.add(dst_pre_wrap_len),
+                        WrappedIndex::zero(),
+                        len - dst_pre_wrap_len,
+                    );
+                    self.copy(src, dst, dst_pre_wrap_len);
+                }
+            }
+            (false, true, false) => {
+                // dst before src, src wraps, dst doesn't wrap
+                //
+                //    . .           S .
+                // 1 [C C _ _ _ A A B B]
+                // 2 [C C _ _ _ B B B B]
+                // 3 [C C _ _ _ B B C C]
+                //              D . . .
+                //
+                unsafe {
+                    self.copy(src, dst, src_pre_wrap_len);
+                    self.copy(
+                        WrappedIndex::zero(),
+                        dst.add(src_pre_wrap_len),
+                        len - src_pre_wrap_len,
+                    );
+                }
+            }
+            (true, true, false) => {
+                // src before dst, src wraps, dst doesn't wrap
+                //
+                //    . .           S .
+                // 1 [A A B B _ _ _ C C]
+                // 2 [A A A A _ _ _ C C]
+                // 3 [C C A A _ _ _ C C]
+                //    D . . .
+                //
+                unsafe {
+                    self.copy(
+                        WrappedIndex::zero(),
+                        dst.add(src_pre_wrap_len),
+                        len - src_pre_wrap_len,
+                    );
+                    self.copy(src, dst, src_pre_wrap_len);
+                }
+            }
+            (false, true, true) => {
+                // dst before src, src wraps, dst wraps
+                //
+                //    . . .         S .
+                // 1 [A B C D _ E F G H]
+                // 2 [A B C D _ E G H H]
+                // 3 [A B C D _ E G H A]
+                // 4 [B C C D _ E G H A]
+                //    . .         D . .
+                //
+                debug_assert!(dst_pre_wrap_len > src_pre_wrap_len);
+                let delta = dst_pre_wrap_len - src_pre_wrap_len;
+                unsafe {
+                    self.copy(src, dst, src_pre_wrap_len);
+                    self.copy(WrappedIndex::zero(), dst.add(src_pre_wrap_len), delta);
+                    self.copy(
+                        WrappedIndex::from_arbitrary_number(delta),
+                        WrappedIndex::zero(),
+                        len - dst_pre_wrap_len,
+                    );
+                }
+            }
+            (true, true, true) => {
+                // src before dst, src wraps, dst wraps
+                //
+                //    . .         S . .
+                // 1 [A B C D _ E F G H]
+                // 2 [A A B D _ E F G H]
+                // 3 [H A B D _ E F G H]
+                // 4 [H A B D _ E F F G]
+                //    . . .         D .
+                //
+                debug_assert!(src_pre_wrap_len > dst_pre_wrap_len);
+                let delta = src_pre_wrap_len - dst_pre_wrap_len;
+                unsafe {
+                    self.copy(
+                        WrappedIndex::zero(),
+                        WrappedIndex::from_arbitrary_number(delta),
+                        len - src_pre_wrap_len,
+                    );
+                    self.copy(
+                        WrappedIndex::from_arbitrary_number(self.capacity() - delta),
+                        WrappedIndex::zero(),
+                        delta,
+                    );
+                    self.copy(src, dst, dst_pre_wrap_len);
+                }
+            }
         }
     }
 
@@ -450,5 +861,168 @@ mod tests {
             assert_eq!(dq.try_push_back_within_capacity(()), Ok(()));
         }
         assert_eq!(dq.len(), 1024);
+    }
+
+    // --- try_insert_within_capacity family -------------------------------------
+
+    use super::TryInsertWithinCapacityError;
+
+    #[test]
+    fn insert_within_capacity_at_front_of_empty() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_insert_within_capacity(0, 42), Ok(()));
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.front(), Some(&42));
+    }
+
+    #[test]
+    fn insert_within_capacity_in_middle() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_insert_within_capacity(2, 99), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([1, 2, 99, 3, 4]));
+    }
+
+    #[test]
+    fn insert_within_capacity_at_back_equals_push_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        // Inserting at index == len should behave like push_back.
+        assert_eq!(dq.try_insert_within_capacity(2, 3), Ok(()));
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn insert_within_capacity_at_front_shifts_all() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_insert_within_capacity(0, 0), Ok(()));
+        assert_eq!(collect_into_array::<4>(&dq), Some([0, 1, 2, 3]));
+    }
+
+    #[test]
+    fn insert_within_capacity_out_of_bounds() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        let err = match dq.try_insert_within_capacity(5, 99) {
+            Err(e) => e,
+            Ok(_) => panic!("expected out-of-bounds error"),
+        };
+        assert_eq!(err, TryInsertWithinCapacityError::OutOfBounds);
+        assert_eq!(dq.len(), 1);
+    }
+
+    #[test]
+    fn insert_within_capacity_full_buffer_rejects() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        // Full; inserting anywhere must fail with Full.
+        let err = match dq.try_insert_within_capacity(0, 99) {
+            Err(e) => e,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(err, TryInsertWithinCapacityError::Full { len: 2 });
+        // Deque unchanged.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn insert_within_capacity_give_back_recovers_value_on_full() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        let (returned, err) = match dq.try_insert_within_capacity_give_back(0, 99) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(returned, 99);
+        assert_eq!(err, TryInsertWithinCapacityError::Full { len: 2 });
+        assert_eq!(dq.len(), 2);
+    }
+
+    #[test]
+    fn insert_within_capacity_give_back_recovers_value_on_oob() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        let (returned, err) = match dq.try_insert_within_capacity_give_back(5, 42) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected out-of-bounds error"),
+        };
+        assert_eq!(returned, 42);
+        assert_eq!(err, TryInsertWithinCapacityError::OutOfBounds);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn insert_mut_within_capacity_returns_reference() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(3), Ok(()));
+        assert_eq!(dq.try_insert_mut_within_capacity(1, 2), Ok(&mut 2));
+        *dq.get_mut(1).unwrap() += 10;
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 12, 3]));
+    }
+
+    #[test]
+    fn insert_within_capacity_across_wrap_boundary() {
+        // Build a wrapped state: push backs then fronts to wrap head past 0.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(3), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        // Now: [5, 4, 1, 2, 3], len=5, cap=6, one spare slot.
+        // Head has wrapped; inserting in the middle exercises the shift.
+        assert_eq!(dq.try_insert_within_capacity(2, 99), Ok(()));
+        assert_eq!(dq.len(), 6);
+        assert_eq!(collect_into_array::<6>(&dq), Some([5, 4, 99, 1, 2, 3]));
+    }
+
+    #[test]
+    fn insert_within_capacity_head_shift_wraps_both_src_and_dst() {
+        // Force the head-shift branch of `insert_within_cap` into the
+        // `(dst_after_src=false, src_wraps=true, dst_wraps=true)` case of
+        // `wrap_copy`, where both the source block and the destination block
+        // cross the physical end of the buffer.
+        //
+        // The branch is selected when `k = len - index` is NOT less than
+        // `index`, i.e. `index <= len / 2`. A head shift copies `index` elements 
+        // from `src = head` to `dst = head - 1`. Since `dst` has exactly one 
+        // more slot of pre-wrap room than `src`, to make both wrap, 
+        // with `r = capacity - head`, we need `index >= r + 2`, plus 
+        // `index <= len - index` and `index < len`. 
+        
+        // With capacity 8, head 7 (`r = 1`), len 6, and
+        // index 3 all constraints hold: `3 <= 6 - 3`, src spans slots 7,0,1
+        // (wraps, room 1 < 3) and dst spans slots 6,7,0 (wraps, room 2 < 3);
+        // the forward distance from src to dst is 7 >= 3, so
+        // `dst_after_src` is false.
+        //
+        // Reaching head=7, len=6 (used slots 7,0,1,2,3,4) using only
+        // in-capacity operations: push backs 1,2 (head=0, back=2), one
+        // front-insert of 10 (head retreats 0 -> 7, back still 2), then pushes
+        // back 20,30,40 into slots 2,3,4. Head never moves again.
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        assert_eq!(dq.try_insert_within_capacity(0, 10), Ok(()));
+        for v in [20, 30, 40] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.len(), 6);
+        assert_eq!(collect_into_array::<6>(&dq), Some([10, 1, 2, 20, 30, 40]));
+        // Probe: index 3, k = len - index = 3, not less than index ->
+        // head-shift branch, wrap_copy(src=7, dst=6, len=3) — both blocks
+        // wrap.
+        assert_eq!(dq.try_insert_within_capacity(3, 99), Ok(()));
+        assert_eq!(dq.len(), 7);
+        assert_eq!(collect_into_array::<7>(&dq), Some([10, 1, 2, 99, 20, 30, 40]));
     }
 }

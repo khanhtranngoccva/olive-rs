@@ -57,7 +57,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// - The index must be less than the buffer capacity, or 0 if the capacity
     ///   is 0.
     #[inline]
-    unsafe fn to_wrapped_index(&self, idx: usize) -> WrappedIndex {
+    pub(super) unsafe fn to_wrapped_index(&self, idx: usize) -> WrappedIndex {
         unsafe { self.wrap_add(self.head, idx) }
     }
 
@@ -112,7 +112,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
             ptr::slice_from_raw_parts_mut(self.buf.ptr().add(range.start), range.end - range.start)
         }
     }
-
 }
 
 impl<T, A: Allocator> VecDeque<T, A> {
@@ -278,12 +277,14 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// the first slice and the second slice will be empty.
     #[inline]
     pub fn as_mut_slices(&mut self) -> (&mut [T], &mut [T]) {
+        extern crate std;
         // A full-range query against our own length can never fail to resolve.
         let (a_range, b_range) = self
             .try_slice_ranges(.., self.len)
             .expect("full range is resolvable");
         // SAFETY: `try_slice_ranges` always returns valid ranges into the
         // physical buffer over initialized elements.
+        std::println!("ptr: {:?}, b_range: {:?}", self.buf.ptr(), b_range);
         unsafe {
             (
                 &mut *self.buffer_range(a_range),
