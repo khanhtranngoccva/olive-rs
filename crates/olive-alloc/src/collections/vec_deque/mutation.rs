@@ -740,6 +740,123 @@ impl<T, A: Allocator> VecDeque<T, A> {
 }
 
 // ---------------------------------------------------------------------------
+// Removal (never allocates)
+// ---------------------------------------------------------------------------
+
+impl<T, A: Allocator> VecDeque<T, A> {
+    /// Removes all elements from the deque, dropping them in place.
+    ///
+    /// Removal never allocates, so this cannot fail. The buffer's capacity is
+    /// left untouched.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
+
+    /// Removes the last element from the deque and returns it, or `None` if
+    /// the deque is empty.
+    ///
+    /// Removal never allocates, so this cannot fail.
+    #[inline]
+    pub fn pop_back(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            // SAFETY: asserted `self.len > 0`.
+            #[allow(clippy::arithmetic_side_effects, reason = "asserted self.len > 0")]
+            {
+                self.len -= 1;
+            }
+            // SAFETY: we read the slot at logical index `new_len` (the old
+            // back), which lies inside the initialized region `[0..old_len)`.
+            Some(unsafe {
+                let idx = self.to_wrapped_index(self.len);
+                ptr::read(self.buf.ptr().add(idx.as_index()))
+            })
+        }
+    }
+
+    /// Removes the first element from the deque and returns it, or `None` if
+    /// the deque is empty.
+    ///
+    /// Removal never allocates, so this cannot fail.
+    #[inline]
+    pub fn pop_front(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            // SAFETY: `self.head < capacity` (or both zero for an empty
+            // buffer, guarded above).
+            let new_head = unsafe { self.wrap_add(self.head, 1) };
+            // SAFETY: asserted `self.len > 0`.
+            #[allow(clippy::arithmetic_side_effects, reason = "asserted self.len > 0")]
+            {
+                self.len -= 1;
+            }
+            // SAFETY: `head` still points at the (now removed) front slot,
+            // which holds an initialized element. Read it out before
+            // advancing the head.
+            let value = unsafe { ptr::read(self.buf.ptr().add(self.head.as_index())) };
+            self.head = new_head;
+            Some(value)
+        }
+    }
+
+    /// Shortens the deque, keeping only the first `new_len` elements and
+    /// dropping the rest. If `new_len` is greater than or equal to the current
+    /// length, nothing happens.
+    ///
+    /// Truncation never allocates, so this cannot fail.
+    pub fn truncate(&mut self, new_len: usize) {
+        // Truncating to a length >= current length is a no-op (matches std).
+        if new_len >= self.len {
+            return;
+        }
+        let old_len = self.len;
+        // Resolve the logical tail range `[new_len..old_len)` into one or two
+        // contiguous physical runs before mutating anything. The range lies
+        // entirely within `[0..old_len)`, so it is always resolvable.
+        let (a_range, b_range) = self
+            .try_slice_ranges(new_len..old_len, old_len)
+            .expect("tail range is resolvable");
+        // Build raw fat-slice pointers for both runs.
+        // SAFETY: `try_slice_ranges` returns valid ranges into the physical
+        // buffer over initialized elements.
+        let a_slice = unsafe { self.buffer_range(a_range) };
+        let b_slice = unsafe { self.buffer_range(b_range) };
+        // Shrink the logical length *before* running destructors so that, if a
+        // destructor panics, unwinding sees a length that already excludes the
+        // dropped tail and cannot double-free it. (A second panic during unwind
+        // aborts, per Rust's rules.)
+        self.len = new_len;
+        // Panic guard for the second run: if dropping the first run panics,
+        // this guard ensures the second run is still cleaned up during unwind
+        // rather than leaked. On the happy path the guard simply drops `b`
+        // when it goes out of scope after `a` has been dropped.
+        struct SecondRunGuard<'a, T> {
+            ptr: *mut [T],
+            _marker: core::marker::PhantomData<&'a mut [T]>,
+        }
+        impl<T> Drop for SecondRunGuard<'_, T> {
+            fn drop(&mut self) {
+                // SAFETY: the pointer was built from `buffer_range` over
+                // initialized, in-bounds slots and has not been consumed yet.
+                unsafe { ptr::drop_in_place(&mut *self.ptr) };
+            }
+        }
+        let _guard = SecondRunGuard {
+            ptr: b_slice,
+            _marker: core::marker::PhantomData,
+        };
+        // SAFETY: `a_slice` covers disjoint, fully-initialized slots; dropping
+        // it as a fat slice runs every element's destructor exactly once.
+        unsafe { ptr::drop_in_place(&mut *a_slice) };
+        // If we reach here, dropping `a` did not panic. The guard will drop
+        // `b` when `_guard` goes out of scope below.
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1024,5 +1141,289 @@ mod tests {
         assert_eq!(dq.try_insert_within_capacity(3, 99), Ok(()));
         assert_eq!(dq.len(), 7);
         assert_eq!(collect_into_array::<7>(&dq), Some([10, 1, 2, 99, 20, 30, 40]));
+    }
+
+    // --- pop_back / pop_front ---------------------------------------------------
+
+    #[test]
+    fn pop_back_returns_none_when_empty() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        assert_eq!(dq.pop_back(), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_front_returns_none_when_empty() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        assert_eq!(dq.pop_front(), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_back_removes_last_in_order() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_back(), Some(4));
+        assert_eq!(dq.pop_back(), Some(3));
+        assert_eq!(dq.pop_back(), Some(2));
+        assert_eq!(dq.pop_back(), Some(1));
+        assert_eq!(dq.pop_back(), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_front_removes_first_in_order() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_front(), Some(1));
+        assert_eq!(dq.pop_front(), Some(2));
+        assert_eq!(dq.pop_front(), Some(3));
+        assert_eq!(dq.pop_front(), Some(4));
+        assert_eq!(dq.pop_front(), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_back_across_wrap_boundary() {
+        // Build a wrapped state: [5, 4, 1, 2, 3] with head retreated past 0.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([5, 4, 1, 2, 3]));
+        // Popping from the back walks down through the first physical segment.
+        assert_eq!(dq.pop_back(), Some(3));
+        assert_eq!(dq.pop_back(), Some(2));
+        assert_eq!(dq.pop_back(), Some(1));
+        assert_eq!(collect_into_array::<2>(&dq), Some([5, 4]));
+    }
+
+    #[test]
+    fn pop_front_across_wrap_boundary() {
+        // Build a wrapped state: [5, 4, 1, 2, 3] with head retreated past 0.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([5, 4, 1, 2, 3]));
+        // Popping from the front advances `head` forward, eventually wrapping
+        // around to slot 0 and beyond.
+        assert_eq!(dq.pop_front(), Some(5));
+        assert_eq!(dq.pop_front(), Some(4));
+        assert_eq!(dq.pop_front(), Some(1));
+        assert_eq!(collect_into_array::<2>(&dq), Some([2, 3]));
+    }
+
+    #[test]
+    fn alternating_pops_drain_correctly() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5, 6] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Pop alternately from both ends; verify each value lands correctly.
+        assert_eq!(dq.pop_front(), Some(1));
+        assert_eq!(dq.pop_back(), Some(6));
+        assert_eq!(dq.pop_front(), Some(2));
+        assert_eq!(dq.pop_back(), Some(5));
+        assert_eq!(dq.pop_front(), Some(3));
+        assert_eq!(dq.pop_back(), Some(4));
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn zst_pop_round_trip() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        assert_eq!(dq.pop_back(), None);
+        assert_eq!(dq.pop_front(), None);
+        assert_eq!(dq.try_push_back_within_capacity(()), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(()), Ok(()));
+        assert_eq!(dq.len(), 2);
+        assert_eq!(dq.pop_back(), Some(()));
+        assert_eq!(dq.pop_front(), Some(()));
+        assert!(dq.is_empty());
+    }
+
+    // --- truncate / clear -------------------------------------------------------
+
+    #[test]
+    fn truncate_to_zero_clears() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.truncate(0);
+        assert!(dq.is_empty());
+        // Capacity is preserved by truncation (matches std semantics).
+        assert!(dq.capacity() >= 3);
+    }
+
+    #[test]
+    fn truncate_geq_len_is_noop() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.truncate(3);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        dq.truncate(100);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn truncate_keeps_prefix_and_drops_tail() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.truncate(3);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn truncate_across_wrap_boundary() {
+        // Wrapped state: [5, 4, 1, 2, 3], len=5, cap=6.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([5, 4, 1, 2, 3]));
+        // Keep only the first two logical elements; the dropped tail spans the
+        // wrap boundary.
+        dq.truncate(2);
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([5, 4]));
+    }
+
+    #[test]
+    fn truncate_then_reuse_buffer() {
+        // After truncating, pushing again must reuse the same buffer without
+        // corrupting the surviving prefix.
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.truncate(2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+        assert_eq!(dq.try_push_back_within_capacity(99), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(-1), Ok(()));
+        assert_eq!(collect_into_array::<4>(&dq), Some([-1, 1, 2, 99]));
+    }
+
+    #[test]
+    fn clear_empties_but_preserves_capacity() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        let cap_before = dq.capacity();
+        dq.clear();
+        assert!(dq.is_empty());
+        assert_eq!(dq.capacity(), cap_before);
+        // The deque remains usable after clearing.
+        assert_eq!(dq.try_push_back_within_capacity(42), Ok(()));
+        assert_eq!(dq.back(), Some(&42));
+    }
+
+    #[test]
+    fn clear_on_wrapped_state() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        dq.clear();
+        assert!(dq.is_empty());
+        assert_eq!(dq.try_push_back_within_capacity(7), Ok(()));
+        assert_eq!(dq.front(), Some(&7));
+    }
+
+    #[test]
+    fn clear_zst() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        for _ in 0..10 {
+            assert_eq!(dq.try_push_back_within_capacity(()), Ok(()));
+        }
+        assert_eq!(dq.len(), 10);
+        dq.clear();
+        assert!(dq.is_empty());
+    }
+
+    // --- destructor accounting --------------------------------------------------
+
+    use crate::test_helpers::DropCounter;
+    use std::rc::Rc;
+
+    #[allow(dead_code)]
+    struct Tracked(u32, Rc<DropCounter>);
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.1.record_drop();
+        }
+    }
+
+    #[test]
+    fn pop_drops_removed_element_exactly_once() {
+        let counter = Rc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
+        for i in 0..4u32 {
+            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+        }
+        assert_eq!(counter.get(), 0);
+        assert_eq!(dq.pop_back().map(|t| t.0), Some(3));
+        assert_eq!(counter.get(), 1);
+        assert_eq!(dq.pop_front().map(|t| t.0), Some(0));
+        assert_eq!(counter.get(), 2);
+        // Two survivors remain in the deque.
+        assert_eq!(dq.len(), 2);
+        drop(dq);
+        // Total of four drops: every element exactly once.
+        assert_eq!(counter.get(), 4);
+    }
+
+    #[test]
+    fn truncate_drops_only_the_removed_tail() {
+        let counter = Rc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
+        for i in 0..5u32 {
+            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+        }
+        assert_eq!(counter.get(), 0);
+        dq.truncate(2);
+        // Exactly three elements (indices 2, 3, 4) were dropped.
+        assert_eq!(counter.get(), 3);
+        assert_eq!(dq.len(), 2);
+        drop(dq);
+        // Two more survivors drop on final cleanup -> total five.
+        assert_eq!(counter.get(), 5);
+    }
+
+    #[test]
+    fn clear_drops_everything() {
+        let counter = Rc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
+        for i in 0..5u32 {
+            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+        }
+        assert_eq!(counter.get(), 0);
+        dq.clear();
+        assert_eq!(counter.get(), 5);
+        assert!(dq.is_empty());
+        drop(dq);
+        // Nothing left to drop.
+        assert_eq!(counter.get(), 5);
     }
 }

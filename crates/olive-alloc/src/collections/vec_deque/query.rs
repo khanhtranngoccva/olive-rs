@@ -100,7 +100,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// - The range must be within the bounds of the physical buffer, and every
     ///   element in it must be initialized.
     #[inline]
-    unsafe fn buffer_range(&self, range: Range<usize>) -> *mut [T] {
+    pub(super) unsafe fn buffer_range(&self, range: Range<usize>) -> *mut [T] {
         // SAFETY: caller guarantees the range lies inside the buffer and that
         // its elements are initialized; `end >= start` by construction of a
         // valid `Range`, so the subtraction cannot underflow.
