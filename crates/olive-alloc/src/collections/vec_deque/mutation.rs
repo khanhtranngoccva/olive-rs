@@ -11,7 +11,7 @@ use super::VecDeque;
 use super::wrapped_index::WrappedIndex;
 use olive_core::alloc::Allocator;
 use olive_core::mem::size_of;
-use olive_core::ptr;
+use olive_core::{ptr, slice};
 
 /// Error returned by the within-capacity push primitives when the buffer is
 /// exactly full (`len == capacity`).
@@ -376,7 +376,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///   overlapping regions).
     #[inline]
     #[allow(clippy::arithmetic_side_effects, reason = "debug assertions only")]
-    unsafe fn copy_nonoverlapping(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
+    pub(super) unsafe fn copy_nonoverlapping(
+        &mut self,
+        src: WrappedIndex,
+        dst: WrappedIndex,
+        len: usize,
+    ) {
         debug_assert!(
             dst.as_index() + len <= self.capacity(),
             "cno dst={} src={} len={} cap={}",
@@ -613,6 +618,178 @@ impl<T, A: Allocator> VecDeque<T, A> {
                 }
             }
         }
+    }
+
+    /// Rearranges the internal storage of this deque so it is one contiguous
+    /// slice, which is then returned.
+    ///
+    /// This method does not allocate and does not change the order of the
+    /// inserted elements. As it returns a mutable slice, this can be used to
+    /// sort a deque.
+    ///
+    /// Once the internal storage is contiguous, the [`as_slices`] and
+    /// [`as_mut_slices`] methods will return the entire contents of the
+    /// deque in a single slice.
+    ///
+    /// [`as_slices`]: VecDeque::as_slices
+    /// [`as_mut_slices`]: VecDeque::as_mut_slices
+    pub(super) fn make_contiguous(&mut self) -> &mut [T] {
+        if size_of::<T>() == 0 {
+            self.head = WrappedIndex::zero();
+        }
+
+        if self.is_contiguous() {
+            // SAFETY: head < capacity, head + len <= capacity
+            unsafe {
+                return slice::from_raw_parts_mut(
+                    self.buf.ptr().add(self.head.as_index()),
+                    self.len,
+                );
+            }
+        }
+
+        let &mut Self { head, len, .. } = self;
+        let ptr = self.buf.ptr();
+        let cap = self.capacity();
+
+        #[allow(clippy::arithmetic_side_effects, reason = "invariant: len <= cap")]
+        let free = cap - len;
+        #[allow(clippy::arithmetic_side_effects, reason = "invariant: head < cap")]
+        let head_len = cap - head.as_index();
+
+        // tail <= head < capacity
+        // head cannot be <= capacity, because we know that VecDeque is non-empty, since it is not
+        // contiguous at this point
+        #[allow(clippy::arithmetic_side_effects, reason = "invariant: head_len <= len")]
+        let tail = WrappedIndex::from_arbitrary_number(len - head_len);
+        let tail_len = tail.as_index();
+
+        if free >= head_len {
+            // there is enough free space to copy the head in one go,
+            // this means that we first shift the tail backwards, and then
+            // copy the head to the correct position.
+            //
+            // from: DEFGH....ABC
+            // to:   ABCDEFGH....
+            // SAFETY: head_len + tail_len = len <= capacity, head + head_len = head + cap - head = cap
+            unsafe {
+                self.copy(
+                    WrappedIndex::zero(),
+                    WrappedIndex::from_arbitrary_number(head_len),
+                    tail_len,
+                );
+                // ...DEFGH.ABC
+                self.copy_nonoverlapping(head, WrappedIndex::zero(), head_len);
+                // ABCDEFGH....
+            }
+
+            self.head = WrappedIndex::zero();
+        } else if free >= tail_len {
+            // there is enough free space to copy the tail in one go,
+            // this means that we first shift the head forwards, and then
+            // copy the tail to the correct position.
+            //
+            // from: FGH....ABCDE
+            // to:   ...ABCDEFGH.
+            // SAFETY: head + head_len == head + cap - head == cap, tail + head_len == tail_len + head_len == len <= capacity
+            // tail_len == len - head <= len <= capacity
+            // tail + tail_len + head_len == tail_len + tail_len + head_len == len + tail_len <= len + free == capacity
+            unsafe {
+                self.copy(head, tail, head_len);
+                // FGHABCDE....
+                self.copy_nonoverlapping(WrappedIndex::zero(), tail.add(head_len), tail_len);
+                // ...ABCDEFGH.
+            }
+
+            self.head = tail;
+        } else {
+            // `free` is smaller than both `head_len` and `tail_len`.
+            // the general algorithm for this first moves the slices
+            // right next to each other and then uses `slice::rotate`
+            // to rotate them into place:
+            //
+            // initially:   HIJK..ABCDEFG
+            // step 1:      ..HIJKABCDEFG
+            // step 2:      ..ABCDEFGHIJK
+            //
+            // or:
+            //
+            // initially:   FGHIJK..ABCDE
+            // step 1:      FGHIJKABCDE..
+            // step 2:      ABCDEFGHIJK..
+
+            // pick the shorter of the 2 slices to reduce the amount
+            // of memory that needs to be moved around.
+            if head_len > tail_len {
+                // tail is shorter, so:
+                //  1. copy tail forwards
+                //  2. rotate used part of the buffer
+                //  3. update head to point to the new beginning (which is just `free`)
+
+                // SAFETY: tail_len + free <= len + free == capacity,
+                // noncontiguous => len > 0 => free < capacity
+                unsafe {
+                    // if there is no free space in the buffer, then the slices are already
+                    // right next to each other and we don't need to move any memory.
+                    if free != 0 {
+                        // because we only move the tail forward as much as there's free space
+                        // behind it, we don't overwrite any elements of the head slice, and
+                        // the slices end up right next to each other.
+                        self.copy(
+                            WrappedIndex::zero(),
+                            WrappedIndex::from_arbitrary_number(free),
+                            tail_len,
+                        );
+                    }
+
+                    // We just copied the tail right next to the head slice,
+                    // so all of the elements in the range are initialized
+                    let slice = &mut *self.buffer_range(free..self.capacity());
+
+                    // because the deque wasn't contiguous, we know that `tail_len < self.len == slice.len()`,
+                    // so this will never panic.
+                    slice.rotate_left(tail_len);
+
+                    // the used part of the buffer now is `free..self.capacity()`, so set
+                    // `head` to the beginning of that range.
+                    self.head = WrappedIndex::from_arbitrary_number(free);
+                }
+            } else {
+                // head is shorter so:
+                //  1. copy head backwards
+                //  2. rotate used part of the buffer
+                //  3. update head to point to the new beginning (which is the beginning of the buffer)
+
+                // SAFETY: head + head_len == capacity, tail_len + head_len == len <= capacity,
+                unsafe {
+                    // if there is no free space in the buffer, then the slices are already
+                    // right next to each other and we don't need to move any memory.
+                    if free != 0 {
+                        // copy the head slice to lie right behind the tail slice.
+                        self.copy(
+                            self.head,
+                            WrappedIndex::from_arbitrary_number(tail_len),
+                            head_len,
+                        );
+                    }
+
+                    // because we copied the head slice so that both slices lie right
+                    // next to each other, all the elements in the range are initialized.
+                    let slice = &mut *self.buffer_range(0..self.len);
+
+                    // because the deque wasn't contiguous, we know that `head_len < self.len == slice.len()`
+                    // so this will never panic.
+                    slice.rotate_right(head_len);
+
+                    // the used part of the buffer now is `0..self.len`, so set
+                    // `head` to the beginning of that range.
+                    self.head = WrappedIndex::zero();
+                }
+            }
+        }
+
+        // SAFETY: the slice is newly made contiguous.
+        unsafe { slice::from_raw_parts_mut(ptr.add(self.head.as_index()), self.len) }
     }
 
     /// Relocates elements after a capacity increase caused by `realloc`.
@@ -1110,12 +1287,8 @@ mod tests {
         // cross the physical end of the buffer.
         //
         // The branch is selected when `k = len - index` is NOT less than
-        // `index`, i.e. `index <= len / 2`. A head shift copies `index` elements 
-        // from `src = head` to `dst = head - 1`. Since `dst` has exactly one 
-        // more slot of pre-wrap room than `src`, to make both wrap, 
-        // with `r = capacity - head`, we need `index >= r + 2`, plus 
-        // `index <= len - index` and `index < len`. 
-        
+        // `index`, i.e. tail >= head.
+
         // With capacity 8, head 7 (`r = 1`), len 6, and
         // index 3 all constraints hold: `3 <= 6 - 3`, src spans slots 7,0,1
         // (wraps, room 1 < 3) and dst spans slots 6,7,0 (wraps, room 2 < 3);
@@ -1140,7 +1313,10 @@ mod tests {
         // wrap.
         assert_eq!(dq.try_insert_within_capacity(3, 99), Ok(()));
         assert_eq!(dq.len(), 7);
-        assert_eq!(collect_into_array::<7>(&dq), Some([10, 1, 2, 99, 20, 30, 40]));
+        assert_eq!(
+            collect_into_array::<7>(&dq),
+            Some([10, 1, 2, 99, 20, 30, 40])
+        );
     }
 
     // --- pop_back / pop_front ---------------------------------------------------
@@ -1376,11 +1552,15 @@ mod tests {
     }
 
     #[test]
+    // FIXME: Use a ledger
     fn pop_drops_removed_element_exactly_once() {
         let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..4u32 {
-            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+            assert_eq!(
+                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
+                Ok(())
+            );
         }
         assert_eq!(counter.get(), 0);
         assert_eq!(dq.pop_back().map(|t| t.0), Some(3));
@@ -1395,11 +1575,15 @@ mod tests {
     }
 
     #[test]
+    // FIXME: Use a ledger
     fn truncate_drops_only_the_removed_tail() {
         let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..5u32 {
-            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+            assert_eq!(
+                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
+                Ok(())
+            );
         }
         assert_eq!(counter.get(), 0);
         dq.truncate(2);
@@ -1412,11 +1596,15 @@ mod tests {
     }
 
     #[test]
+    // FIXME: Use a ledger
     fn clear_drops_everything() {
         let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
         for i in 0..5u32 {
-            assert_eq!(dq.try_push_back_within_capacity(Tracked(i, counter.clone())), Ok(()));
+            assert_eq!(
+                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
+                Ok(())
+            );
         }
         assert_eq!(counter.get(), 0);
         dq.clear();

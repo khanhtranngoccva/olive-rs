@@ -453,6 +453,252 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 }
 
+impl<T, A: Allocator> VecDeque<T, A> {
+    /// Shrinks the capacity of the deque as much as possible.
+    ///
+    /// It will drop down as close as possible to the length but the allocator
+    /// may still inform the deque that there is space for a few more elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the reallocation fails. On failure or panic  
+    /// the deque is restored to a consistent state at its original (larger)
+    /// capacity.
+    pub fn try_shrink_to_fit(&mut self) -> Result<(), TryReserveError> {
+        self.try_shrink_to(0)
+    }
+
+    /// Shrinks the capacity of the deque with a lower bound.
+    ///
+    /// The capacity will remain at least as large as both the length
+    /// and the supplied value.
+    ///
+    /// If the current capacity is less than the lower limit, this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the reallocation fails. On failure the
+    /// deque is restored to a consistent state at its original (larger)
+    /// capacity.
+    pub fn try_shrink_to(&mut self, min_capacity: usize) -> Result<(), TryReserveError> {
+        let target_cap = min_capacity.max(self.len);
+
+        // never shrink ZSTs
+        if size_of::<T>() == 0 || self.capacity() <= target_cap {
+            return Ok(());
+        }
+
+        // There are three cases of interest:
+        //   All elements are out of desired bounds
+        //   Elements are contiguous, and tail is out of desired bounds
+        //   Elements are discontiguous
+        //
+        // At all other times, element positions are unaffected.
+
+        // `head` and `len` are at most `isize::MAX` and `target_cap <
+        // self.capacity()`, so nothing can overflow.
+        let old_head = self.head.as_index();
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "head + len < 2 * capacity <= 2 * isize::MAX == usize::MAX - 1"
+        )]
+        let tail_outside = (target_cap + 1..=self.capacity()).contains(&(old_head + self.len));
+
+        if self.len == 0 {
+            self.head = WrappedIndex::zero();
+        } else if old_head >= target_cap && tail_outside {
+            // Head and tail are both out of bounds, so copy all of them to the
+            // front.
+            //
+            //  H := head
+            //  L := last element
+            //                    H           L
+            //   [. . . . . . . . o o o o o o o . ]
+            //    H           L
+            //   [o o o o o o o . ]
+            unsafe {
+                // nonoverlapping because `head >= target_cap >= self.len`.
+                self.copy_nonoverlapping(
+                    WrappedIndex::from_arbitrary_number(old_head),
+                    WrappedIndex::zero(),
+                    self.len,
+                );
+            }
+            self.head = WrappedIndex::zero();
+        } else if old_head < target_cap && tail_outside {
+            // Head is in bounds, tail is out of bounds.
+            // Copy the overflowing part to the beginning of the
+            // buffer. This won't overlap because `target_cap >= self.len`.
+            //
+            //  H := head
+            //  L := last element
+            //          H           L
+            //   [. . . o o o o o o o . . . . . . ]
+            //      L   H
+            //   [o o . o o o o o ]
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "head + len < 2 * capacity and tail_outside implies head + len > target_cap"
+            )]
+            let len = old_head + self.len - target_cap;
+            unsafe {
+                self.copy_nonoverlapping(
+                    WrappedIndex::from_arbitrary_number(target_cap),
+                    WrappedIndex::zero(),
+                    len,
+                );
+            }
+        } else if !self.is_contiguous() {
+            // The head slice is at least partially out of bounds, tail is in
+            // bounds.
+            // Copy the head backwards so it lines up with the target capacity.
+            // This won't overlap because `target_cap >= self.len`.
+            //
+            //  H := head
+            //  L := last element
+            //            L                   H
+            //   [o o o o o . . . . . . . . . o o ]
+            //            L   H
+            //   [o o o o o . o o ]
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "head < capacity and head_len <= len <= target_cap"
+            )]
+            let (head_len, new_head) = {
+                let head_len = self.capacity() - old_head;
+                (head_len, target_cap - head_len)
+            };
+            unsafe {
+                // can't use `copy_nonoverlapping()` here because the new and
+                // old regions for the head might overlap.
+                self.copy(
+                    WrappedIndex::from_arbitrary_number(old_head),
+                    WrappedIndex::from_arbitrary_number(new_head),
+                    head_len,
+                );
+            }
+            self.head = WrappedIndex::from_arbitrary_number(new_head);
+        }
+
+        // The compaction above moved elements out of the region that survives
+        // the shrink, but if the reallocation fails — since
+        // `Allocator::shrink` may panic or fail on memory exhaustion — the
+        // deque must be restored to a consistent layout for its *original*
+        // capacity before we return. This mirrors std's drop-guard +
+        // `abort_shrink` pair (std #123369): the guard fires exactly when the
+        // shrink did not complete.
+        struct Guard<'a, T, A: Allocator> {
+            deque: &'a mut VecDeque<T, A>,
+            old_head: usize,
+            target_cap: usize,
+        }
+
+        impl<T, A: Allocator> Drop for Guard<'_, T, A> {
+            #[cold]
+            fn drop(&mut self) {
+                unsafe {
+                    // SAFETY: this only runs if `try_shrink_to_fit` returned
+                    // without completing the shrink (error or abort unwind),
+                    // which is precisely when `abort_shrink` is safe to call.
+                    self.deque.abort_shrink(self.old_head, self.target_cap)
+                }
+            }
+        }
+
+        let guard = Guard {
+            deque: self,
+            old_head,
+            target_cap,
+        };
+
+        guard.deque.buf.try_shrink_to_fit(target_cap)?;
+
+        // Don't drop the guard if we didn't unwind.
+        core::mem::forget(guard);
+
+        debug_assert!(self.head.as_index() < self.capacity() || self.capacity() == 0);
+        debug_assert!(self.len <= self.capacity());
+        Ok(())
+    }
+
+    /// Reverts the deque back into a consistent state in case
+    /// [`Self::try_shrink_to`] failed.
+    ///
+    /// This is necessary to prevent UB if the backing allocator returns an
+    /// error from `shrink` and the caller subsequently fails, panics:
+    /// the compaction performed by `try_shrink_to` has
+    /// already relocated elements for the *new* capacity, so the deque must be
+    /// re-laid-out for the *old* capacity it still holds.
+    ///
+    /// `old_head` refers to the head index before `try_shrink_to` was called.
+    /// `target_cap` is the capacity that it was trying to shrink to.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called after `try_shrink_to`'s compaction ran but its
+    /// reallocation did not complete, i.e. the buffer still has its original
+    /// (pre-shrink) capacity.
+    unsafe fn abort_shrink(&mut self, old_head: usize, target_cap: usize) {
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted: len <= target_cap, caller precondition"
+        )]
+        if self.head.as_index() <= target_cap - self.len {
+            // The deque's buffer is contiguous, so no need to copy anything
+            // around.
+            return;
+        }
+
+        // `try_shrink_to` already copied the head to fit into the new
+        // capacity, so this won't overflow.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted: head < target_cap, caller precondition"
+        )]
+        let head_len = target_cap - self.head.as_index();
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "invariant: head_len <= len (buffer is valid for target_cap)"
+        )]
+        let tail_len = self.len - head_len;
+
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted target_cap <= capacity, caller precondition"
+        )]
+        if tail_len <= core::cmp::min(head_len, self.capacity() - target_cap) {
+            // There's enough spare capacity to copy the tail to the back
+            // (because `tail_len < self.capacity() - target_cap`), and copying
+            // the tail should be cheaper than copying the head (because
+            // `tail_len <= head_len`).
+            unsafe {
+                // The old tail and the new tail can't overlap because the head
+                // slice lies between them. The head slice ends at
+                // `target_cap`, so that's where we copy to.
+                self.copy_nonoverlapping(
+                    WrappedIndex::zero(),
+                    WrappedIndex::from_arbitrary_number(target_cap),
+                    tail_len,
+                );
+            }
+        } else {
+            // Either there's not enough spare capacity to make the deque
+            // contiguous, or the head is shorter than the tail (and therefore
+            // hopefully cheaper to copy).
+            unsafe {
+                // The old and the new head slice can overlap, so we can't use
+                // `copy_nonoverlapping` here.
+                self.copy(
+                    self.head,
+                    WrappedIndex::from_arbitrary_number(old_head),
+                    head_len,
+                );
+            }
+            self.head = WrappedIndex::from_arbitrary_number(old_head);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -600,6 +846,217 @@ mod tests {
         assert_eq!(dq.try_reserve_exact(1 << 40), Ok(()));
         assert_eq!(dq.try_reserve_total(1 << 40), Ok(()));
         assert_eq!(dq.capacity(), usize::MAX);
+    }
+
+    // --- try_shrink_to / try_shrink_to_fit -------------------------------------
+
+    #[test]
+    fn shrink_to_reduces_capacity_and_preserves_elements() {
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(8), Ok(()));
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.capacity(), 8);
+        assert_eq!(dq.try_shrink_to(3), Ok(()));
+        assert!(dq.capacity() < 8);
+        assert!(dq.capacity() >= 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn shrink_to_below_len_clamps_to_len() {
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(8), Ok(()));
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        // Requesting fewer than `len` clamps to `len`; all elements survive.
+        assert_eq!(dq.try_shrink_to(1), Ok(()));
+        assert_eq!(dq.len(), 3);
+        assert!(dq.capacity() < 8);
+        assert!(dq.capacity() >= 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn shrink_to_is_a_no_op_when_already_small_enough() {
+        // Fill the deque to exactly its capacity so that any min_capacity
+        // request yields target == len == capacity → no shrink needed.
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(4), Ok(()));
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.capacity(), 4);
+        assert_eq!(dq.len(), 4);
+        // target = max(4, 2) = 4 == capacity → no-op.
+        assert_eq!(dq.try_shrink_to(2), Ok(()));
+        assert_eq!(dq.capacity(), 4);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn shrink_deeply_wrapped_state() {
+        // Pin capacity to exactly 5, fill it, then pop from the front to
+        // advance `head` into a wrapped position.
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(5), Ok(()));
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.capacity(), 5);
+        // Pop 4 from the front; `head` advances to slot 4, leaving [5] at
+        // physical slot 4 — a non-zero head with a single element.
+        assert_eq!(dq.pop_front(), Some(1));
+        assert_eq!(dq.pop_front(), Some(2));
+        assert_eq!(dq.pop_front(), Some(3));
+        assert_eq!(dq.pop_front(), Some(4));
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.front(), Some(&5));
+        // Shrink to fit; the lone element must survive compaction + realloc.
+        assert_eq!(dq.try_shrink_to_fit(), Ok(()));
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.front(), Some(&5));
+        assert_eq!(dq.back(), Some(&5));
+    }
+
+    #[test]
+    fn shrink_to_zero_clamps_to_len() {
+        // `try_shrink_to(0)` clamps to `len` (max(3, 0) = 3), so the buffer
+        // shrinks to fit exactly 3 elements rather than deallocating entirely.
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(8), Ok(()));
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert!(!dq.is_empty());
+        assert_eq!(dq.try_shrink_to(0), Ok(()));
+        assert_eq!(dq.len(), 3);
+        // Capacity should now be close to 3 (may slightly exceed due to
+        // allocator granularity, but must be well under the original 8).
+        assert!(dq.capacity() < 8);
+        assert!(dq.capacity() >= 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn shrink_empty_deque_to_zero_deallocates() {
+        // An empty deque has len=0, so try_shrink_to(0) targets 0 and
+        // deallocates the buffer entirely.
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(8), Ok(()));
+        assert_eq!(dq.capacity(), 8);
+        assert!(dq.is_empty());
+        assert_eq!(dq.try_shrink_to(0), Ok(()));
+        assert_eq!(dq.capacity(), 0);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn shrink_to_fit_matches_length() {
+        let mut dq = VecDeque::<i32>::new();
+        assert_eq!(dq.try_reserve_exact(16), Ok(()));
+        for v in [7, 8] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.capacity(), 16);
+        assert_eq!(dq.try_shrink_to_fit(), Ok(()));
+        assert!(dq.capacity() < 16);
+        assert!(dq.capacity() >= 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([7, 8]));
+    }
+
+    #[test]
+    fn shrink_zst_is_a_noop() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        for _ in 0..10 {
+            assert_eq!(dq.try_push_back(()), Ok(()));
+        }
+        // ZSTs never hold physical memory; shrinking is a harmless no-op.
+        assert_eq!(dq.try_shrink_to(1), Ok(()));
+        assert_eq!(dq.try_shrink_to_fit(), Ok(()));
+        assert_eq!(dq.len(), 10);
+        assert_eq!(dq.capacity(), usize::MAX);
+    }
+
+    #[test]
+    fn shrink_oom_leaves_deque_usable() {
+        // BudgetedAlloc's single allocation was spent by `try_with_capacity_in`,
+        // so the reallocation inside `try_shrink_to` must fail. The deque must
+        // remain fully usable at its original (larger) capacity afterwards.
+        let mut dq = VecDeque::<i32, _>::try_with_capacity_in(4, BudgetedAlloc::new(1))
+            .expect("within budget");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        let err = match dq.try_shrink_to(2) {
+            Err(e) => e,
+            Ok(_) => panic!("expected allocation failure"),
+        };
+        assert!(err.is_alloc());
+        // Elements intact, length unchanged, and the buffer kept its old size.
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_any::<3, BudgetedAlloc>(&dq), Some([1, 2, 3]));
+        assert!(dq.capacity() == 4);
+    }
+
+    #[test]
+    fn shrink_then_push_again_works() {
+        // Exercise the full lifecycle: grow, shrink, then grow again on top of
+        // the compacted buffer.
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_shrink_to(2), Ok(()));
+        // Push more onto the shrunk buffer; it should grow as needed.
+        for v in [5, 6, 7] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.len(), 7);
+        assert_eq!(collect_into_array::<7>(&dq), Some([1, 2, 3, 4, 5, 6, 7]));
+    }
+
+    #[test]
+    fn shrink_failure_restores_wrapped_layout() {
+        // Build a genuinely wrapped deque under an allocator that funds only
+        // the initial buffer, so every subsequent reallocation fails.
+        //
+        // Sequence: fill cap-5 buffer → pop 3 → push 1 (wraps around).
+        // Result: head=3, len=3, cap=5, elements [4,5,6] at slots 3,4,0.
+        // `try_shrink_to(3)` targets cap=3 (= max(3, len)), forcing compaction
+        // of the wrapped element before the (failing) reallocation.
+        let mut dq = VecDeque::<i32, _>::try_with_capacity_in(5, BudgetedAlloc::new(1))
+            .expect("initial allocation within budget");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        // Pop 3 from the front: head advances to slot 3, len drops to 2.
+        for _ in 0..3 {
+            assert!(dq.pop_front().is_some());
+        }
+        // Push one more: wraps around to slot 0. Now head=3, len=3, cap=5.
+        assert_eq!(dq.try_push_back(6), Ok(()));
+        assert_eq!(dq.len(), 3);
+        assert!(!dq.is_contiguous());
+
+        // Shrinking to 3 (== len) forces compaction of the wrapped element
+        // into the front of the buffer *before* the (failing) reallocation.
+        // The drop guard must undo that compaction against the original buffer.
+        let err = match dq.try_shrink_to(3) {
+            Err(e) => e,
+            Ok(_) => panic!("expected allocation failure"),
+        };
+        assert!(err.is_alloc());
+
+        // The deque must be fully consistent again: same elements, same order,
+        // same capacity — ready for another operation. Note: `abort_shrink`
+        // restores a *valid* layout, not necessarily the exact pre-shrink
+        // physical arrangement; contiguity may differ.
+        assert_eq!(dq.len(), 3);
+        assert_eq!(dq.capacity(), 5);
+        assert_eq!(collect_any::<3, BudgetedAlloc>(&dq), Some([4, 5, 6]));
     }
 
     // --- try_push_back / give_back ---------------------------------------------

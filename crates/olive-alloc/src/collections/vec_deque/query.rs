@@ -188,6 +188,33 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
     }
 
+    /// Returns `true` if the deque's live elements occupy a single contiguous
+    /// run in the physical buffer starting at `head` (i.e. they do not wrap
+    /// around the end of the buffer).
+    ///
+    /// An empty deque is always contiguous. For zero-sized types there is no
+    /// physical memory, so this is trivially `true`.
+    #[inline]
+    pub(super) fn is_contiguous(&self) -> bool {
+        // ZSTs have no physical slots; treat as contiguous.
+        if size_of::<T>() == 0 {
+            return true;
+        }
+        let cap = self.capacity();
+        // Empty or head-at-front: trivially contiguous.
+        if self.len == 0 || self.head.is_zero() {
+            return true;
+        }
+        // Overflow safety: `head < cap` and `len <= cap`, so `head + len <
+        // 2 * cap <= 2 * isize::MAX == usize::MAX - 1` for non-ZST types.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "head + len < 2 * capacity <= 2 * isize::MAX == usize::MAX - 1"
+        )]
+        let end = self.head.as_index() + self.len;
+        end <= cap
+    }
+
     /// Provides a reference to the element at the given index, or `None` if
     /// the index is out of bounds.
     ///
