@@ -453,7 +453,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///   (this is an overlapping `memcpy`, not `memmove`-free).
     #[inline]
     #[allow(clippy::arithmetic_side_effects, reason = "debug assertions only")]
-    unsafe fn wrap_copy(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
+    pub(super) unsafe fn wrap_copy(&mut self, src: WrappedIndex, dst: WrappedIndex, len: usize) {
         debug_assert!(
             cmp::min(src.abs_diff(dst), self.capacity() - src.abs_diff(dst)) + len
                 <= self.capacity(),
