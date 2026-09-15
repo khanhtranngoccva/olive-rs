@@ -391,6 +391,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use crate::collections::vec_deque::VecDeque;
+    use std::sync::Arc;
 
     /// Collect the deque's logical contents into a `std::vec::Vec`.
     fn collect_logical(dq: &VecDeque<i32>) -> std::vec::Vec<i32> {
@@ -467,13 +468,12 @@ mod tests {
 
     #[test]
     fn drain_empty_range_in_empty_deque() {
+        // A zero-capacity deque is genuinely empty; draining an empty range
+        // from it must succeed and leave it untouched.
         let mut dq = VecDeque::<i32>::new();
-        for v in [1, 2, 3] {
-            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
-        }
         let drained: std::vec::Vec<i32> = dq.try_drain(0..0).unwrap().collect();
         assert!(drained.is_empty());
-        assert_eq!(collect_logical(&dq), std::vec![]);
+        assert!(dq.is_empty());
     }
 
     #[test]
@@ -512,34 +512,38 @@ mod tests {
     }
 
     #[test]
-    // FIXME: should use ledger
     fn drain_partial_consumption_drops_rest() {
-        // Use a type with observable drop behavior.
-        #[derive(Debug)]
-        struct Dropped(std::sync::Arc<std::cell::Cell<u32>>);
-        impl Drop for Dropped {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-            }
+        // Track each element individually in a ledger so we can prove the three
+        // unconsumed elements are destroyed exactly once when the drainer drops
+        // — catching leaks and double-frees, not just aggregate counts.
+        use crate::test_helpers::{CloneBudget, FlakyTrackedItem, Ledger};
+        let ledger = Arc::new(Ledger::new());
+        let budget = Arc::new(CloneBudget::new(u32::MAX));
+        let mut dq: VecDeque<FlakyTrackedItem> = VecDeque::try_with_capacity(8).expect("ok");
+        for i in 0..5u32 {
+            ledger.register(i);
+            dq.try_push_back_within_capacity(FlakyTrackedItem {
+                id: i,
+                ledger: ledger.clone(),
+                inner: (*budget).share(),
+            })
+            .unwrap();
         }
+        assert_eq!(ledger.live_ids(), std::vec![0, 1, 2, 3, 4]);
 
-        let counter = std::sync::Arc::new(std::cell::Cell::new(0u32));
-        let mut dq: VecDeque<Dropped> = VecDeque::try_with_capacity(8).expect("ok");
-        for _i in 0..5 {
-            let d = Dropped(counter.clone());
-            assert_eq!(dq.try_push_back_within_capacity(d), Ok(()));
-        }
-        assert_eq!(counter.get(), 0);
-
-        // Drain all 5 but only consume 2.
+        // Drain all 5 but only consume 2 from the front.
         let mut drain = dq.try_drain(..).unwrap();
-        assert!(drain.next().is_some());
-        assert!(drain.next().is_some());
-        // Drop the drainer with 3 unconsumed elements.
+        // Consuming moves the item out of the deque, so its ledger id dies the
+        // moment the returned value is dropped (end of statement).
+        assert_eq!(drain.next().map(|t| t.id), Some(0));
+        assert_eq!(drain.next().map(|t| t.id), Some(1));
+        assert_eq!(ledger.live_ids(), std::vec![2, 3, 4]);
+        // Drop the drainer with 3 unconsumed elements (ids 2, 3, 4) — its Drop
+        // impl must destroy exactly those three, each once.
         drop(drain);
-        // All 5 should be dropped: 2 moved out (dropped when the Option is
-        // discarded) + 3 destroyed by the drainer's Drop.
-        assert_eq!(counter.get(), 5);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.live_ids(), std::vec![]);
+        assert!(ledger.all_dropped_once(0..5));
         assert!(dq.is_empty());
     }
 
