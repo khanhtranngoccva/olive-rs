@@ -1,13 +1,10 @@
 //! The borrowing iterator produced by `VecDeque::try_drain`.
 //!
 //! This borrows the deque and yields a *range* of its drained elements one at
-//! a time. Because the deque's circular buffer may split the logical range
-//! across two disjoint physical regions, the drainer tracks two pointer-and-
-//! length pairs — mirroring the approach used by [`Iter`](super::iter::Iter)
-//! and std's own `VecDeque::drain`. All element destruction and compaction in
-//! the drop path operate on whole physical slices (at most two) rather than
-//! looping element-by-element.
-
+//! a time.
+//!
+//! The implementation uses a verbatim copy of the std for stability due to a lack
+//! of overflow risk.
 use super::VecDeque;
 use super::wrapped_index::WrappedIndex;
 use crate::alloc::Global;
@@ -47,7 +44,12 @@ impl<'a, T, A: Allocator> Drain<'a, T, A> {
         drain_start: usize,
         drain_len: usize,
     ) -> Self {
+        // This is a guard against mem::forget.
         let orig_len = mem::replace(&mut deque.len, drain_start);
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "drain_start + drain_len == drain_end <= orig_len"
+        )]
         let tail_len = orig_len - drain_start - drain_len;
         Drain {
             deque: NonNull::from(deque),
@@ -67,6 +69,10 @@ impl<'a, T, A: Allocator> Drain<'a, T, A> {
             let deque = self.deque.as_ref();
 
             // We know that `self.idx + self.remaining <= deque.len <= usize::MAX`, so this won't overflow.
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "self.idx + self.remaining <= deque.len <= usize::MAX"
+            )]
             let logical_remaining_range = self.idx..self.idx + self.remaining;
 
             // SAFETY: `logical_remaining_range` represents the
@@ -76,7 +82,7 @@ impl<'a, T, A: Allocator> Drain<'a, T, A> {
             // so the preconditions for `slice_ranges` are met.
             let (a_range, b_range) = deque
                 .try_slice_ranges(logical_remaining_range.clone(), logical_remaining_range.end)
-                .expect("logical remaining range");
+                .expect("logical remaining range is within bounds");
             (deque.buffer_range(a_range), deque.buffer_range(b_range))
         }
     }
@@ -105,9 +111,15 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         if mem::needs_drop::<T>() && guard.0.remaining != 0 {
             // SAFETY: We just checked that `self.remaining != 0`.
             let (front, back) = unsafe { guard.0.as_slices() };
-            // since idx is a logical index, we don't need to worry about wrapping.
-            guard.0.idx += front.len();
-            guard.0.remaining -= front.len();
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted front + back = remaining (as_slices invariant) => front <= remaining,
+                idx + front <= idx + remaining == len <= usize::MAX"
+            )]
+            {
+                guard.0.idx += front.len();
+                guard.0.remaining -= front.len();
+            }
             // SAFETY: This can't have been dropped before since
             // `idx` & `remaining` track what's been dropped.
             unsafe { ptr::drop_in_place(front) };
@@ -117,7 +129,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         }
 
         // Dropping `guard` handles moving the remaining elements into place.
-        impl<'r, 'a, T, A: Allocator> Drop for DropGuard<'r, 'a, T, A> {
+        impl<T, A: Allocator> Drop for DropGuard<'_, '_, T, A> {
             #[inline]
             fn drop(&mut self) {
                 if mem::needs_drop::<T>() && self.0.remaining != 0 {
@@ -129,12 +141,19 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                     }
                 }
 
+                // At this point, all drained items should be completely dropped as if they
+                // never existed.
+
                 // ignore-tidy-undocumented-unsafe
                 let source_deque = unsafe { self.0.deque.as_mut() };
 
                 let drain_len = self.0.drain_len;
                 let head_len = source_deque.len; // #elements in front of the drain
                 let tail_len = self.0.tail_len; // #elements behind the drain
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted head_len + tail_len <= orig_len <= capacity"
+                )]
                 let new_len = head_len + tail_len;
 
                 if size_of::<T>() == 0 {
@@ -171,6 +190,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                 // [ . . . h h h h . . . . . . . ]
                 //
                 // Case 3: else if `head_len == 0`
+                // (`tail_len` != 0, `head_len` < `tail_len`)
                 // Don't move data, but move the head index.
                 //         H
                 // [ . . . d d d d t t t t . . . ]
@@ -178,14 +198,14 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                 // [ . . . . . . . t t t t . . . ]
                 //
                 // Case 4: else if `tail_len <= head_len`
-                // Move data, but not the head index.
+                // Move tail data, but not the head index.
                 //       H
                 // [ . . h h h h d d d d t t . . ]
                 //       H
                 // [ . . h h h h t t . . . . . . ]
                 //
                 // Case 5: else
-                // Move data and the head index.
+                // Move head data and the head index.
                 //       H
                 // [ . . h h d d d d t t t t . . ]
                 //               H
@@ -193,6 +213,8 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
 
                 // When draining at the front (`.drain(..n)`) or at the back (`.drain(n..)`),
                 // we don't need to copy any data. The number of elements copied would be 0.
+                // This branch *cannot* be executed if either condition fails due to possibly of
+                // breaking < capacity invariant.
                 if head_len != 0 && tail_len != 0 {
                     join_head_and_tail_wrapping(source_deque, drain_len, head_len, tail_len);
                     // Marking this function as cold helps LLVM to eliminate it entirely if
@@ -211,10 +233,21 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                         let (src, dst, len);
                         if head_len < tail_len {
                             src = source_deque.head;
+                            // SAFETY: head_len >= 1, tail_len >= 1, drain_len < capacity
                             dst = unsafe { source_deque.to_wrapped_index(drain_len) };
                             len = head_len;
                         } else {
-                            src = unsafe { source_deque.to_wrapped_index(head_len + drain_len) };
+                            // `head_len + drain_len` is the logical index of the
+                            // first tail element, which is always `< capacity`.
+                            #[allow(
+                                clippy::arithmetic_side_effects,
+                                reason = "asserted tail_len >= 1 => head_len < capacity, 
+                                tail_len < capacity, head_len + tail_len < capacity"
+                            )]
+                            let src_idx = head_len + drain_len;
+                            // SAFETY: Specified in above clippy lint.
+                            src = unsafe { source_deque.to_wrapped_index(src_idx) };
+                            // SAFETY: Specified in above clippy lint.
                             dst = unsafe { source_deque.to_wrapped_index(head_len) };
                             len = tail_len;
                         };
@@ -232,6 +265,8 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                     source_deque.head = WrappedIndex::zero();
                 } else if head_len < tail_len {
                     // If we moved the head above, then we need to adjust the head index here.
+                    // source_deque has length head_len
+                    // SAFETY: tail_len > 0 => drain_len < len <= capacity
                     source_deque.head = unsafe { source_deque.to_wrapped_index(drain_len) };
                 }
                 source_deque.len = new_len;
@@ -248,10 +283,17 @@ impl<T, A: Allocator> Iterator for Drain<'_, T, A> {
         if self.remaining == 0 {
             return None;
         }
-        // ignore-tidy-undocumented-unsafe
+        // SAFETY: idx == len (possibly == capacity) only if self.remaining == 0 (eliminated above)
+        // so idx < capacity
         let wrapped_idx = unsafe { self.deque.as_ref().to_wrapped_index(self.idx) };
-        self.idx += 1;
-        self.remaining -= 1;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "idx < capacity and remaining > 0, so both stay in bounds"
+        )]
+        {
+            self.idx += 1;
+            self.remaining -= 1;
+        }
         // ignore-tidy-undocumented-unsafe
         Some(unsafe { ptr::read(self.deque.as_mut().buf.ptr().add(wrapped_idx.as_index())) })
     }
@@ -269,16 +311,29 @@ impl<T, A: Allocator> DoubleEndedIterator for Drain<'_, T, A> {
         if self.remaining == 0 {
             return None;
         }
-        self.remaining -= 1;
-        let wrapped_idx =
+        // `remaining > 0` is guaranteed by the guard above, so the decrement
+        // cannot underflow. The sum `idx + remaining` is a logical index into
+        // `[drain_start..orig_len]`, always `< capacity`.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "remaining > 0 and idx + remaining < capacity"
+        )]
+        {
+            self.remaining -= 1;
+            let back_idx = self.idx + self.remaining;
+            // SAFETY: idx + old_remaining may be == len == capacity, idx + old_remaining - 1 < len
+            let wrapped_idx = unsafe { self.deque.as_ref().to_wrapped_index(back_idx) };
             // ignore-tidy-undocumented-unsafe
-            unsafe { self.deque.as_ref().to_wrapped_index(self.idx + self.remaining) };
-        // ignore-tidy-undocumented-unsafe
-        Some(unsafe { ptr::read(self.deque.as_mut().buf.ptr().add(wrapped_idx.as_index())) })
+            Some(unsafe { ptr::read(self.deque.as_mut().buf.ptr().add(wrapped_idx.as_index())) })
+        }
     }
 }
 
-impl<T, A: Allocator> ExactSizeIterator for Drain<'_, T, A> {}
+impl<T, A: Allocator> ExactSizeIterator for Drain<'_, T, A> {
+    fn len(&self) -> usize {
+        self.remaining
+    }
+}
 
 impl<T, A: Allocator> FusedIterator for Drain<'_, T, A> {}
 
@@ -319,38 +374,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
         )]
         let count = end - start;
 
-        // Cap the deque's length down to `start` *before* handing out the
-        // drainer. Once `next()` has yielded an element via `ptr::read`, that
-        // slot is uninitialized; capping excludes the whole drained range from
-        // the deque's live contents up front.
-        //
-        // SAFETY: `start <= len <= capacity()`, and every slot in `[0..start)`
-        // is an initialized value.
-        self.len = start;
-
-        // Resolve the drain range into two physical segments. `try_slice_ranges`
-        // returns `(a_range, b_range)` where `a_range` is the higher-address
-        // portion and `b_range` the lower-address portion (after wrap-around).
-        // Passing `len` (not the capped length) keeps the resolution anchored to
-        // the original populated region.
-        let (a_range, b_range) = self.try_slice_ranges(start..end, len)?;
-
-        // Build raw pointers for both segments.
-        // SAFETY: `try_slice_ranges` returns valid ranges into the physical
-        // buffer over initialized elements.
-        let base_ptr = self.buf.ptr().cast::<T>();
-        let ptr1 = unsafe { base_ptr.add(a_range.start) };
-        #[allow(clippy::arithmetic_side_effects, reason = "valid range: end >= start")]
-        let len1 = a_range.end - a_range.start;
-        let ptr2 = unsafe { base_ptr.add(b_range.start) };
-        #[allow(clippy::arithmetic_side_effects, reason = "valid range: end >= start")]
-        let len2 = b_range.end - b_range.start;
-
-        // SAFETY: upheld by the resolution above — `len1 + len2 == count`,
-        // `count <= len == original_len`, and both segments address initialized
-        // slots within the buffer.
-        let drain =
-            unsafe { Drain::new_from_parts(ptr1, len1, ptr2, len2, count, len, &raw mut *self) };
+        // SAFETY: `try_range` guarantees `start <= end <= len`, so
+        // `drain_start < len` when `count > 0`, and all slots in
+        // `[0..len)` are initialized. The constructor caps `deque.len`
+        // to `drain_start` internally.
+        let drain = unsafe { Drain::new(self, start, count) };
         Ok(drain)
     }
 }
@@ -378,6 +406,7 @@ mod tests {
         }
         let drained: std::vec::Vec<i32> = dq.try_drain(..).unwrap().collect();
         assert_eq!(drained, std::vec![1, 2, 3, 4, 5]);
+        assert_eq!(dq.head.as_index(), 0);
         assert!(dq.is_empty());
     }
 
@@ -437,6 +466,17 @@ mod tests {
     }
 
     #[test]
+    fn drain_empty_range_in_empty_deque() {
+        let mut dq = VecDeque::<i32>::new();
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        let drained: std::vec::Vec<i32> = dq.try_drain(0..0).unwrap().collect();
+        assert!(drained.is_empty());
+        assert_eq!(collect_logical(&dq), std::vec![]);
+    }
+
+    #[test]
     fn drain_wrapped_buffer() {
         // Build a wrapped state: push backs then fronts to wrap head past 0.
         let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("ok");
@@ -472,6 +512,7 @@ mod tests {
     }
 
     #[test]
+    // FIXME: should use ledger
     fn drain_partial_consumption_drops_rest() {
         // Use a type with observable drop behavior.
         #[derive(Debug)]
@@ -510,12 +551,13 @@ mod tests {
         }
         let drained: std::vec::Vec<i32> = {
             let mut drain = dq.try_drain(..).unwrap();
-            let mut out = std::vec::Vec::new();
-            out.push(drain.next_back().unwrap());
-            out.push(drain.next_back().unwrap());
-            out.push(drain.next().unwrap());
-            out.push(drain.next().unwrap());
-            out.push(drain.next_back().unwrap());
+            let out = std::vec![
+                drain.next_back().unwrap(),
+                drain.next_back().unwrap(),
+                drain.next().unwrap(),
+                drain.next().unwrap(),
+                drain.next_back().unwrap()
+            ];
             assert_eq!(drain.next(), None);
             out
         };
@@ -554,13 +596,12 @@ mod tests {
         }
         let mut drain = dq.try_drain(1..3).unwrap();
         assert_eq!(drain.len(), 2);
-        assert!(!drain.is_empty());
+        assert_ne!(drain.len(), 0);
         assert_eq!(drain.size_hint(), (2, Some(2)));
         drain.next();
         assert_eq!(drain.len(), 1);
         drain.next();
         assert_eq!(drain.len(), 0);
-        assert!(drain.is_empty());
     }
 
     #[test]
