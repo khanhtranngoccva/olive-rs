@@ -6,11 +6,14 @@
 //! scaffolding to be moved across threads for multi-threaded tests.
 
 pub mod allocators;
+pub mod counters;
 pub mod ledger;
 // `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
 // exported so future tests can instantiate it with other clone policies (e.g.
 // an infallible one) without touching the tracking machinery. Not referenced by
 // name in current tests, hence the allow.
+#[allow(unused_imports)]
+pub use counters::CloneCounter;
 #[allow(unused_imports)]
 pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
 

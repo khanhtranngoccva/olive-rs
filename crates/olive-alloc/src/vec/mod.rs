@@ -2242,14 +2242,14 @@ impl<'s, T, A: Allocator> TryExtendFromSlice<'s, T> for Vec<T, A>
 where
     T: TryClone,
 {
-    type Error = TryCloneError;
+    type Error = TryVecWithCloneError;
 
     fn try_extend_from_slice(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
         if other.is_empty() {
             return Ok(());
         }
         self.try_reserve(other.len())
-            .map_err(|e| (other, TryCloneError::Reserve(e)))?;
+            .map_err(|e| (other, TryVecWithCloneError::Reserve(e)))?;
         let mut i = 0usize;
         for item in other {
             match item.try_clone() {
@@ -2261,7 +2261,7 @@ where
                         i += 1;
                     }
                 }
-                Err(e) => return Err((&other[i..], e)),
+                Err(e) => return Err((&other[i..], TryVecWithCloneError::Clone(e))),
             }
         }
         Ok(())

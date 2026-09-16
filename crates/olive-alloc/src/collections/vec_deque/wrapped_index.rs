@@ -30,6 +30,10 @@ impl WrappedIndex {
 
     /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque.
     #[inline(always)]
+    #[expect(
+        unused,
+        reason = "no methods have used sub yet, keep here for parity with std"
+    )]
     pub(super) unsafe fn sub(self, offset: usize) -> Self {
         debug_assert!(self.0 >= offset);
         #[allow(

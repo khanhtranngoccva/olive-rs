@@ -1303,13 +1303,11 @@ mod tests {
         };
         *back_slot += 1;
         // Drop the mutable borrow before growing again from the front.
-        drop(back_slot);
         let front_slot = match dq.try_push_front_mut(8) {
             Ok(r) => r,
             Err(_) => panic!("expected success"),
         };
         *front_slot -= 1;
-        drop(front_slot);
         assert!(dq.capacity() > 4);
         assert_eq!(dq.len(), 6);
         assert_eq!(collect_into_array::<6>(&dq), Some([7, 4, 1, 2, 3, 10]));

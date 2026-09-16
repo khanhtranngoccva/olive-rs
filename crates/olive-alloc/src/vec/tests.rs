@@ -609,6 +609,57 @@ fn try_extend_retry_recovers() {
 }
 
 #[test]
+fn try_extend_overhint_falls_back_to_incremental_growth() {
+    // An iterator that advertises a huge upper bound but yields only a few
+    // elements. The upfront batch reserve is too large for the byte-capped
+    // allocator and fails silently; extend then proceeds via per-element
+    // reserves that each stay within the cap.
+    use crate::test_helpers::allocators::ByteCapAlloc;
+
+    #[derive(Debug)]
+    struct Overhinted(core::ops::Range<i32>);
+    impl Iterator for Overhinted {
+        type Item = i32;
+        fn next(&mut self) -> Option<i32> {
+            self.0.next()
+        }
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (0, Some(10_000))
+        }
+    }
+
+    let alloc = ByteCapAlloc::new(64);
+    let mut v: Vec<i32, _> = Vec::new_in(alloc.clone());
+    v.try_push(-1).unwrap();
+
+    v.try_extend(Overhinted(0..3)).expect("incremental growth should succeed");
+    assert_eq!(v.as_slice(), &[-1, 0, 1, 2]);
+}
+
+#[test]
+fn try_extend_underhint_grows_mid_iteration() {
+    // An iterator whose size hint severely underestimates the true count
+    // forces mid-extension growth once the initially reserved capacity is
+    // exhausted.
+    #[derive(Debug)]
+    struct Underhinted(core::ops::Range<i32>);
+    impl Iterator for Underhinted {
+        type Item = i32;
+        fn next(&mut self) -> Option<i32> {
+            self.0.next()
+        }
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (0, Some(1))
+        }
+    }
+
+    let mut v: Vec<i32> = Vec::new();
+    v.try_push(99).unwrap();
+    v.try_extend(Underhinted(0..8)).expect("extend ok");
+    assert_eq!(v.as_slice(), &[99, 0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
 fn try_extend_from_slice_trait_success() {
     let mut v: Vec<i32> = Vec::new();
     v.try_extend_from_slice(&[7, 8]).expect("ok");
@@ -633,7 +684,7 @@ fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
     let (rest, e) = v
         .try_extend_from_slice(src.as_slice())
         .expect_err("clone fail");
-    assert!(matches!(e, TryCloneError::Other(_)));
+    assert!(matches!(e, TryVecWithCloneError::Clone(TryCloneError::Other(_))));
     // Remainder begins at the failing element.
     assert_eq!(rest.len(), 1);
     // Nothing committed before the failure either (first two succeeded though).

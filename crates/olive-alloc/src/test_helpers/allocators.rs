@@ -29,3 +29,45 @@ impl TryDefault for FailDefaultAlloc {
     }
 }
 
+/// An allocator that rejects any single allocation whose size exceeds a
+/// configured byte cap, delegating smaller requests to [`crate::alloc::Global`].
+///
+/// Useful for exercising the over-hint fallback in `try_from_iter_in`: an
+/// iterator advertising a large upper bound triggers a big upfront batch
+/// reserve that this allocator refuses, forcing the collection loop to fall
+/// back to incremental per-element growth where each small reserve succeeds.
+#[derive(Debug, Clone)]
+pub struct ByteCapAlloc {
+    /// Maximum bytes allowed in a single allocation. Requests larger than this
+    /// are rejected with [`AllocError`].
+    pub max_bytes: usize,
+}
+
+impl ByteCapAlloc {
+    /// Builds an allocator that permits single allocations up to `max_bytes`.
+    pub const fn new(max_bytes: usize) -> Self {
+        Self { max_bytes }
+    }
+}
+
+// SAFETY: passes through to `Global` for allocations within the cap; freed
+// blocks were originally handed out by `Global`, so deallocation is safe.
+unsafe impl Allocator for ByteCapAlloc {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() > self.max_bytes {
+            return Err(AllocError);
+        }
+        crate::alloc::Global.allocate(layout)
+    }
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+    }
+}
+
+impl TryDefault for ByteCapAlloc {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::new(usize::MAX))
+    }
+}
+

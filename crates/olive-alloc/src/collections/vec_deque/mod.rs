@@ -17,6 +17,7 @@ mod into_iter;
 mod iter;
 mod mutation;
 mod query;
+mod traits;
 mod wrapped_index;
 
 use crate::alloc::{Allocator, Global};
