@@ -633,7 +633,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// [`as_slices`]: VecDeque::as_slices
     /// [`as_mut_slices`]: VecDeque::as_mut_slices
-    pub(super) fn make_contiguous(&mut self) -> &mut [T] {
+    pub fn make_contiguous(&mut self) -> &mut [T] {
         if size_of::<T>() == 0 {
             self.head = WrappedIndex::zero();
         }
