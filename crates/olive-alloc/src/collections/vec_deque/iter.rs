@@ -6,11 +6,13 @@
 
 use core::fmt;
 use core::mem;
+use core::ops::RangeBounds;
 use core::slice;
 
 use super::VecDeque;
 use olive_core::alloc::Allocator;
 use olive_core::prelude::{TryClone, TryDefault};
+use olive_core::slice::TrySliceRangeError;
 use olive_core::try_traits::try_clone::TryCloneError;
 use olive_core::try_traits::try_default::TryDefaultError;
 
@@ -298,6 +300,53 @@ impl<T, A: Allocator> VecDeque<T, A> {
         let (a, b) = self.as_mut_slices();
         IterMut::new(a.iter_mut(), b.iter_mut())
     }
+
+    /// Returns an [`Iter`] over the elements in the given range of the deque,
+    /// mirroring std's [`VecDeque::range`](stock_alloc::collections::VecDeque::range).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrySliceRangeError`] if the resolved range is out of bounds —
+    /// an excluded/inclusive edge overflows, the start exceeds the end, or the
+    /// end exceeds the deque's length.
+    pub fn try_range<R>(&self, range: R) -> Result<Iter<'_, T>, TrySliceRangeError>
+    where
+        R: RangeBounds<usize>,
+    {
+        // Resolve the logical range into one or two contiguous physical runs.
+        let (a_range, b_range) = self.try_slice_ranges(range, self.len)?;
+        // SAFETY: `try_slice_ranges` returns valid ranges into the physical
+        // buffer over initialized elements.
+        unsafe {
+            let a = &*self.buffer_range(a_range);
+            let b = &*self.buffer_range(b_range);
+            Ok(Iter::new(a.iter(), b.iter()))
+        }
+    }
+
+    /// Returns an [`IterMut`] over mutable references to the elements in the
+    /// given range of the deque, mirroring std's
+    /// [`VecDeque::range_mut`](stock_alloc::collections::VecDeque::range_mut).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrySliceRangeError`] if the resolved range is out of bounds —
+    /// an excluded/inclusive edge overflows, the start exceeds the end, or the
+    /// end exceeds the deque's length.
+    pub fn try_range_mut<R>(&mut self, range: R) -> Result<IterMut<'_, T>, TrySliceRangeError>
+    where
+        R: RangeBounds<usize>,
+    {
+        // Resolve the logical range into one or two contiguous physical runs.
+        let (a_range, b_range) = self.try_slice_ranges(range, self.len)?;
+        // SAFETY: `try_slice_ranges` returns valid ranges into the physical
+        // buffer over initialized elements.
+        unsafe {
+            let a = &mut *self.buffer_range(a_range);
+            let b = &mut *self.buffer_range(b_range);
+            Ok(IterMut::new(a.iter_mut(), b.iter_mut()))
+        }
+    }
 }
 
 impl<'a, T> Iter<'a, T> {
@@ -309,5 +358,178 @@ impl<'a, T> Iter<'a, T> {
 impl<'a, T> IterMut<'a, T> {
     pub(super) fn new(i1: slice::IterMut<'a, T>, i2: slice::IterMut<'a, T>) -> Self {
         Self { i1, i2 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::super::VecDeque;
+    use olive_core::slice::TrySliceRangeError;
+
+    /// Collects the elements yielded by an iterator into a freshly grown
+    /// `std::vec::Vec`, for easy comparison against expected values.
+    fn collect<'a, I: Iterator<Item = &'a i32>>(it: I) -> std::vec::Vec<i32> {
+        it.copied().collect()
+    }
+
+    /// Builds a wrapped deque holding `[5, 4, 1, 2, 3]` with capacity 6, so
+    /// that logical indices straddle the physical wrap point.
+    fn wrapped_deque() -> VecDeque<i32> {
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        dq
+    }
+
+    #[test]
+    fn try_range_full_non_wrapped() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        let got = collect(dq.try_range(..).expect("full range is resolvable"));
+        assert_eq!(got, [1, 2, 3]);
+    }
+
+    #[test]
+    fn try_range_partial_middle() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(5).expect("allocation ok");
+        for v in [10, 20, 30, 40, 50] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        let got = collect(dq.try_range(1..4).expect("in-bounds range"));
+        assert_eq!(got, [20, 30, 40]);
+    }
+
+    #[test]
+    fn try_range_inclusive_end_bound() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(5).expect("allocation ok");
+        for v in [10, 20, 30, 40, 50] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // `(..=1)` resolves to logical `0..2`.
+        let got = collect(dq.try_range(..=1).expect("inclusive end in bounds"));
+        assert_eq!(got, [10, 20]);
+    }
+
+    #[test]
+    fn try_range_spanning_wrap_point() {
+        // Logical layout: [5, 4, 1, 2, 3]; physical split puts the tail of the
+        // first run and the head of the second on opposite sides of the buffer.
+        let dq = wrapped_deque();
+        // Indices 1..=4 => [4, 1, 2, 3], crossing the wrap boundary.
+        let got = collect(dq.try_range(1..=4).expect("wrap-spanning range"));
+        assert_eq!(got, [4, 1, 2, 3]);
+    }
+
+    #[test]
+    fn try_range_single_element_across_wrap() {
+        let dq = wrapped_deque();
+        // Index 2 sits at the very start of the second physical run.
+        let got = collect(dq.try_range(2..3).expect("single-element range"));
+        assert_eq!(got, [1]);
+    }
+
+    #[test]
+    fn try_range_empty_slice() {
+        let dq = wrapped_deque();
+        // A zero-width range yields no elements but still validates.
+        let got = collect(dq.try_range(2..2).expect("empty range is valid"));
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn try_range_out_of_bounds_rejects() {
+        let dq = wrapped_deque();
+        // len == 5, so ending at index 7 exceeds the bound.
+        let err = match dq.try_range(0..7) {
+            Err(e) => e,
+            Ok(_) => panic!("expected out-of-bounds error"),
+        };
+        assert!(matches!(err, TrySliceRangeError::EndExceedsBound { .. }));
+    }
+
+    #[test]
+    fn try_range_reversed_rejects() {
+        let dq = wrapped_deque();
+        #[allow(
+            clippy::reversed_empty_ranges,
+            reason = "we are deliberately testing error scenario"
+        )]
+        let err = match dq.try_range(3..1) {
+            Err(e) => e,
+            Ok(_) => panic!("expected reversed-range error"),
+        };
+        assert!(matches!(err, TrySliceRangeError::StartExceedsEnd { .. }));
+    }
+
+    #[test]
+    fn try_range_mut_yields_writable_refs() {
+        let mut dq = wrapped_deque();
+        // Double every element in logical indices 0..=2 ([5, 4, 1]).
+        for x in dq.try_range_mut(0..=2).expect("mutable range") {
+            *x *= 2;
+        }
+        // Expected after doubling: [10, 8, 2, 2, 3].
+        let (a, b) = dq.as_slices();
+        let mut all = [0i32; 5];
+        all[..a.len()].copy_from_slice(a);
+        all[a.len()..].copy_from_slice(b);
+        assert_eq!(all, [10, 8, 2, 2, 3]);
+    }
+
+    #[test]
+    fn try_range_exact_size() {
+        let dq = wrapped_deque();
+        let it = dq.try_range(1..=4).expect("wrap-spanning range");
+        assert_eq!(it.len(), 4);
+        assert_eq!(it.size_hint(), (4, Some(4)));
+    }
+
+    #[test]
+    fn try_range_double_ended() {
+        let dq = wrapped_deque();
+        // Logical layout: [5, 4, 1, 2, 3]; walk both ends of the full range.
+        let mut it = dq.try_range(..).expect("full range is resolvable");
+        assert_eq!(it.next(), Some(&5));
+        assert_eq!(it.next_back(), Some(&3));
+        assert_eq!(it.next(), Some(&4));
+        assert_eq!(it.next_back(), Some(&2));
+        assert_eq!(it.next(), Some(&1));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn try_range_mut_exact_size() {
+        let mut dq = wrapped_deque();
+        let it = dq
+            .try_range_mut(1..=4)
+            .expect("mutable wrap-spanning range");
+        assert_eq!(it.len(), 4);
+        assert_eq!(it.size_hint(), (4, Some(4)));
+    }
+
+    #[test]
+    fn try_range_mut_double_ended() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(5).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Walk both ends inward, tagging each visited element distinctly.
+        let mut it = dq.try_range_mut(0..5).expect("full mutable range");
+        assert_eq!(it.next(), Some(&mut 1));
+        assert_eq!(it.next_back(), Some(&mut 5));
+        assert_eq!(it.next(), Some(&mut 2));
+        assert_eq!(it.next_back(), Some(&mut 4));
+        assert_eq!(it.next(), Some(&mut 3));
+        assert_eq!(it.next(), None);
     }
 }

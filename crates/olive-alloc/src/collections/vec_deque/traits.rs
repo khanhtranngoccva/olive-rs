@@ -295,7 +295,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// the unconsumed remainder so the caller can retry with a stable error
     /// type. Already-prepended elements remain committed at the front of the
     /// deque.
-    pub fn try_extend_front<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, TryReserveError)>
+    pub fn try_extend_front<S>(
+        &mut self,
+        source: S,
+    ) -> Result<(), (Resume<S::Inner>, TryReserveError)>
     where
         S: ResumableSource<Item = T>,
     {
@@ -378,6 +381,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
         Ok(())
     }
 }
+
+// SAFETY: `VecDeque` never hands out references that outlive the buffer, and
+// moving a `VecDeque` moves its whole allocation. Sound iff `T` itself is
+// `Send`/`Sync`.
+unsafe impl<T: Send, A: Allocator + Send> Send for VecDeque<T, A> {}
+unsafe impl<T: Sync, A: Allocator + Sync> Sync for VecDeque<T, A> {}
 
 #[cfg(test)]
 mod tests {
@@ -800,15 +809,24 @@ mod tests {
         // (the failing element).
         let mut dq: VecDeque<FlakyClone> = VecDeque::new();
         let src = [
-            FlakyClone::new(2),           // count=0 → clones to count=1 ✓
-            FlakyClone { count: 1, threshold: 2 }, // clones to count=2 ✓
-            FlakyClone { count: 2, threshold: 2 }, // count >= threshold → ✗
+            FlakyClone::new(2), // count=0 → clones to count=1 ✓
+            FlakyClone {
+                count: 1,
+                threshold: 2,
+            }, // clones to count=2 ✓
+            FlakyClone {
+                count: 2,
+                threshold: 2,
+            }, // count >= threshold → ✗
         ];
         let (rest, err) = match dq.try_extend_from_slice(&src) {
             Ok(_) => panic!("expected clone failure"),
             Err(pair) => pair,
         };
-        assert!(matches!(err, TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))));
+        assert!(matches!(
+            err,
+            TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))
+        ));
         // Residual starts at the first failed element (index 2).
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].count, 2);
@@ -836,7 +854,8 @@ mod tests {
     fn try_extend_front_empty_source_is_noop() {
         let mut dq: VecDeque<i32> = VecDeque::new();
         dq.try_push_back(1).unwrap();
-        dq.try_extend_front(std::iter::empty()).expect("extend front ok");
+        dq.try_extend_front(std::iter::empty())
+            .expect("extend front ok");
         assert_eq!(dq.len(), 1);
         assert_eq!(dq.front(), Some(&1));
     }
@@ -920,7 +939,8 @@ mod tests {
 
         let mut dq: VecDeque<i32> = VecDeque::new();
         dq.try_push_back(99).unwrap();
-        dq.try_extend_front(Underhinted(0..8)).expect("extend front ok");
+        dq.try_extend_front(Underhinted(0..8))
+            .expect("extend front ok");
         assert_eq!(dq.len(), 9);
         // Last item (7) ends up at the front; 99 stays at the back.
         assert_eq!(dq.front(), Some(&7));
@@ -981,7 +1001,8 @@ mod tests {
             Cloned(2, counter.clone()),
             Cloned(3, counter.clone()),
         ];
-        dq.try_extend_front_from_slice(&src).expect("extend front ok");
+        dq.try_extend_front_from_slice(&src)
+            .expect("extend front ok");
         assert_eq!(dq.len(), 3);
         assert_eq!(counter.get(), 3);
         // Each clone prepended as it arrives → last element (3) at the front.
@@ -994,7 +1015,8 @@ mod tests {
     fn try_extend_front_from_slice_empty_is_noop() {
         let mut dq: VecDeque<i32> = VecDeque::new();
         dq.try_push_back(5).unwrap();
-        dq.try_extend_front_from_slice(&[]).expect("extend front ok");
+        dq.try_extend_front_from_slice(&[])
+            .expect("extend front ok");
         assert_eq!(dq.len(), 1);
         assert_eq!(dq.front(), Some(&5));
     }
@@ -1023,15 +1045,27 @@ mod tests {
         // src[2]: never reached
         let mut dq: VecDeque<FlakyClone> = VecDeque::new();
         let src = [
-            FlakyClone { count: 0, threshold: 2 },   // ✓ clones to count=1
-            FlakyClone { count: 1, threshold: 1 },   // ✗ count >= threshold
-            FlakyClone { count: 0, threshold: 5 },   // not reached
+            FlakyClone {
+                count: 0,
+                threshold: 2,
+            }, // ✓ clones to count=1
+            FlakyClone {
+                count: 1,
+                threshold: 1,
+            }, // ✗ count >= threshold
+            FlakyClone {
+                count: 0,
+                threshold: 5,
+            }, // not reached
         ];
         let (rest, err) = match dq.try_extend_front_from_slice(&src) {
             Ok(_) => panic!("expected clone failure"),
             Err(pair) => pair,
         };
-        assert!(matches!(err, TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))));
+        assert!(matches!(
+            err,
+            TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))
+        ));
         // Residual starts at the first failed element (index 1).
         assert_eq!(rest.len(), 2);
         assert_eq!(rest[0].count, 1);
@@ -1049,15 +1083,27 @@ mod tests {
         // src[2]: count=3, threshold=3 → ✗
         let mut dq: VecDeque<FlakyClone> = VecDeque::new();
         let src = [
-            FlakyClone { count: 0, threshold: 3 },   // ✓
-            FlakyClone { count: 0, threshold: 3 },   // ✓
-            FlakyClone { count: 3, threshold: 3 },   // ✗
+            FlakyClone {
+                count: 0,
+                threshold: 3,
+            }, // ✓
+            FlakyClone {
+                count: 0,
+                threshold: 3,
+            }, // ✓
+            FlakyClone {
+                count: 3,
+                threshold: 3,
+            }, // ✗
         ];
         let (rest, err) = match dq.try_extend_front_from_slice(&src) {
             Ok(_) => panic!("expected clone failure"),
             Err(pair) => pair,
         };
-        assert!(matches!(err, TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))));
+        assert!(matches!(
+            err,
+            TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))
+        ));
         // Residual is just the failing last element.
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].count, 3);

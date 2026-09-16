@@ -81,14 +81,3 @@ impl<T, A: Allocator> Drop for VecDeque<T, A> {
         // RawVec handles deallocation
     }
 }
-
-// SAFETY: `VecDeque` never hands out references that outlive the buffer, and
-// moving a `VecDeque` moves its whole allocation. Sound iff `T` itself is
-// `Send`/`Sync`.
-unsafe impl<T: Send, A: Allocator + Send> Send for VecDeque<T, A> {}
-unsafe impl<T: Sync, A: Allocator + Sync> Sync for VecDeque<T, A> {}
-
-// Tests are intentionally absent for now: without the mutation methods
-// (`push_back`, `pop_front`, ...) there is no public way to set up the
-// interesting states (wrapped heads, partially-filled buffers, growth), so
-// meaningful coverage has to wait until those land.
