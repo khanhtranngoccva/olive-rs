@@ -268,6 +268,117 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// Front extension (inherent — deque-specific, no std counterpart)
+// ---------------------------------------------------------------------------
+
+impl<T, A: Allocator> VecDeque<T, A> {
+    /// Fallibly extend the front of the deque with all items produced by
+    /// `source`, consuming them in order and prepending each as it arrives —
+    /// the same semantics as nightly std's `VecDeque::extend_front`. As a
+    /// result the source's **last** element ends up at the very front, and the
+    /// pre-existing elements shift toward the back.
+    ///
+    /// This is the front-facing analogue of [`TryExtend::try_extend`]. Because
+    /// prepending is specific to deque semantics (there is no stable
+    /// standard-library trait it parallels), it is an inherent method rather
+    /// than a trait impl.
+    ///
+    /// Capacity can be reserved up front from the size hint's estimated total
+    /// (best-effort — over-reserve failures are ignored); growth otherwise
+    /// happens lazily.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(Resume<S::Inner>, TryReserveError)` if a reservation or push
+    /// fails. The [`Resume`] carries the stranded element (if any) alongside
+    /// the unconsumed remainder so the caller can retry with a stable error
+    /// type. Already-prepended elements remain committed at the front of the
+    /// deque.
+    pub fn try_extend_front<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, TryReserveError)>
+    where
+        S: ResumableSource<Item = T>,
+    {
+        let (head, mut inner, hint) = source.decompose_with_size_hint();
+        // Ignore over-reserve failures; growth happens lazily below.
+        let _ = self.try_reserve_total(hint.estimated_total());
+        // Push the head first.
+        if let Some(head) = head {
+            if let Err((head, err)) = self.try_push_front_give_back(head) {
+                return Err((Resume::new(head, inner), err));
+            }
+        }
+
+        // Each subsequent item is prepended as it arrives (nightly std
+        // semantics): the last-produced item ends up at the very front. While
+        // we have spare capacity this is a cheap within-capacity push; once
+        // capacity is exhausted grow one slot at a time, stranding the current
+        // element on failure.
+        while let Some(next) = inner.next() {
+            if self.len == self.capacity() {
+                if let Err(e) = self.try_reserve(1) {
+                    return Err((Resume::new(next, inner), e));
+                }
+            }
+            // SAFETY: a spare slot was just confirmed.
+            unsafe { self.push_front_within_cap(next) };
+        }
+        Ok(())
+    }
+
+    /// Fallibly extend the front of the deque by cloning each element of
+    /// `other` and prepending it as we walk forward — the same semantics as
+    /// nightly std's `extend_front`. As a result the slice's **last** element
+    /// ends up at the very front.
+    ///
+    /// This is the front-facing analogue of
+    /// [`TryExtendFromSlice::try_extend_from_slice`]. Because prepending is
+    /// specific to deque semantics, it is an inherent method rather than a
+    /// trait impl.
+    ///
+    /// Capacity is reserved for the entire slice up front so that a mid-way
+    /// clone failure does not leave the deque in a partially-grown state. On
+    /// failure the error carries the unconsumed tail of `other` (starting at
+    /// the first element whose clone failed) so the caller can retry once
+    /// memory pressure has eased.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(&'s [T], TryVecDequeWithCloneError)` if reserving capacity or
+    /// cloning an element fails. The returned slice is the remainder beginning
+    /// at the first failed element.
+    pub fn try_extend_front_from_slice<'s>(
+        &mut self,
+        other: &'s [T],
+    ) -> Result<(), (&'s [T], TryVecDequeWithCloneError)>
+    where
+        T: TryClone,
+    {
+        if other.is_empty() {
+            return Ok(());
+        }
+        self.try_reserve(other.len())
+            .map_err(|e| (other, TryVecDequeWithCloneError::Reserve(e)))?;
+        // Each element is cloned and prepended as we walk forward, so the last
+        // element ends up at the very front.
+        let mut i = 0usize;
+        for item in other {
+            match item.try_clone() {
+                Ok(cloned) => {
+                    // SAFETY: capacity was reserved above for all of `other`.
+                    unsafe { self.push_front_within_cap(cloned) };
+                    #[allow(clippy::arithmetic_side_effects, reason = "i <= other.len()")]
+                    {
+                        i += 1;
+                    }
+                }
+                Err(e) => return Err((&other[i..], TryVecDequeWithCloneError::Clone(e))),
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -703,5 +814,257 @@ mod tests {
         assert_eq!(rest[0].count, 2);
         // The two successful clones were committed.
         assert_eq!(dq.len(), 2);
+    }
+
+    // --- try_extend_front ----------------------------------------------------
+
+    #[test]
+    fn try_extend_front_prepends_each_item_as_it_arrives() {
+        // Each item is prepended as it arrives (nightly std semantics), so the
+        // last-produced item ends up at the very front.
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(100).unwrap();
+        dq.try_extend_front(1..=3).expect("extend front ok");
+        assert_eq!(dq.len(), 4);
+        assert_eq!(dq.front(), Some(&3));
+        assert_eq!(dq.back(), Some(&100));
+        assert_eq!(dq.get(1), Some(&2));
+        assert_eq!(dq.get(2), Some(&1));
+    }
+
+    #[test]
+    fn try_extend_front_empty_source_is_noop() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(1).unwrap();
+        dq.try_extend_front(std::iter::empty()).expect("extend front ok");
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.front(), Some(&1));
+    }
+
+    #[test]
+    fn try_extend_front_retry_via_resume_preserves_items() {
+        // Feed a Resume directly to verify the retry contract: the stranded
+        // head is prepended first, then each remainder item as it arrives.
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(0).unwrap();
+        let resume = Resume::new(10, 11..13);
+        dq.try_extend_front(resume).expect("extend front ok");
+        // Head 10 pushed first, then 11, 12 each prepended on top of it. The
+        // remainder is 11..13 (two items), so final order: [12, 11, 10, 0].
+        assert_eq!(dq.len(), 4);
+        assert_eq!(dq.get(0), Some(&12));
+        assert_eq!(dq.get(1), Some(&11));
+        assert_eq!(dq.get(2), Some(&10));
+        assert_eq!(dq.get(3), Some(&0));
+    }
+
+    #[test]
+    fn try_extend_front_oom_strands_first_consumed_element() {
+        // A failing allocator cannot fund any growth. The first item (1) is
+        // attempted first and its reserve fails immediately. Nothing was
+        // committed; the stranded element is 1 and the remainder holds [2, 3].
+        let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
+        let (resume, err) = match dq.try_extend_front(1..=3) {
+            Ok(_) => panic!("expected allocation failure"),
+            Err(pair) => pair,
+        };
+        assert!(err.is_alloc());
+        assert_eq!(*resume.head().expect("stranded head present"), 1);
+        let collected: std::vec::Vec<i32> = resume.into_remainder().collect();
+        assert_eq!(collected, [2, 3]);
+        // The deque itself is unchanged.
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_extend_front_overhint_falls_back_to_incremental_growth() {
+        use crate::test_helpers::allocators::ByteCapAlloc;
+
+        #[derive(Debug)]
+        struct Overhinted(core::ops::Range<i32>);
+        impl Iterator for Overhinted {
+            type Item = i32;
+            fn next(&mut self) -> Option<i32> {
+                self.0.next()
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (0, Some(10_000))
+            }
+        }
+
+        let alloc = ByteCapAlloc::new(64);
+        let mut dq: VecDeque<i32, _> = VecDeque::new_in(alloc.clone());
+        dq.try_push_back(-1).unwrap();
+
+        dq.try_extend_front(Overhinted(0..3))
+            .expect("incremental growth should succeed");
+        assert_eq!(dq.len(), 4);
+        // Last item (2) ends up at the front; -1 stays at the back.
+        assert_eq!(dq.front(), Some(&2));
+        assert_eq!(dq.back(), Some(&-1));
+    }
+
+    #[test]
+    fn try_extend_front_underhint_grows_mid_iteration() {
+        #[derive(Debug)]
+        struct Underhinted(core::ops::Range<i32>);
+        impl Iterator for Underhinted {
+            type Item = i32;
+            fn next(&mut self) -> Option<i32> {
+                self.0.next()
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (0, Some(1))
+            }
+        }
+
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(99).unwrap();
+        dq.try_extend_front(Underhinted(0..8)).expect("extend front ok");
+        assert_eq!(dq.len(), 9);
+        // Last item (7) ends up at the front; 99 stays at the back.
+        assert_eq!(dq.front(), Some(&7));
+        assert_eq!(dq.back(), Some(&99));
+    }
+
+    #[test]
+    fn try_extend_front_wrapped_buffer_preserves_logical_order() {
+        // Force a wrapped layout the same way as the Debug/Clone tests: fill
+        // the buffer, pop two from the front, push one more back so the new
+        // element wraps around to slot 0 ahead of `head`.
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            dq.try_push_back(v).unwrap();
+        }
+        dq.pop_front();
+        dq.pop_front();
+        dq.try_push_back(5).unwrap();
+        assert!(!dq.is_contiguous());
+        dq.try_extend_front([7, 8]).expect("extend front ok");
+        assert_eq!(dq.len(), 5);
+        // 7 prepended first, then 8 on top → 8 is the new front.
+        assert_eq!(dq.front(), Some(&8));
+        assert_eq!(dq.back(), Some(&5));
+        assert_eq!(dq.get(1), Some(&7));
+        assert_eq!(dq.get(2), Some(&3));
+        assert_eq!(dq.get(3), Some(&4));
+    }
+
+    // --- try_extend_front_from_slice ------------------------------------------
+
+    #[test]
+    fn try_extend_front_from_slice_prepends_clones_as_they_arrive() {
+        use crate::test_helpers::CloneCounter;
+
+        struct Cloned(i32, Arc<CloneCounter>);
+        impl TryClone for Cloned {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                self.1.record_clone();
+                Ok(Cloned(self.0, self.1.clone()))
+            }
+        }
+        impl fmt::Debug for Cloned {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "Cloned({})", self.0)
+            }
+        }
+        impl PartialEq for Cloned {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        let counter = CloneCounter::shared();
+        let mut dq: VecDeque<Cloned> = VecDeque::new();
+        let src = [
+            Cloned(1, counter.clone()),
+            Cloned(2, counter.clone()),
+            Cloned(3, counter.clone()),
+        ];
+        dq.try_extend_front_from_slice(&src).expect("extend front ok");
+        assert_eq!(dq.len(), 3);
+        assert_eq!(counter.get(), 3);
+        // Each clone prepended as it arrives → last element (3) at the front.
+        assert_eq!(dq.get(0), Some(&Cloned(3, counter.clone())));
+        assert_eq!(dq.get(1), Some(&Cloned(2, counter.clone())));
+        assert_eq!(dq.get(2), Some(&Cloned(1, counter.clone())));
+    }
+
+    #[test]
+    fn try_extend_front_from_slice_empty_is_noop() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(5).unwrap();
+        dq.try_extend_front_from_slice(&[]).expect("extend front ok");
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.front(), Some(&5));
+    }
+
+    #[test]
+    fn try_extend_front_from_slice_reserve_failure_returns_whole_slice() {
+        let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
+        let src = [1, 2, 3];
+        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
+            Ok(_) => panic!("expected allocation failure"),
+            Err(pair) => pair,
+        };
+        assert!(matches!(err, TryVecDequeWithCloneError::Reserve(_)));
+        // On a reserve failure nothing was consumed, so the whole slice comes
+        // back.
+        assert_eq!(rest, &src[..]);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_extend_front_from_slice_clone_failure_returns_tail_residual() {
+        // Forward iteration: src[0] clones fine and is prepended, then src[1]
+        // fails (count=1... wait, need to design carefully).
+        // src[0]: count=0, threshold=2 → clones to count=1 ✓ (prepended)
+        // src[1]: count=1, threshold=1 → count >= threshold → ✗
+        // src[2]: never reached
+        let mut dq: VecDeque<FlakyClone> = VecDeque::new();
+        let src = [
+            FlakyClone { count: 0, threshold: 2 },   // ✓ clones to count=1
+            FlakyClone { count: 1, threshold: 1 },   // ✗ count >= threshold
+            FlakyClone { count: 0, threshold: 5 },   // not reached
+        ];
+        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
+            Ok(_) => panic!("expected clone failure"),
+            Err(pair) => pair,
+        };
+        assert!(matches!(err, TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))));
+        // Residual starts at the first failed element (index 1).
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].count, 1);
+        assert_eq!(rest[1].count, 0);
+        // The one successful clone was committed at the front.
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.get(0).unwrap().count, 1);
+    }
+
+    #[test]
+    fn try_extend_front_from_slice_last_element_fails() {
+        // All but the last element clone fine; the last one fails.
+        // src[0]: count=0, threshold=3 → ✓ (count→1)
+        // src[1]: count=0, threshold=3 → ✓ (count→1)
+        // src[2]: count=3, threshold=3 → ✗
+        let mut dq: VecDeque<FlakyClone> = VecDeque::new();
+        let src = [
+            FlakyClone { count: 0, threshold: 3 },   // ✓
+            FlakyClone { count: 0, threshold: 3 },   // ✓
+            FlakyClone { count: 3, threshold: 3 },   // ✗
+        ];
+        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
+            Ok(_) => panic!("expected clone failure"),
+            Err(pair) => pair,
+        };
+        assert!(matches!(err, TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))));
+        // Residual is just the failing last element.
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].count, 3);
+        // Two clones were committed, each prepended as it arrived:
+        // src[0] pushed first, then src[1] on top → [clone(src[1]), clone(src[0])].
+        assert_eq!(dq.len(), 2);
+        assert_eq!(dq.get(0).unwrap().count, 1);
+        assert_eq!(dq.get(1).unwrap().count, 1);
     }
 }
