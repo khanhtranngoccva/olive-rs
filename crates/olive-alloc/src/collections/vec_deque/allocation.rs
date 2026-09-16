@@ -1182,22 +1182,34 @@ mod tests {
 
     #[test]
     fn push_back_mut_returns_reference_to_appended_element() {
-        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
-        assert_eq!(dq.try_push_back_mut(5), Ok(&mut 5));
-        assert_eq!(dq.try_push_back_mut(10), Ok(&mut 10));
-        *dq.back_mut().unwrap() += 5;
-        assert_eq!(dq.back(), Some(&15));
-        assert_eq!(dq.len(), 2);
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        // Append a new element and mutate it through the returned reference;
+        // the pre-existing elements must be untouched.
+        let slot = match dq.try_push_back_mut(99) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 2;
+        assert_eq!(collect_into_array::<4>(&dq), Some([10, 20, 30, 198]));
     }
 
     #[test]
     fn push_front_mut_returns_reference_to_prepended_element() {
-        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
-        assert_eq!(dq.try_push_back_mut(5), Ok(&mut 5));
-        assert_eq!(dq.try_push_front_mut(20), Ok(&mut 20));
-        *dq.front_mut().unwrap() -= 7;
-        assert_eq!(dq.front(), Some(&13));
-        assert_eq!(dq.len(), 2);
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        // Prepend a new element and mutate it through the returned reference;
+        // the pre-existing elements must be untouched.
+        let slot = match dq.try_push_front_mut(-5) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 3;
+        assert_eq!(collect_into_array::<4>(&dq), Some([-15, 10, 20, 30]));
     }
 
     #[test]
@@ -1273,23 +1285,34 @@ mod tests {
 
     #[test]
     fn push_mut_family_works_across_wrap_boundary() {
-        // Build a full wrapped state: [3, 2, 1, 4] spanning two physical
+        // Build a full wrapped state: [4, 1, 2, 3] spanning two physical
         // segments (head retreated past 0 by the push_front).
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
-        assert_eq!(dq.try_push_back(1), Ok(()));
-        assert_eq!(dq.try_push_back(2), Ok(()));
-        assert_eq!(dq.try_push_back(3), Ok(()));
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
         assert_eq!(dq.try_push_front(4), Ok(()));
         assert_eq!(dq.len(), 4);
         // Deque is full; both directions must grow internally while the
-        // elements are still wrapped across the buffer boundary.
-        assert_eq!(dq.try_push_back_mut(9), Ok(&mut 9));
+        // elements are still wrapped across the buffer boundary. Mutate each
+        // new element through its returned reference; the four pre-existing
+        // elements must be untouched.
+        let back_slot = match dq.try_push_back_mut(9) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *back_slot += 1;
+        // Drop the mutable borrow before growing again from the front.
+        drop(back_slot);
+        let front_slot = match dq.try_push_front_mut(8) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *front_slot -= 1;
+        drop(front_slot);
         assert!(dq.capacity() > 4);
-        assert_eq!(dq.back(), Some(&9));
-        assert_eq!(dq.try_push_front_mut(8), Ok(&mut 8));
-        assert_eq!(dq.front(), Some(&8));
         assert_eq!(dq.len(), 6);
-        assert_eq!(collect_into_array::<6>(&dq), Some([8, 4, 1, 2, 3, 9]));
+        assert_eq!(collect_into_array::<6>(&dq), Some([7, 4, 1, 2, 3, 10]));
     }
 
     // --- Mixed sequences ---------------------------------------------------------
@@ -1433,11 +1456,17 @@ mod tests {
     #[test]
     fn insert_mut_returns_reference_to_inserted_element() {
         let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
-        assert_eq!(dq.try_push_back(1), Ok(()));
-        assert_eq!(dq.try_push_back(3), Ok(()));
-        assert_eq!(dq.try_insert_mut(1, 2), Ok(&mut 2));
-        *dq.get_mut(1).unwrap() += 10;
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 12, 3]));
+        for v in [1, 3, 5] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        // Insert in the middle and mutate through the returned reference; the
+        // surrounding elements must be untouched.
+        let slot = match dq.try_insert_mut(1, 2) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot += 10;
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 12, 3, 5]));
     }
 
     #[test]

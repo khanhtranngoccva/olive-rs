@@ -76,42 +76,164 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// Appends an element to the back of the deque without attempting to grow
     /// the buffer. Succeeds only if there is already spare capacity.
     ///
+    /// On failure the deque is left unchanged and `value` is dropped. Use
+    /// [`Self::try_push_back_within_capacity_give_back`] to recover the value.
+    ///
     /// # Errors
     ///
     /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    #[inline]
     pub fn try_push_back_within_capacity(
         &mut self,
         value: T,
     ) -> Result<(), TryPushWithinCapacityError> {
-        let cap = self.capacity();
-        if self.len >= cap {
-            return Err(TryPushWithinCapacityError { len: self.len });
-        }
-        // SAFETY: `len < capacity`, so the slot computed below is in-bounds.
-        unsafe { self.push_back_within_cap(value) };
-        Ok(())
+        self.try_push_back_mut_within_capacity_give_back(value)
+            .map(|_| ())
+            .map_err(|(_returned, err)| err)
+    }
+
+    /// Like [`Self::try_push_back_within_capacity`], but returns the value
+    /// back on failure.
+    ///
+    /// This is the canonical implementation for back pushes; all other
+    /// within-capacity back-push variants delegate here.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(T, TryPushWithinCapacityError)` if `len == capacity`.
+    #[inline]
+    pub fn try_push_back_within_capacity_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<(), (T, TryPushWithinCapacityError)> {
+        self.try_push_back_mut_within_capacity_give_back(value)
+            .map(|_| ())
     }
 
     /// Prepends an element to the front of the deque without attempting to
     /// grow the buffer. Succeeds only if there is already spare capacity.
     ///
+    /// On failure the deque is left unchanged and `value` is dropped. Use
+    /// [`Self::try_push_front_within_capacity_give_back`] to recover the value.
+    ///
     /// # Errors
     ///
     /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    #[inline]
     pub fn try_push_front_within_capacity(
         &mut self,
         value: T,
     ) -> Result<(), TryPushWithinCapacityError> {
-        let cap = self.capacity();
-        if self.len >= cap {
-            return Err(TryPushWithinCapacityError { len: self.len });
-        }
-        // SAFETY: `len < capacity`, so retreating `head` stays in-bounds.
-        unsafe { self.push_front_within_cap(value) };
-        Ok(())
+        self.try_push_front_mut_within_capacity_give_back(value)
+            .map(|_| ())
+            .map_err(|(_returned, err)| err)
     }
 
-    // FIXME: mut and give_back variants
+    /// Like [`Self::try_push_front_within_capacity`], but returns the value
+    /// back on failure.
+    ///
+    /// This is the canonical implementation for front pushes; all other
+    /// within-capacity front-push variants delegate here.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(T, TryPushWithinCapacityError)` if `len == capacity`.
+    #[inline]
+    pub fn try_push_front_within_capacity_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<(), (T, TryPushWithinCapacityError)> {
+        self.try_push_front_mut_within_capacity_give_back(value)
+            .map(|_| ())
+    }
+
+    /// Appends an element to the back of the deque without attempting to grow
+    /// the buffer, returning a mutable reference to it. Succeeds only if there
+    /// is already spare capacity.
+    ///
+    /// On failure the deque is left unchanged and `value` is dropped. Use
+    /// [`Self::try_push_back_mut_within_capacity_give_back`] to recover the
+    /// value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    #[inline]
+    pub fn try_push_back_mut_within_capacity(
+        &mut self,
+        value: T,
+    ) -> Result<&mut T, TryPushWithinCapacityError> {
+        self.try_push_back_mut_within_capacity_give_back(value)
+            .map_err(|(_returned, err)| err)
+    }
+
+    /// Like [`Self::try_push_back_mut_within_capacity`], but returns the value
+    /// back on failure.
+    ///
+    /// This is the canonical implementation for mutable-reference back pushes;
+    /// all other mutable back-push variants delegate here.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(&mut T, (T, TryPushWithinCapacityError))` on failure.
+    #[inline]
+    pub fn try_push_back_mut_within_capacity_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<&mut T, (T, TryPushWithinCapacityError)> {
+        let cap = self.capacity();
+        if self.len >= cap {
+            return Err((value, TryPushWithinCapacityError { len: self.len }));
+        }
+        // SAFETY: `len < capacity`, so the slot computed below is in-bounds.
+        let ptr = unsafe { self.push_back_within_cap(value) };
+        // SAFETY: `ptr` points to the freshly-written, in-bounds slot.
+        Ok(unsafe { &mut *ptr })
+    }
+
+    /// Prepends an element to the front of the deque without attempting to
+    /// grow the buffer, returning a mutable reference to it. Succeeds only if
+    /// there is already spare capacity.
+    ///
+    /// On failure the deque is left unchanged and `value` is dropped. Use
+    /// [`Self::try_push_front_mut_within_capacity_give_back`] to recover the
+    /// value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    #[inline]
+    pub fn try_push_front_mut_within_capacity(
+        &mut self,
+        value: T,
+    ) -> Result<&mut T, TryPushWithinCapacityError> {
+        self.try_push_front_mut_within_capacity_give_back(value)
+            .map_err(|(_returned, err)| err)
+    }
+
+    /// Like [`Self::try_push_front_mut_within_capacity`], but returns the
+    /// value back on failure.
+    ///
+    /// This is the canonical implementation for mutable-reference front
+    /// pushes; all other mutable front-push variants delegate here.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(&mut T, (T, TryPushWithinCapacityError))` on failure.
+    #[inline]
+    pub fn try_push_front_mut_within_capacity_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<&mut T, (T, TryPushWithinCapacityError)> {
+        let cap = self.capacity();
+        if self.len >= cap {
+            return Err((value, TryPushWithinCapacityError { len: self.len }));
+        }
+        // SAFETY: `len < capacity`, so retreating `head` stays in-bounds.
+        let ptr = unsafe { self.push_front_within_cap(value) };
+        // SAFETY: `ptr` points to the freshly-written, in-bounds slot.
+        Ok(unsafe { &mut *ptr })
+    }
 
     // -----------------------------------------------------------------------
     // Within-capacity inserts
@@ -1157,6 +1279,201 @@ mod tests {
         assert_eq!(dq.len(), 1024);
     }
 
+    // --- try_push_{back,front}_{mut}_within_capacity give_back family ------------------
+
+    #[test]
+    fn push_back_within_capacity_give_back_recovers_value_on_full() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        let (returned, err) = match dq.try_push_back_within_capacity_give_back(3) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(returned, 3);
+        assert_eq!(err.len, 2);
+        // Deque unchanged.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn push_front_within_capacity_give_back_recovers_value_on_full() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        let (returned, err) = match dq.try_push_front_within_capacity_give_back(0) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(returned, 0);
+        assert_eq!(err.len, 2);
+        // Deque unchanged.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn push_within_capacity_give_back_succeeds_when_space_available() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity_give_back(1), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity_give_back(0), Ok(()));
+        assert_eq!(collect_into_array::<2>(&dq), Some([0, 1]));
+    }
+
+    // --- try_push_{back,front}_mut_within_capacity family -----------------------
+
+    #[test]
+    fn push_back_mut_within_capacity_returns_reference() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Push a new element at the back and mutate it through the returned
+        // reference; the pre-existing elements must be untouched.
+        let slot = match dq.try_push_back_mut_within_capacity(99) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 2;
+        assert_eq!(collect_into_array::<4>(&dq), Some([10, 20, 30, 198]));
+    }
+
+    #[test]
+    fn push_front_mut_within_capacity_returns_reference() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Prepend a new element and mutate it through the returned reference;
+        // the pre-existing elements must be untouched.
+        let slot = match dq.try_push_front_mut_within_capacity(-5) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 3;
+        assert_eq!(collect_into_array::<4>(&dq), Some([-15, 10, 20, 30]));
+    }
+
+    #[test]
+    fn push_back_mut_within_capacity_full_rejects_and_gives_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        let (returned, err) = match dq.try_push_back_mut_within_capacity_give_back(3) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(returned, 3);
+        assert_eq!(err.len, 2);
+        // Deque unchanged.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn push_front_mut_within_capacity_full_rejects_and_gives_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
+        let (returned, err) = match dq.try_push_front_mut_within_capacity_give_back(0) {
+            Err(pair) => pair,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(returned, 0);
+        assert_eq!(err.len, 2);
+        // Deque unchanged.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn push_back_mut_within_capacity_drops_value_on_plain_failure() {
+        use crate::test_helpers::DropCounter;
+        use std::sync::Arc;
+
+        let counter = Arc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
+        assert_eq!(
+            dq.try_push_back_within_capacity(Tracked(0, counter.clone())),
+            Ok(())
+        );
+        // Buffer is full; the plain (non-give-back) variant drops the rejected value.
+        let err = match dq.try_push_back_mut_within_capacity(Tracked(99, counter.clone())) {
+            Err(e) => e,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(err.len, 1);
+        assert_eq!(counter.get(), 1);
+    }
+
+    #[test]
+    fn push_front_mut_within_capacity_drops_value_on_plain_failure() {
+        use crate::test_helpers::DropCounter;
+        use std::sync::Arc;
+
+        let counter = Arc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
+        assert_eq!(
+            dq.try_push_back_within_capacity(Tracked(0, counter.clone())),
+            Ok(())
+        );
+        // Buffer is full; the plain (non-give-back) variant drops the rejected value.
+        let err = match dq.try_push_front_mut_within_capacity(Tracked(99, counter.clone())) {
+            Err(e) => e,
+            Ok(_) => panic!("expected full-buffer error"),
+        };
+        assert_eq!(err.len, 1);
+        assert_eq!(counter.get(), 1);
+    }
+
+    #[test]
+    fn push_mut_within_capacity_zst() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        assert_eq!(dq.try_push_back_mut_within_capacity(()), Ok(&mut ()));
+        assert_eq!(dq.try_push_front_mut_within_capacity(()), Ok(&mut ()));
+        assert_eq!(dq.try_push_back_mut_within_capacity(()), Ok(&mut ()));
+        assert_eq!(dq.len(), 3);
+    }
+
+    #[test]
+    fn push_back_mut_within_capacity_across_wrap_boundary() {
+        // Build a wrapped state: [5, 4, 1, 2, 3], len=5, cap=6.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        // One spare slot remains; push back through the returned reference and
+        // verify the five pre-existing elements are untouched.
+        let slot = match dq.try_push_back_mut_within_capacity(7) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 10;
+        assert_eq!(collect_into_array::<6>(&dq), Some([5, 4, 1, 2, 3, 70]));
+    }
+
+    #[test]
+    fn push_front_mut_within_capacity_across_wrap_boundary() {
+        // Build a wrapped state: [5, 4, 1, 2, 3], len=5, cap=6.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        // One spare slot remains; prepend through the returned reference and
+        // verify the five pre-existing elements are untouched.
+        let slot = match dq.try_push_front_mut_within_capacity(-7) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot *= 10;
+        assert_eq!(collect_into_array::<6>(&dq), Some([-70, 5, 4, 1, 2, 3]));
+    }
+
     // --- try_insert_within_capacity family -------------------------------------
 
     use super::TryInsertWithinCapacityError;
@@ -1256,11 +1573,17 @@ mod tests {
     #[test]
     fn insert_mut_within_capacity_returns_reference() {
         let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
-        assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
-        assert_eq!(dq.try_push_back_within_capacity(3), Ok(()));
-        assert_eq!(dq.try_insert_mut_within_capacity(1, 2), Ok(&mut 2));
-        *dq.get_mut(1).unwrap() += 10;
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 12, 3]));
+        for v in [1, 3, 5] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Insert in the middle and mutate through the returned reference; the
+        // surrounding elements must be untouched.
+        let slot = match dq.try_insert_mut_within_capacity(1, 2) {
+            Ok(r) => r,
+            Err(_) => panic!("expected success"),
+        };
+        *slot += 10;
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 12, 3, 5]));
     }
 
     #[test]
