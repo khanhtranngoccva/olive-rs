@@ -16,22 +16,22 @@ use olive_core::{ptr, slice};
 /// Error returned by the within-capacity push primitives when the buffer is
 /// exactly full (`len == capacity`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TryPushWithinCapacityError {
+pub struct TryVecDequePushWithinCapacityError {
     /// The current length (equal to capacity).
     pub len: usize,
 }
 
-impl core::fmt::Display for TryPushWithinCapacityError {
+impl core::fmt::Display for TryVecDequePushWithinCapacityError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "no spare capacity: deque is full at length {}", self.len)
     }
 }
 
-impl core::error::Error for TryPushWithinCapacityError {}
+impl core::error::Error for TryVecDequePushWithinCapacityError {}
 
 /// Error returned by the within-capacity insert primitives.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum TryInsertWithinCapacityError {
+pub enum TryVecDequeInsertWithinCapacityError {
     /// The buffer is full (`len == capacity`); no room to shift.
     Full {
         /// The current length (equal to capacity).
@@ -41,21 +41,21 @@ pub enum TryInsertWithinCapacityError {
     OutOfBounds,
 }
 
-impl core::fmt::Debug for TryInsertWithinCapacityError {
+impl core::fmt::Debug for TryVecDequeInsertWithinCapacityError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Full { len } => f
-                .debug_struct("TryInsertWithinCapacityError::Full")
+                .debug_struct("TryVecDequeInsertWithinCapacityError::Full")
                 .field("len", len)
                 .finish(),
             Self::OutOfBounds => f
-                .debug_tuple("TryInsertWithinCapacityError::OutOfBounds")
+                .debug_tuple("TryVecDequeInsertWithinCapacityError::OutOfBounds")
                 .finish(),
         }
     }
 }
 
-impl core::fmt::Display for TryInsertWithinCapacityError {
+impl core::fmt::Display for TryVecDequeInsertWithinCapacityError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Full { len } => {
@@ -66,7 +66,7 @@ impl core::fmt::Display for TryInsertWithinCapacityError {
     }
 }
 
-impl core::error::Error for TryInsertWithinCapacityError {}
+impl core::error::Error for TryVecDequeInsertWithinCapacityError {}
 
 // ---------------------------------------------------------------------------
 // Within-capacity pushes
@@ -81,12 +81,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    /// Returns [`TryVecDequePushWithinCapacityError`] if `len == capacity`.
     #[inline]
     pub fn try_push_back_within_capacity(
         &mut self,
         value: T,
-    ) -> Result<(), TryPushWithinCapacityError> {
+    ) -> Result<(), TryVecDequePushWithinCapacityError> {
         self.try_push_back_mut_within_capacity_give_back(value)
             .map(|_| ())
             .map_err(|(_returned, err)| err)
@@ -100,12 +100,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(T, TryPushWithinCapacityError)` if `len == capacity`.
+    /// Returns `(T, TryVecDequePushWithinCapacityError)` if `len == capacity`.
     #[inline]
     pub fn try_push_back_within_capacity_give_back(
         &mut self,
         value: T,
-    ) -> Result<(), (T, TryPushWithinCapacityError)> {
+    ) -> Result<(), (T, TryVecDequePushWithinCapacityError)> {
         self.try_push_back_mut_within_capacity_give_back(value)
             .map(|_| ())
     }
@@ -118,12 +118,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    /// Returns [`TryVecDequePushWithinCapacityError`] if `len == capacity`.
     #[inline]
     pub fn try_push_front_within_capacity(
         &mut self,
         value: T,
-    ) -> Result<(), TryPushWithinCapacityError> {
+    ) -> Result<(), TryVecDequePushWithinCapacityError> {
         self.try_push_front_mut_within_capacity_give_back(value)
             .map(|_| ())
             .map_err(|(_returned, err)| err)
@@ -137,12 +137,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(T, TryPushWithinCapacityError)` if `len == capacity`.
+    /// Returns `(T, TryVecDequePushWithinCapacityError)` if `len == capacity`.
     #[inline]
     pub fn try_push_front_within_capacity_give_back(
         &mut self,
         value: T,
-    ) -> Result<(), (T, TryPushWithinCapacityError)> {
+    ) -> Result<(), (T, TryVecDequePushWithinCapacityError)> {
         self.try_push_front_mut_within_capacity_give_back(value)
             .map(|_| ())
     }
@@ -157,12 +157,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    /// Returns [`TryVecDequePushWithinCapacityError`] if `len == capacity`.
     #[inline]
     pub fn try_push_back_mut_within_capacity(
         &mut self,
         value: T,
-    ) -> Result<&mut T, TryPushWithinCapacityError> {
+    ) -> Result<&mut T, TryVecDequePushWithinCapacityError> {
         self.try_push_back_mut_within_capacity_give_back(value)
             .map_err(|(_returned, err)| err)
     }
@@ -175,15 +175,15 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(&mut T, (T, TryPushWithinCapacityError))` on failure.
+    /// Returns `(&mut T, (T, TryVecDequePushWithinCapacityError))` on failure.
     #[inline]
     pub fn try_push_back_mut_within_capacity_give_back(
         &mut self,
         value: T,
-    ) -> Result<&mut T, (T, TryPushWithinCapacityError)> {
+    ) -> Result<&mut T, (T, TryVecDequePushWithinCapacityError)> {
         let cap = self.capacity();
         if self.len >= cap {
-            return Err((value, TryPushWithinCapacityError { len: self.len }));
+            return Err((value, TryVecDequePushWithinCapacityError { len: self.len }));
         }
         // SAFETY: `len < capacity`, so the slot computed below is in-bounds.
         let ptr = unsafe { self.push_back_within_cap(value) };
@@ -201,12 +201,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryPushWithinCapacityError`] if `len == capacity`.
+    /// Returns [`TryVecDequePushWithinCapacityError`] if `len == capacity`.
     #[inline]
     pub fn try_push_front_mut_within_capacity(
         &mut self,
         value: T,
-    ) -> Result<&mut T, TryPushWithinCapacityError> {
+    ) -> Result<&mut T, TryVecDequePushWithinCapacityError> {
         self.try_push_front_mut_within_capacity_give_back(value)
             .map_err(|(_returned, err)| err)
     }
@@ -219,15 +219,15 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(&mut T, (T, TryPushWithinCapacityError))` on failure.
+    /// Returns `(&mut T, (T, TryVecDequePushWithinCapacityError))` on failure.
     #[inline]
     pub fn try_push_front_mut_within_capacity_give_back(
         &mut self,
         value: T,
-    ) -> Result<&mut T, (T, TryPushWithinCapacityError)> {
+    ) -> Result<&mut T, (T, TryVecDequePushWithinCapacityError)> {
         let cap = self.capacity();
         if self.len >= cap {
-            return Err((value, TryPushWithinCapacityError { len: self.len }));
+            return Err((value, TryVecDequePushWithinCapacityError { len: self.len }));
         }
         // SAFETY: `len < capacity`, so retreating `head` stays in-bounds.
         let ptr = unsafe { self.push_front_within_cap(value) };
@@ -248,13 +248,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// * [`TryInsertWithinCapacityError::OutOfBounds`] — `index > len`.
-    /// * [`TryInsertWithinCapacityError::Full`] — `len == capacity`.
+    /// * [`TryVecDequeInsertWithinCapacityError::OutOfBounds`] — `index > len`.
+    /// * [`TryVecDequeInsertWithinCapacityError::Full`] — `len == capacity`.
     pub fn try_insert_within_capacity(
         &mut self,
         index: usize,
         value: T,
-    ) -> Result<(), TryInsertWithinCapacityError> {
+    ) -> Result<(), TryVecDequeInsertWithinCapacityError> {
         self.try_insert_mut_within_capacity_give_back(index, value)
             .map(|_| ())
             .map_err(|(_returned, e)| e)
@@ -265,12 +265,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(T, TryInsertWithinCapacityError)` on failure.
+    /// Returns `(T, TryVecDequeInsertWithinCapacityError)` on failure.
     pub fn try_insert_within_capacity_give_back(
         &mut self,
         index: usize,
         value: T,
-    ) -> Result<(), (T, TryInsertWithinCapacityError)> {
+    ) -> Result<(), (T, TryVecDequeInsertWithinCapacityError)> {
         self.try_insert_mut_within_capacity_give_back(index, value)
             .map(|_| ())
     }
@@ -280,13 +280,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// * [`TryInsertWithinCapacityError::OutOfBounds`] — `index > len`.
-    /// * [`TryInsertWithinCapacityError::Full`] — `len == capacity`.
+    /// * [`TryVecDequeInsertWithinCapacityError::OutOfBounds`] — `index > len`.
+    /// * [`TryVecDequeInsertWithinCapacityError::Full`] — `len == capacity`.
     pub fn try_insert_mut_within_capacity(
         &mut self,
         index: usize,
         value: T,
-    ) -> Result<&mut T, TryInsertWithinCapacityError> {
+    ) -> Result<&mut T, TryVecDequeInsertWithinCapacityError> {
         self.try_insert_mut_within_capacity_give_back(index, value)
             .map_err(|(_returned, err)| err)
     }
@@ -296,17 +296,17 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Errors
     ///
-    /// Returns `(&mut T, (T, TryInsertWithinCapacityError))` on failure.
+    /// Returns `(&mut T, (T, TryVecDequeInsertWithinCapacityError))` on failure.
     pub fn try_insert_mut_within_capacity_give_back(
         &mut self,
         index: usize,
         value: T,
-    ) -> Result<&mut T, (T, TryInsertWithinCapacityError)> {
+    ) -> Result<&mut T, (T, TryVecDequeInsertWithinCapacityError)> {
         if index > self.len {
-            return Err((value, TryInsertWithinCapacityError::OutOfBounds));
+            return Err((value, TryVecDequeInsertWithinCapacityError::OutOfBounds));
         }
         if self.len >= self.capacity() {
-            return Err((value, TryInsertWithinCapacityError::Full { len: self.len }));
+            return Err((value, TryVecDequeInsertWithinCapacityError::Full { len: self.len }));
         }
         // SAFETY: both preconditions upheld above.
         let ptr = unsafe { self.insert_within_cap(index, value) };
@@ -1520,7 +1520,7 @@ mod tests {
 
     // --- try_insert_within_capacity family -------------------------------------
 
-    use super::TryInsertWithinCapacityError;
+    use super::TryVecDequeInsertWithinCapacityError;
 
     #[test]
     fn insert_within_capacity_at_front_of_empty() {
@@ -1568,7 +1568,7 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected out-of-bounds error"),
         };
-        assert_eq!(err, TryInsertWithinCapacityError::OutOfBounds);
+        assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
         assert_eq!(dq.len(), 1);
     }
 
@@ -1582,7 +1582,7 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected full-buffer error"),
         };
-        assert_eq!(err, TryInsertWithinCapacityError::Full { len: 2 });
+        assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
         // Deque unchanged.
         assert_eq!(dq.len(), 2);
         assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
@@ -1598,7 +1598,7 @@ mod tests {
             Ok(_) => panic!("expected full-buffer error"),
         };
         assert_eq!(returned, 99);
-        assert_eq!(err, TryInsertWithinCapacityError::Full { len: 2 });
+        assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
         assert_eq!(dq.len(), 2);
     }
 
@@ -1610,7 +1610,7 @@ mod tests {
             Ok(_) => panic!("expected out-of-bounds error"),
         };
         assert_eq!(returned, 42);
-        assert_eq!(err, TryInsertWithinCapacityError::OutOfBounds);
+        assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
         assert!(dq.is_empty());
     }
 

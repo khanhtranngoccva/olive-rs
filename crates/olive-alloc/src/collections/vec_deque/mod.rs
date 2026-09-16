@@ -27,7 +27,8 @@ use crate::raw_vec::RawVec;
 pub use allocation::TryVecDequeInsertError;
 pub use drain::Drain;
 pub use iter::{Iter, IterMut};
-pub use mutation::{TryInsertWithinCapacityError, TryPushWithinCapacityError};
+pub use mutation::{TryVecDequeInsertWithinCapacityError, TryVecDequePushWithinCapacityError};
+pub use traits::TryVecDequeWithCloneError;
 
 // ---------------------------------------------------------------------------
 // VecDeque
