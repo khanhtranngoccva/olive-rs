@@ -1101,6 +1101,50 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
     }
 
+    /// Removes and returns the last element from the deque if the closure
+    /// `pred` applied to a mutable reference to it returns `true`,
+    /// otherwise leaves the deque unchanged and returns `None`.
+    ///
+    /// The closure receives the element by mutable reference, so it may both
+    /// inspect and modify it before deciding whether to remove it. If the
+    /// element is removed, any modifications made by the closure are carried
+    /// into the returned value.
+    ///
+    /// Removal never allocates, so this cannot fail.
+    #[inline]
+    pub fn pop_back_if<F>(&mut self, mut pred: F) -> Option<T>
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+        let back = self.back_mut()?;
+        if !pred(back) {
+            return None;
+        }
+        self.pop_back()
+    }
+
+    /// Removes and returns the first element from the deque if the closure
+    /// `pred` applied to a mutable reference to it returns `true`,
+    /// otherwise leaves the deque unchanged and returns `None`.
+    ///
+    /// The closure receives the element by mutable reference, so it may both
+    /// inspect and modify it before deciding whether to remove it. If the
+    /// element is removed, any modifications made by the closure are carried
+    /// into the returned value.
+    ///
+    /// Removal never allocates, so this cannot fail.
+    #[inline]
+    pub fn pop_front_if<F>(&mut self, mut pred: F) -> Option<T>
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+        let front = self.front_mut()?;
+        if !pred(front) {
+            return None;
+        }
+        self.pop_front()
+    }
+
     /// Shortens the deque, keeping only the first `new_len` elements and
     /// dropping the rest. If `new_len` is greater than or equal to the current
     /// length, nothing happens.
@@ -1719,6 +1763,148 @@ mod tests {
         assert_eq!(dq.pop_front(), Some(4));
         assert_eq!(dq.pop_front(), Some(1));
         assert_eq!(collect_into_array::<2>(&dq), Some([2, 3]));
+    }
+
+    // --- pop_back_if / pop_front_if ---------------------------------------------
+
+    #[test]
+    fn pop_back_if_returns_none_when_empty() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        assert_eq!(dq.pop_back_if(|x| *x == 1), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_front_if_returns_none_when_empty() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        assert_eq!(dq.pop_front_if(|x| *x == 1), None);
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn pop_back_if_matching_predicate_removes_last() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_back_if(|x| *x % 2 == 0), Some(4));
+        assert_eq!(dq.back(), Some(&3));
+        assert_eq!(dq.len(), 3);
+        // Predicate fails on the new back → no removal.
+        assert_eq!(dq.pop_back_if(|x| *x % 2 == 0), None);
+        assert_eq!(dq.back(), Some(&3));
+        assert_eq!(dq.len(), 3);
+    }
+
+    #[test]
+    fn pop_front_if_matching_predicate_removes_first() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_front_if(|x| *x % 2 == 1), Some(1));
+        assert_eq!(dq.front(), Some(&2));
+        assert_eq!(dq.len(), 3);
+        // Predicate fails on the new front → no removal.
+        assert_eq!(dq.pop_front_if(|x| *x % 2 == 1), None);
+        assert_eq!(dq.front(), Some(&2));
+        assert_eq!(dq.len(), 3);
+    }
+
+    #[test]
+    fn pop_back_if_closure_modifications_are_carried_into_returned_value() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // The closure doubles the element before accepting it.
+        assert_eq!(dq.pop_back_if(|x| { *x *= 2; true }), Some(8));
+        assert_eq!(dq.back(), Some(&3));
+    }
+
+    #[test]
+    fn pop_front_if_closure_modifications_are_carried_into_returned_value() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // The closure negates the element before accepting it.
+        assert_eq!(dq.pop_front_if(|x| { *x = -*x; true }), Some(-1));
+        assert_eq!(dq.front(), Some(&2));
+    }
+
+    #[test]
+    fn pop_back_if_rejection_preserves_any_prior_mutation_of_other_elements() {
+        // A rejected predicate may still mutate its argument; the element must
+        // remain in the deque with that mutation intact.
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Mutate the back but reject it.
+        assert_eq!(dq.pop_back_if(|x| { *x += 100; false }), None);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 104]));
+    }
+
+    #[test]
+    fn pop_front_if_rejection_preserves_any_prior_mutation_of_other_elements() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Mutate the front but reject it.
+        assert_eq!(dq.pop_front_if(|x| { *x += 100; false }), None);
+        assert_eq!(collect_into_array::<4>(&dq), Some([101, 2, 3, 4]));
+    }
+
+    #[test]
+    fn pop_back_if_non_matching_leaves_deque_unchanged() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_back_if(|x| *x == 99), None);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn pop_front_if_non_matching_leaves_deque_unchanged() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.pop_front_if(|x| *x == 99), None);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn pop_back_if_on_wrapped_buffer() {
+        // Build a wrapped state: [5, 4, 1, 2, 3] with head retreated past 0.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        // Back is 3 (odd) → no removal; then 3 matches and is removed.
+        assert_eq!(dq.pop_back_if(|x| *x % 2 == 0), None);
+        assert_eq!(dq.pop_back_if(|x| *x % 2 == 1), Some(3));
+        assert_eq!(collect_into_array::<4>(&dq), Some([5, 4, 1, 2]));
+    }
+
+    #[test]
+    fn pop_front_if_on_wrapped_buffer() {
+        // Build a wrapped state: [5, 4, 1, 2, 3] with head retreated past 0.
+        let mut dq = VecDeque::<i32>::try_with_capacity(6).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        assert_eq!(dq.try_push_front_within_capacity(4), Ok(()));
+        assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
+        // Front is 5 (odd) → no removal; then 5 matches and is removed.
+        assert_eq!(dq.pop_front_if(|x| *x % 2 == 0), None);
+        assert_eq!(dq.pop_front_if(|x| *x % 2 == 1), Some(5));
+        assert_eq!(collect_into_array::<4>(&dq), Some([4, 1, 2, 3]));
     }
 
     #[test]
