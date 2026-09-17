@@ -2002,4 +2002,217 @@ mod tests {
         assert_eq!(dq.try_resize(1, &()), Ok(()));
         assert_eq!(dq.len(), 1);
     }
+
+    // -----------------------------------------------------------------------
+    // Panic-safety regression tests
+    // -----------------------------------------------------------------------
+
+    use crate::test_helpers::{CloneBudget, Ledger, PanicArmer};
+    use std::sync::Arc;
+
+    /// A tracked item whose `try_clone` is gated by a shared [`CloneBudget`]
+    /// and whose destructor panics exactly once (while the armer is armed).
+    /// This lets us deterministically trigger a mid-resize clone failure AND
+    /// a panicking destructor during the subsequent rollback.
+    struct FlakyPanicTracked {
+        id: u32,
+        ledger: Arc<Ledger>,
+        armer: Arc<PanicArmer>,
+        budget: CloneBudget,
+    }
+
+    impl Drop for FlakyPanicTracked {
+        fn drop(&mut self) {
+            self.ledger.unregister(self.id);
+            if self.armer.is_armed() {
+                self.armer.disarm();
+                panic!("forced panic in drop");
+            }
+        }
+    }
+
+    impl TryClone for FlakyPanicTracked {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            if !self.budget.try_consume() {
+                return Err(TryCloneError::Other("budget exhausted"));
+            }
+            let id = self.ledger.allocate();
+            self.ledger.register(id);
+            Ok(FlakyPanicTracked {
+                id,
+                ledger: self.ledger.clone(),
+                armer: self.armer.clone(),
+                budget: self.budget.share(),
+            })
+        }
+    }
+
+    /// If a destructor in the rolled-back tail panics during `try_resize`'s 
+    /// truncation, no element may be double-freed or leaked.
+    #[test]
+    fn try_resize_rollback_panicking_drop_is_safe() {
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        armer.arm();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let l = ledger.clone();
+            let a = armer.clone();
+            move || {
+                let budget = CloneBudget::new(2); // allow exactly 2 clones
+                let mut dq: VecDeque<FlakyPanicTracked> = VecDeque::new();
+                // Seed 2 elements.
+                for _ in 0..2 {
+                    let id = l.allocate();
+                    l.register(id);
+                    dq.try_push_back(FlakyPanicTracked {
+                        id,
+                        ledger: l.clone(),
+                        armer: a.clone(),
+                        budget: budget.share(),
+                    })
+                    .unwrap();
+                }
+                // Source: its own registered id; the *clones* drawn from it
+                // allocate fresh ids beyond the seeds'.
+                let source_id = l.allocate();
+                l.register(source_id);
+                let source = FlakyPanicTracked {
+                    id: source_id,
+                    ledger: l.clone(),
+                    armer: a.clone(),
+                    budget: budget.share(),
+                };
+                // Resize from 2 → 5: needs 3 clones, only 2 succeed.
+                // The 3rd clone fails → guard truncates back to len 2,
+                // dropping the 2 cloned elements. First drop panics.
+                let _ = dq.try_resize(5, &source);
+            }
+        }));
+
+        // A panic should have occurred (either from the drop or propagated).
+        assert!(result.is_err(), "expected a panic from the drop");
+        // All registered elements (seed ids 0,1,2 + cloned ids 3,4) must each
+        // be dropped exactly once. No double-frees, no leaks.
+        // All registered elements (seed ids 0,1,2 + cloned ids 3,4) must each
+        // be dropped exactly once. No double-frees, no leaks.
+        assert!(ledger.double_dropped().is_empty(), "double-free detected");
+        assert!(ledger.leaked_ids().is_empty(), "leak detected");
+    }
+
+    /// Regression test: if the closure in `try_resize_with` panics after some
+    /// elements have been pushed, the `TruncateBackGuard` rolls the deque back
+    /// to its original length.
+    #[test]
+    fn try_resize_with_closure_panic_is_safe() {
+        use crate::test_helpers::TrackedItem;
+
+        let ledger = Arc::new(Ledger::new());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let l = ledger.clone();
+            move || {
+                let mut dq: VecDeque<TrackedItem<()>> = VecDeque::new();
+                // Seed one element (id 0).
+                let seed_id = l.allocate();
+                l.register(seed_id);
+                dq.try_push_back(TrackedItem {
+                    id: seed_id,
+                    ledger: l.clone(),
+                    inner: (),
+                })
+                .unwrap();
+
+                // Resize to 4: the closure succeeds twice (minting ids 1 and 2),
+                // then panics on the third call. The guard rolls the two pushed
+                // elements back out.
+                let mut calls = 0usize;
+                let _: Result<(), TryVecDequeWithClosureError<&str>> =
+                    dq.try_resize_with(4, || {
+                        calls += 1;
+                        if calls == 3 {
+                            panic!("forced panic mid-resize_with");
+                        }
+                        let id = l.allocate();
+                        l.register(id);
+                        Ok(TrackedItem {
+                            id,
+                            ledger: l.clone(),
+                            inner: (),
+                        })
+                    });
+            }
+        }));
+
+        assert!(result.is_err(), "expected the closure to panic");
+        // All three minted ids (the seed plus the two from the closure) must
+        // each be dropped exactly once — no double-free, no leak.
+        assert!(ledger.double_dropped().is_empty(), "double-free detected");
+        assert!(ledger.leaked_ids().is_empty(), "leak detected");
+        assert!(ledger.all_dropped_once(0..3u32));
+    }
+
+    /// Regression test: `try_shrink_to_fit` performs raw-pointer compaction
+    /// (no destructors run during the move). If the shrink reallocation
+    /// itself fails, the guard restores a consistent layout via `abort_shrink`.
+    #[test]
+    fn try_shrink_to_fit_failure_restores_wrapped_state() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        // Budget of 1: the single `try_reserve` below consumes it to create
+        // the initial buffer. All subsequent pushes/pops fit within that
+        // capacity without allocating. The shrink's internal `allocate` then
+        // finds the budget exhausted and fails.
+        let alloc = BudgetedAlloc::new(1);
+        let mut dq: VecDeque<i32, BudgetedAlloc> = VecDeque::new_in(alloc);
+
+        // Allocate the initial buffer (consumes the only unit of budget).
+        dq.try_reserve(8).unwrap();
+        assert_eq!(dq.capacity(), 8);
+
+        // Fill the whole buffer: slots 0..8 hold [1..=8].
+        for v in 1..=8i32 {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Pop four from the front: advances head to 4, leaving [5,6,7,8] in
+        // slots 4..8.
+        for expected in 1..=4i32 {
+            assert_eq!(dq.pop_front(), Some(expected));
+        }
+        // Push two more: they wrap around into slots 0,1. Now the live
+        // elements [5,6,7,8,9,10] occupy slots 4,5,6,7,0,1 — a wrapped layout
+        // (head=4, len=6, head+len=10 > capacity=8).
+        assert_eq!(dq.try_push_back_within_capacity(9), Ok(()));
+        assert_eq!(dq.try_push_back_within_capacity(10), Ok(()));
+        assert_eq!(dq.len(), 6);
+        // Confirm the wrapped layout: `as_slices` returns two non-empty halves
+        // when elements straddle the buffer boundary.
+        let (front, back) = dq.as_slices();
+        assert_eq!(front, &[5, 6, 7, 8]);
+        assert_eq!(back, &[9, 10]);
+
+        // Shrink-to-fit will attempt a reallocation which fails because the
+        // budget is exhausted. The deque must be restored to its exact
+        // pre-shrink wrapped state.
+        let res = dq.try_shrink_to_fit();
+        assert!(res.is_err(), "expected shrink to fail due to OOM");
+
+        // Length and capacity are unchanged, and the full logical element
+        // order is preserved across the buffer boundary. `abort_shrink` may
+        // have re-laid-out the elements contiguously (it copies the cheaper
+        // side), so we concatenate both halves rather than asserting a
+        // specific split.
+        assert_eq!(dq.len(), 6);
+        assert_eq!(dq.capacity(), 8);
+        let (front, back) = dq.as_slices();
+        let mut restored = front.iter().chain(back.iter()).copied();
+        assert_eq!(restored.next(), Some(5));
+        assert_eq!(restored.next(), Some(6));
+        assert_eq!(restored.next(), Some(7));
+        assert_eq!(restored.next(), Some(8));
+        assert_eq!(restored.next(), Some(9));
+        assert_eq!(restored.next(), Some(10));
+        assert_eq!(restored.next(), None);
+    }
 }

@@ -1468,6 +1468,75 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // If we reach here, dropping `a` did not panic. The guard will drop
         // `b` when `_guard` goes out of scope below.
     }
+
+    // -----------------------------------------------------------------------
+    // Retain
+    // -----------------------------------------------------------------------
+
+    /// Retains only the elements selected by `predicate`, dropping the rest in
+    /// place, using the bubbling algorithm.
+    ///
+    /// The predicate is called once per element; it receives an immutable
+    /// reference so it can inspect (but not alter or replace) each element.
+    ///
+    /// # Panics
+    ///
+    /// If the predicate panics, the deque is left in a consistent state: all
+    /// elements are still present (possibly reordered), and no elements have
+    /// been dropped yet.
+    pub fn retain<F>(&mut self, mut predicate: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.retain_mut(|x| predicate(x));
+    }
+
+    /// Retains only the elements selected by `predicate`, dropping the rest
+    /// in place, using the bubbling algorithm.
+    ///
+    /// The predicate receives a mutable reference to each element. Elements
+    /// for which it returns `false` are dropped in place.
+    ///
+    /// # Panics
+    ///
+    /// If the predicate panics, the deque is left in a consistent state: all
+    /// elements are still present (possibly reordered), and no elements have
+    /// been dropped yet.
+    pub fn retain_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut T) -> bool,
+    {
+        let len = self.len;
+        let mut idx = 0;
+        let mut cur = 0;
+
+        // Stage 1: All values are retained.
+        #[allow(clippy::arithmetic_side_effects, reason = "idx <= cur < len")]
+        while cur < len {
+            if !f(self.get_mut(cur).expect("item at current index should be retrievable")) {
+                cur += 1;
+                break;
+            }
+            cur += 1;
+            idx += 1;
+        }
+        // Stage 2: Swap retained value into current idx.
+        #[allow(clippy::arithmetic_side_effects, reason = "idx <= cur < len")]
+        while cur < len {
+            if !f(self.get_mut(cur).expect("item at current index should be retrievable")) {
+                cur += 1;
+                continue;
+            }
+
+            self.try_swap(idx, cur).expect("failed to swap in-index elements");
+            cur += 1;
+            idx += 1;
+        }
+        // Stage 3: Truncate all values after idx.
+        if cur != idx {
+            self.truncate(idx);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2741,5 +2810,138 @@ mod tests {
         assert_eq!(dq.try_swap_remove_front(4), Ok(30));
         // Front (50) swapped to index 4; front popped.
         assert_eq!(collect_into_array::<4>(&dq), Some([40, 10, 20, 50]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Retain / retain_mut tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn retain_empty_deque_is_noop() {
+        let mut dq = VecDeque::<i32>::new();
+        dq.retain(|_| true);
+        assert_eq!(dq.len(), 0);
+    }
+
+    #[test]
+    fn retain_all_kept_preserves_elements() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.retain(|_| true);
+        assert_eq!(dq.len(), 4);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn retain_all_removed_empties_deque() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.retain(|_| false);
+        assert_eq!(dq.len(), 0);
+    }
+
+    #[test]
+    fn retain_removes_even_elements() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5, 6, 7, 8] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.retain(|x| *x % 2 != 0);
+        assert_eq!(dq.len(), 4);
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 3, 5, 7]));
+    }
+
+    #[test]
+    fn retain_removes_first_element() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.retain(|x| *x != 1);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([2, 3, 4]));
+    }
+
+    #[test]
+    fn retain_removes_last_element() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        dq.retain(|x| *x != 4);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn retain_on_wrapped_buffer() {
+        // Create a wrapped deque: [50, 40, 10, 20, 30] with head at index 3.
+        let mut dq = wrapped_full_dq();
+        // Remove elements at logical positions where value == 10 or value == 30.
+        dq.retain(|x| *x != 10 && *x != 30);
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([50, 40, 20]));
+    }
+
+    #[test]
+    fn retain_wrapped_all_removed() {
+        let mut dq = wrapped_full_dq(); // [50, 40, 10, 20, 30]
+        dq.retain(|_| false);
+        assert_eq!(dq.len(), 0);
+    }
+
+    #[test]
+    fn retain_wrapped_all_kept() {
+        let mut dq = wrapped_full_dq(); // [50, 40, 10, 20, 30]
+        dq.retain(|_| true);
+        assert_eq!(dq.len(), 5);
+        assert_eq!(collect_into_array::<5>(&dq), Some([50, 40, 10, 20, 30]));
+    }
+
+    #[test]
+    fn retain_mut_modifies_before_deciding() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3, 4] {
+            assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
+        }
+        // Double each element, then keep only those > 4.
+        // 1→2 (removed), 2→4 (removed), 3→6 (kept), 4→8 (kept)
+        dq.retain_mut(|x| {
+            *x *= 2;
+            *x > 4
+        });
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([6, 8]));
+    }
+
+    #[test]
+    fn retain_single_element_kept() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(1).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(42), Ok(()));
+        dq.retain(|x| *x == 42);
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.get(0), Some(&42));
+    }
+
+    #[test]
+    fn retain_single_element_removed() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(1).expect("allocation ok");
+        assert_eq!(dq.try_push_back_within_capacity(42), Ok(()));
+        dq.retain(|x| *x != 42);
+        assert_eq!(dq.len(), 0);
+    }
+
+    #[test]
+    fn retain_alternating_removal_wrapped() {
+        // Wrapped deque: [50, 40, 10, 20, 30]
+        let mut dq = wrapped_full_dq();
+        // Keep only odd-positioned elements (logical indices 1 and 3): 40, 20.
+        dq.retain(|x| matches!(*x, 40 | 20));
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([40, 20]));
     }
 }
