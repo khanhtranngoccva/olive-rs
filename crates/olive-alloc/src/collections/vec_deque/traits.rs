@@ -15,60 +15,7 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::VecDeque;
 use crate::alloc::Global;
-
-/// Error returned by fallible deque operations that may both reserve capacity
-/// and clone elements.
-///
-/// Covers [`TryClone`] on [`VecDeque`] — any operation whose failure modes are
-/// limited to a capacity reservation ([`TryReserveError`]) or an element clone
-/// failure ([`TryCloneError`]). Mirrors `Vec`'s `TryVecWithCloneError`.
-#[derive(Clone, PartialEq, Eq)]
-pub enum TryVecDequeWithCloneError {
-    /// A capacity reservation on the deque failed (overflow or OOM).
-    Reserve(TryReserveError),
-    /// An element clone failed during a method that requires [`TryClone`].
-    Clone(TryCloneError),
-}
-
-impl fmt::Debug for TryVecDequeWithCloneError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Reserve(e) => f
-                .debug_tuple("TryVecDequeWithCloneError::Reserve")
-                .field(e)
-                .finish(),
-            Self::Clone(e) => f
-                .debug_tuple("TryVecDequeWithCloneError::Clone")
-                .field(e)
-                .finish(),
-        }
-    }
-}
-
-impl fmt::Display for TryVecDequeWithCloneError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Reserve(e) => write!(f, "deque operation failed: {e}"),
-            Self::Clone(e) => write!(f, "deque operation failed: {e}"),
-        }
-    }
-}
-
-impl core::error::Error for TryVecDequeWithCloneError {}
-
-impl From<TryReserveError> for TryVecDequeWithCloneError {
-    #[inline]
-    fn from(err: TryReserveError) -> Self {
-        Self::Reserve(err)
-    }
-}
-
-impl From<TryCloneError> for TryVecDequeWithCloneError {
-    #[inline]
-    fn from(err: TryCloneError) -> Self {
-        Self::Clone(err)
-    }
-}
+use super::TryVecDequeWithCloneError;
 
 // ---------------------------------------------------------------------------
 // Debug
@@ -269,7 +216,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Front extension (inherent — deque-specific, no std counterpart)
+// Front extension (inherent — deque-specific, no stable std counterpart)
 // ---------------------------------------------------------------------------
 
 impl<T, A: Allocator> VecDeque<T, A> {
@@ -325,58 +272,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
             }
             // SAFETY: a spare slot was just confirmed.
             unsafe { self.push_front_within_cap(next) };
-        }
-        Ok(())
-    }
-
-    /// Fallibly extend the front of the deque by cloning each element of
-    /// `other` and prepending it as we walk forward — the same semantics as
-    /// nightly std's `extend_front`. As a result the slice's **last** element
-    /// ends up at the very front.
-    ///
-    /// This is the front-facing analogue of
-    /// [`TryExtendFromSlice::try_extend_from_slice`]. Because prepending is
-    /// specific to deque semantics, it is an inherent method rather than a
-    /// trait impl.
-    ///
-    /// Capacity is reserved for the entire slice up front so that a mid-way
-    /// clone failure does not leave the deque in a partially-grown state. On
-    /// failure the error carries the unconsumed tail of `other` (starting at
-    /// the first element whose clone failed) so the caller can retry once
-    /// memory pressure has eased.
-    ///
-    /// # Errors
-    ///
-    /// Returns `(&'s [T], TryVecDequeWithCloneError)` if reserving capacity or
-    /// cloning an element fails. The returned slice is the remainder beginning
-    /// at the first failed element.
-    pub fn try_extend_front_from_slice<'s>(
-        &mut self,
-        other: &'s [T],
-    ) -> Result<(), (&'s [T], TryVecDequeWithCloneError)>
-    where
-        T: TryClone,
-    {
-        if other.is_empty() {
-            return Ok(());
-        }
-        self.try_reserve(other.len())
-            .map_err(|e| (other, TryVecDequeWithCloneError::Reserve(e)))?;
-        // Each element is cloned and prepended as we walk forward, so the last
-        // element ends up at the very front.
-        let mut i = 0usize;
-        for item in other {
-            match item.try_clone() {
-                Ok(cloned) => {
-                    // SAFETY: capacity was reserved above for all of `other`.
-                    unsafe { self.push_front_within_cap(cloned) };
-                    #[allow(clippy::arithmetic_side_effects, reason = "i <= other.len()")]
-                    {
-                        i += 1;
-                    }
-                }
-                Err(e) => return Err((&other[i..], TryVecDequeWithCloneError::Clone(e))),
-            }
         }
         Ok(())
     }
@@ -968,149 +863,5 @@ mod tests {
         assert_eq!(dq.get(1), Some(&7));
         assert_eq!(dq.get(2), Some(&3));
         assert_eq!(dq.get(3), Some(&4));
-    }
-
-    // --- try_extend_front_from_slice ------------------------------------------
-
-    #[test]
-    fn try_extend_front_from_slice_prepends_clones_as_they_arrive() {
-        use crate::test_helpers::CloneCounter;
-
-        struct Cloned(i32, Arc<CloneCounter>);
-        impl TryClone for Cloned {
-            fn try_clone(&self) -> Result<Self, TryCloneError> {
-                self.1.record_clone();
-                Ok(Cloned(self.0, self.1.clone()))
-            }
-        }
-        impl fmt::Debug for Cloned {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "Cloned({})", self.0)
-            }
-        }
-        impl PartialEq for Cloned {
-            fn eq(&self, other: &Self) -> bool {
-                self.0 == other.0
-            }
-        }
-
-        let counter = CloneCounter::shared();
-        let mut dq: VecDeque<Cloned> = VecDeque::new();
-        let src = [
-            Cloned(1, counter.clone()),
-            Cloned(2, counter.clone()),
-            Cloned(3, counter.clone()),
-        ];
-        dq.try_extend_front_from_slice(&src)
-            .expect("extend front ok");
-        assert_eq!(dq.len(), 3);
-        assert_eq!(counter.get(), 3);
-        // Each clone prepended as it arrives → last element (3) at the front.
-        assert_eq!(dq.get(0), Some(&Cloned(3, counter.clone())));
-        assert_eq!(dq.get(1), Some(&Cloned(2, counter.clone())));
-        assert_eq!(dq.get(2), Some(&Cloned(1, counter.clone())));
-    }
-
-    #[test]
-    fn try_extend_front_from_slice_empty_is_noop() {
-        let mut dq: VecDeque<i32> = VecDeque::new();
-        dq.try_push_back(5).unwrap();
-        dq.try_extend_front_from_slice(&[])
-            .expect("extend front ok");
-        assert_eq!(dq.len(), 1);
-        assert_eq!(dq.front(), Some(&5));
-    }
-
-    #[test]
-    fn try_extend_front_from_slice_reserve_failure_returns_whole_slice() {
-        let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let src = [1, 2, 3];
-        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
-            Ok(_) => panic!("expected allocation failure"),
-            Err(pair) => pair,
-        };
-        assert!(matches!(err, TryVecDequeWithCloneError::Reserve(_)));
-        // On a reserve failure nothing was consumed, so the whole slice comes
-        // back.
-        assert_eq!(rest, &src[..]);
-        assert!(dq.is_empty());
-    }
-
-    #[test]
-    fn try_extend_front_from_slice_clone_failure_returns_tail_residual() {
-        // Forward iteration: src[0] clones fine and is prepended, then src[1]
-        // fails (count=1... wait, need to design carefully).
-        // src[0]: count=0, threshold=2 → clones to count=1 ✓ (prepended)
-        // src[1]: count=1, threshold=1 → count >= threshold → ✗
-        // src[2]: never reached
-        let mut dq: VecDeque<FlakyClone> = VecDeque::new();
-        let src = [
-            FlakyClone {
-                count: 0,
-                threshold: 2,
-            }, // ✓ clones to count=1
-            FlakyClone {
-                count: 1,
-                threshold: 1,
-            }, // ✗ count >= threshold
-            FlakyClone {
-                count: 0,
-                threshold: 5,
-            }, // not reached
-        ];
-        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
-            Ok(_) => panic!("expected clone failure"),
-            Err(pair) => pair,
-        };
-        assert!(matches!(
-            err,
-            TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))
-        ));
-        // Residual starts at the first failed element (index 1).
-        assert_eq!(rest.len(), 2);
-        assert_eq!(rest[0].count, 1);
-        assert_eq!(rest[1].count, 0);
-        // The one successful clone was committed at the front.
-        assert_eq!(dq.len(), 1);
-        assert_eq!(dq.get(0).unwrap().count, 1);
-    }
-
-    #[test]
-    fn try_extend_front_from_slice_last_element_fails() {
-        // All but the last element clone fine; the last one fails.
-        // src[0]: count=0, threshold=3 → ✓ (count→1)
-        // src[1]: count=0, threshold=3 → ✓ (count→1)
-        // src[2]: count=3, threshold=3 → ✗
-        let mut dq: VecDeque<FlakyClone> = VecDeque::new();
-        let src = [
-            FlakyClone {
-                count: 0,
-                threshold: 3,
-            }, // ✓
-            FlakyClone {
-                count: 0,
-                threshold: 3,
-            }, // ✓
-            FlakyClone {
-                count: 3,
-                threshold: 3,
-            }, // ✗
-        ];
-        let (rest, err) = match dq.try_extend_front_from_slice(&src) {
-            Ok(_) => panic!("expected clone failure"),
-            Err(pair) => pair,
-        };
-        assert!(matches!(
-            err,
-            TryVecDequeWithCloneError::Clone(TryCloneError::Other(_))
-        ));
-        // Residual is just the failing last element.
-        assert_eq!(rest.len(), 1);
-        assert_eq!(rest[0].count, 3);
-        // Two clones were committed, each prepended as it arrived:
-        // src[0] pushed first, then src[1] on top → [clone(src[1]), clone(src[0])].
-        assert_eq!(dq.len(), 2);
-        assert_eq!(dq.get(0).unwrap().count, 1);
-        assert_eq!(dq.get(1).unwrap().count, 1);
     }
 }

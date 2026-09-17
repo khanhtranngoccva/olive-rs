@@ -8,7 +8,7 @@
 //! - [`boxed`] — fallible `Box`.
 //! - [`vec`] — fallible `Vec`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
-//! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap`.
+//! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap` and `VecDeque`.
 //! - [`rc`] / [`sync::Arc`] — reference-counted pointers with fallible construction.
 //!
 //! TBA: these items are still being landed.

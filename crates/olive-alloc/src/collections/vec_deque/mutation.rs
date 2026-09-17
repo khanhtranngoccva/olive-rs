@@ -1114,6 +1114,38 @@ impl<T, A: Allocator> Drop for TruncateBackGuard<T, A> {
     }
 }
 
+/// Trims a deque back to a recorded length from the front if dropped without
+/// being defused.
+///
+/// Created via [`VecDeque::truncate_front_guard`]. Intended for fallible
+/// front-mutating operations that push elements one at a time and must roll
+/// back atomically on a mid-operation failure: on drop it keeps only the last
+/// `len` elements, discarding whatever was pushed to the front after the guard
+/// was created. Defuse with [`core::mem::forget`] on success.
+///
+/// # Safety contract
+///
+/// The caller must ensure the deque outlives the guard (i.e., the guard is a
+/// local variable in the same function that holds `&mut self`). This is
+/// guaranteed by construction when using [`VecDeque::truncate_front_guard`].
+// Retained as reusable rollback scaffolding for future fallible
+// front-mutating operations; no committed consumer yet.
+#[allow(dead_code)]
+pub(super) struct TruncateFrontGuard<T, A: Allocator> {
+    ptr: *mut VecDeque<T, A>,
+    len: usize,
+}
+
+impl<T, A: Allocator> Drop for TruncateFrontGuard<T, A> {
+    fn drop(&mut self) {
+        // SAFETY: the pointer was obtained from a valid `&mut VecDeque` at guard
+        // construction time; the deque is alive for the entire scope (the guard
+        // is a local that drops before the enclosing function returns).
+        let dq_ref = unsafe { &mut *self.ptr };
+        dq_ref.retain_back(self.len);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Removal (never allocates)
 // ---------------------------------------------------------------------------
@@ -1416,6 +1448,28 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
     }
 
+    /// Creates a [`TruncateFrontGuard`] pinned at the deque's current length.
+    ///
+    /// If the guard is dropped without being defused via
+    /// [`core::mem::forget`], the deque is trimmed from the front back to the
+    /// recorded length (via [`Self::retain_back`]), undoing any elements
+    /// prepended after the guard was created. This provides atomic all-or-nothing
+    /// semantics for fallible bulk-prepend operations.
+    ///
+    /// # Safety
+    /// The caller must ensure the deque outlives the guard
+    /// (guaranteed when the guard is a local in the same function).
+    // Retained as reusable rollback scaffolding for future fallible
+    // front-mutating operations; no committed caller yet.
+    #[allow(unused)]
+    #[inline]
+    pub(super) unsafe fn truncate_front_guard(&mut self) -> TruncateFrontGuard<T, A> {
+        TruncateFrontGuard {
+            ptr: &raw mut *self,
+            len: self.len,
+        }
+    }
+
     /// Shortens the deque, keeping only the first `new_len` elements and
     /// dropping the rest. If `new_len` is greater than or equal to the current
     /// length, nothing happens.
@@ -1443,6 +1497,74 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // dropped tail and cannot double-free it. (A second panic during unwind
         // aborts, per Rust's rules.)
         self.len = new_len;
+        // Panic guard for the second run: if dropping the first run panics,
+        // this guard ensures the second run is still cleaned up during unwind
+        // rather than leaked. On the happy path the guard simply drops `b`
+        // when it goes out of scope after `a` has been dropped.
+        struct SecondRunGuard<'a, T> {
+            ptr: *mut [T],
+            _marker: core::marker::PhantomData<&'a mut [T]>,
+        }
+        impl<T> Drop for SecondRunGuard<'_, T> {
+            fn drop(&mut self) {
+                // SAFETY: the pointer was built from `buffer_range` over
+                // initialized, in-bounds slots and has not been consumed yet.
+                unsafe { ptr::drop_in_place(&mut *self.ptr) };
+            }
+        }
+        let _guard = SecondRunGuard {
+            ptr: b_slice,
+            _marker: core::marker::PhantomData,
+        };
+        // SAFETY: `a_slice` covers disjoint, fully-initialized slots; dropping
+        // it as a fat slice runs every element's destructor exactly once.
+        unsafe { ptr::drop_in_place(&mut *a_slice) };
+        // If we reach here, dropping `a` did not panic. The guard will drop
+        // `b` when `_guard` goes out of scope below.
+    }
+
+    /// Shortens the deque from the front, keeping only the last `keep` elements
+    /// and dropping the rest. This is the front-facing analogue of
+    /// [`Self::truncate`], which keeps the first `new_len` elements.
+    ///
+    /// If `keep` is greater than or equal to the current length, nothing
+    /// happens. Trimming never allocates, so this cannot fail.
+    pub fn retain_back(&mut self, keep: usize) {
+        // Keeping at least everything we have is a no-op (mirrors `truncate`).
+        if keep >= self.len {
+            return;
+        }
+        // Dropping *everything* is handled by `clear()`. It would otherwise hit
+        // `removed == capacity` on a full deque, which violates `wrap_add`'s
+        // precondition (`addend < cap || addend == 0`) — technically UB even
+        // though it happens to wrap back to the same index. Delegate to the
+        // established all-drop path instead.
+        if keep == 0 {
+            self.clear();
+            return;
+        }
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted 0 < keep < self.len")]
+        let removed = self.len - keep;
+        // Resolve the logical front range `[0..removed)` into one or two
+        // contiguous physical runs *before* mutating anything. The range lies
+        // entirely within `[0..self.len)`, so it is always resolvable.
+        let (a_range, b_range) = self
+            .try_slice_ranges(0..removed, self.len)
+            .expect("front range is resolvable");
+        // Build raw fat-slice pointers for both runs while `head` still points
+        // at the original front.
+        // SAFETY: `try_slice_ranges` returns valid ranges into the physical
+        // buffer over initialized elements.
+        let a_slice = unsafe { self.buffer_range(a_range) };
+        let b_slice = unsafe { self.buffer_range(b_range) };
+        // Advance `head` past the trimmed run and shrink the length *before*
+        // running destructors so that, if a destructor panics, unwinding sees a
+        // length that already excludes the dropped front and cannot double-free
+        // it. (A second panic during unwind aborts, per Rust's rules.)
+        // SAFETY: `removed < len <= capacity`, so advancing `head` by
+        // `removed` stays within bounds.
+        self.head = unsafe { self.wrap_add(self.head, removed) };
+        self.len = keep;
         // Panic guard for the second run: if dropping the first run panics,
         // this guard ensures the second run is still cleaned up during unwind
         // rather than leaked. On the happy path the guard simply drops `b`
@@ -1513,7 +1635,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // Stage 1: All values are retained.
         #[allow(clippy::arithmetic_side_effects, reason = "idx <= cur < len")]
         while cur < len {
-            if !f(self.get_mut(cur).expect("item at current index should be retrievable")) {
+            if !f(self
+                .get_mut(cur)
+                .expect("item at current index should be retrievable"))
+            {
                 cur += 1;
                 break;
             }
@@ -1523,12 +1648,16 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // Stage 2: Swap retained value into current idx.
         #[allow(clippy::arithmetic_side_effects, reason = "idx <= cur < len")]
         while cur < len {
-            if !f(self.get_mut(cur).expect("item at current index should be retrievable")) {
+            if !f(self
+                .get_mut(cur)
+                .expect("item at current index should be retrievable"))
+            {
                 cur += 1;
                 continue;
             }
 
-            self.try_swap(idx, cur).expect("failed to swap in-index elements");
+            self.try_swap(idx, cur)
+                .expect("failed to swap in-index elements");
             cur += 1;
             idx += 1;
         }
@@ -2300,7 +2429,7 @@ mod tests {
         assert!(dq.is_empty());
     }
 
-    // --- truncate / clear -------------------------------------------------------
+    // --- truncate / clear / retain_back -----------------------------------------
 
     #[test]
     fn truncate_to_zero_clears() {
@@ -2411,6 +2540,99 @@ mod tests {
         assert!(dq.is_empty());
     }
 
+    /// Keeping at least everything present is a no-op: length and contents are
+    /// unchanged.
+    #[test]
+    fn retain_back_keep_ge_len_is_noop() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for i in 1..=3 {
+            dq.try_push_back(i).unwrap();
+        }
+        let cap_before = dq.capacity();
+        dq.retain_back(3); // keep == len
+        assert_eq!(dq.len(), 3);
+        assert_eq!(dq.capacity(), cap_before);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        dq.retain_back(10); // keep > len
+        assert_eq!(dq.len(), 3);
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    /// A normal trim drops the front elements and keeps the last `keep`,
+    /// preserving their relative order.
+    #[test]
+    fn retain_back_keeps_the_tail() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for i in 1..=5 {
+            dq.try_push_back(i).unwrap();
+        }
+        dq.retain_back(2);
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([4, 5]));
+    }
+
+    /// Trimming down to zero empties the deque while leaving capacity intact.
+    #[test]
+    fn retain_back_zero_empties_but_keeps_capacity() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for i in 1..=4 {
+            dq.try_push_back(i).unwrap();
+        }
+        let cap_before = dq.capacity();
+        dq.retain_back(0);
+        assert!(dq.is_empty());
+        assert_eq!(dq.capacity(), cap_before);
+    }
+
+    /// When the logical run spans the wrap point (elements live in both
+    /// physical halves), trimming across that boundary still drops exactly the
+    /// first `len - keep` elements. We force a wrap by filling the buffer, then
+    /// popping from the front so `head` advances past the midpoint.
+    #[test]
+    fn retain_back_across_wrap_point() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        // Fill to capacity so the buffer wraps logically.
+        for i in 1..=4 {
+            dq.try_push_back(i).unwrap();
+        }
+        // Pop two from the front: head now sits mid-buffer, so a fresh fill
+        // will occupy the tail half then wrap around to the head half.
+        dq.pop_front().unwrap();
+        dq.pop_front().unwrap();
+        dq.try_push_back(5).unwrap();
+        dq.try_push_back(6).unwrap();
+        // Logical order is now [3, 4, 5, 6], physically split across the wrap.
+        assert_eq!(dq.get(0), Some(&3));
+        assert_eq!(dq.get(3), Some(&6));
+        // Trim off the first three; only 6 remains. The dropped run [3,4,5]
+        // crosses the physical boundary.
+        dq.retain_back(1);
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.get(0), Some(&6));
+    }
+
+    /// Regression test for a former UB path: `retain_back(0)` on a *full* deque
+    /// makes `removed == capacity`, which violates `wrap_add`'s precondition
+    /// (`addend < cap || addend == 0`). It must route through `clear()` instead
+    /// of advancing `head` by a full buffer.
+    #[test]
+    fn retain_back_zero_on_full_deque_is_safe() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        // Fill exactly to capacity so that removed (== len) equals capacity.
+        for i in 1..=4 {
+            dq.try_push_back(i).unwrap();
+        }
+        assert_eq!(dq.len(), dq.capacity());
+        let cap_before = dq.capacity();
+        dq.retain_back(0);
+        assert!(dq.is_empty());
+        assert_eq!(dq.len(), 0);
+        // Capacity is preserved, and the deque remains usable afterward.
+        assert_eq!(dq.capacity(), cap_before);
+        dq.try_push_back(9).unwrap();
+        assert_eq!(dq.get(0), Some(&9));
+    }
+
     // --- destructor accounting --------------------------------------------------
 
     use crate::test_helpers::DropCounter;
@@ -2486,6 +2708,51 @@ mod tests {
         drop(dq);
         // Nothing left to drop.
         assert_eq!(counter.get(), 5);
+    }
+
+    #[test]
+    // FIXME: Use a ledger
+    fn retain_back_drops_only_the_trimmed_front() {
+        let counter = Arc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
+        for i in 0..5u32 {
+            assert_eq!(
+                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
+                Ok(())
+            );
+        }
+        assert_eq!(counter.get(), 0);
+        // Keep the last two; the first three (indices 0, 1, 2) are dropped.
+        dq.retain_back(2);
+        assert_eq!(counter.get(), 3);
+        assert_eq!(dq.len(), 2);
+        drop(dq);
+        // The two survivors drop on final cleanup -> total five.
+        assert_eq!(counter.get(), 5);
+    }
+
+    #[test]
+    // FIXME: Use a ledger
+    fn retain_back_zero_on_full_deque_drops_everything_once() {
+        let counter = Arc::new(DropCounter::new());
+        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(4).expect("allocation ok");
+        // Fill exactly to capacity so removed == len == capacity — the former
+        // UB path now routed through clear().
+        for i in 0..4u32 {
+            assert_eq!(
+                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
+                Ok(())
+            );
+        }
+        assert_eq!(dq.len(), dq.capacity());
+        assert_eq!(counter.get(), 0);
+        dq.retain_back(0);
+        // Every element dropped exactly once by the operation itself.
+        assert_eq!(counter.get(), 4);
+        assert!(dq.is_empty());
+        drop(dq);
+        // Nothing left to drop.
+        assert_eq!(counter.get(), 4);
     }
 
     // --- try_remove -----------------------------------------------------------

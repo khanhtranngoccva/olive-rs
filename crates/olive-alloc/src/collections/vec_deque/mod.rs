@@ -20,6 +20,11 @@ mod query;
 mod traits;
 mod wrapped_index;
 
+use core::fmt;
+
+use olive_core::alloc_errors::TryReserveError;
+use olive_core::try_traits::try_clone::TryCloneError;
+
 use crate::alloc::{Allocator, Global};
 use crate::collections::vec_deque::wrapped_index::WrappedIndex;
 use crate::raw_vec::RawVec;
@@ -31,7 +36,65 @@ pub use mutation::{
     TryVecDequeInsertWithinCapacityError, TryVecDequePushWithinCapacityError,
     TryVecDequeRemoveError, TryVecDequeSwapError,
 };
-pub use traits::TryVecDequeWithCloneError;
+
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Error returned by fallible deque operations that may both reserve capacity
+/// and clone elements.
+///
+/// Covers [`TryClone`](olive_core::try_traits::TryClone) on [`VecDeque`] — 
+/// any operation whose failure modes are limited to a capacity reservation 
+/// ([`TryReserveError`]) or an element clone failure ([`TryCloneError`]). 
+/// Mirrors `Vec`'s `TryVecWithCloneError`.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryVecDequeWithCloneError {
+    /// A capacity reservation on the deque failed (overflow or OOM).
+    Reserve(TryReserveError),
+    /// An element clone failed during a method that requires [`TryClone`].
+    Clone(TryCloneError),
+}
+
+impl fmt::Debug for TryVecDequeWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reserve(e) => f
+                .debug_tuple("TryVecDequeWithCloneError::Reserve")
+                .field(e)
+                .finish(),
+            Self::Clone(e) => f
+                .debug_tuple("TryVecDequeWithCloneError::Clone")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryVecDequeWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reserve(e) => write!(f, "deque operation failed: {e}"),
+            Self::Clone(e) => write!(f, "deque operation failed: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryVecDequeWithCloneError {}
+
+impl From<TryReserveError> for TryVecDequeWithCloneError {
+    #[inline]
+    fn from(err: TryReserveError) -> Self {
+        Self::Reserve(err)
+    }
+}
+
+impl From<TryCloneError> for TryVecDequeWithCloneError {
+    #[inline]
+    fn from(err: TryCloneError) -> Self {
+        Self::Clone(err)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // VecDeque

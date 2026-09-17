@@ -6,6 +6,7 @@
 //! hands the uninserted value back to the caller on failure, mirroring the
 //! convention established by `Vec::try_push_give_back`.
 
+use super::TryVecDequeWithCloneError;
 use super::VecDeque;
 use super::wrapped_index::WrappedIndex;
 use core::mem::size_of;
@@ -762,16 +763,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// Returns [`super::TryVecDequeWithCloneError`] on a reservation or
     /// clone failure. On a mid-loop clone failure the deque is rolled back to
     /// its original length so no partially-produced elements remain.
-    // FIXME: Make TryVecDequeWithCloneError be in the common file
-    pub fn try_resize(
-        &mut self,
-        new_len: usize,
-        value: &T,
-    ) -> Result<(), super::traits::TryVecDequeWithCloneError>
+    pub fn try_resize(&mut self, new_len: usize, value: &T) -> Result<(), TryVecDequeWithCloneError>
     where
         T: TryClone,
     {
-        use super::traits::TryVecDequeWithCloneError;
         let current = self.len;
         if new_len <= current {
             self.truncate(new_len);
@@ -855,7 +850,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::collections::vec_deque::traits::TryVecDequeWithCloneError;
+    use crate::collections::vec_deque::TryVecDequeWithCloneError;
     use crate::test_helpers::{BudgetedAlloc, FailAlloc};
     use core::mem::size_of;
     use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -2047,7 +2042,7 @@ mod tests {
         }
     }
 
-    /// If a destructor in the rolled-back tail panics during `try_resize`'s 
+    /// If a destructor in the rolled-back tail panics during `try_resize`'s
     /// truncation, no element may be double-freed or leaked.
     #[test]
     fn try_resize_rollback_panicking_drop_is_safe() {
