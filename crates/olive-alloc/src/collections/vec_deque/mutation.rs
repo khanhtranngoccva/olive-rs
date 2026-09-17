@@ -1676,6 +1676,8 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use crate::collections::vec_deque::VecDeque;
+    use crate::test_helpers::DropCounter;
+    use std::sync::Arc;
 
     /// Concatenate the two halves of a deque into a single owned array-backed
     /// slice for comparison. Returns `None` if the combined length exceeds
@@ -1900,19 +1902,26 @@ mod tests {
         assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
     }
 
+    /// A minimal drop-counting payload for tests that only need an aggregate
+    /// count (not per-id tracking). See [`crate::test_helpers::Ledger`] for the
+    /// per-id variant used by the destructor-accounting tests below.
+    struct Tracked(Arc<DropCounter>);
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.0.record_drop();
+        }
+    }
+
     #[test]
     fn push_back_mut_within_capacity_drops_value_on_plain_failure() {
-        use crate::test_helpers::DropCounter;
-        use std::sync::Arc;
-
         let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
         assert_eq!(
-            dq.try_push_back_within_capacity(Tracked(0, counter.clone())),
+            dq.try_push_back_within_capacity(Tracked(counter.clone())),
             Ok(())
         );
         // Buffer is full; the plain (non-give-back) variant drops the rejected value.
-        let err = match dq.try_push_back_mut_within_capacity(Tracked(99, counter.clone())) {
+        let err = match dq.try_push_back_mut_within_capacity(Tracked(counter.clone())) {
             Err(e) => e,
             Ok(_) => panic!("expected full-buffer error"),
         };
@@ -1922,17 +1931,14 @@ mod tests {
 
     #[test]
     fn push_front_mut_within_capacity_drops_value_on_plain_failure() {
-        use crate::test_helpers::DropCounter;
-        use std::sync::Arc;
-
         let counter = Arc::new(DropCounter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
         assert_eq!(
-            dq.try_push_back_within_capacity(Tracked(0, counter.clone())),
+            dq.try_push_back_within_capacity(Tracked(counter.clone())),
             Ok(())
         );
         // Buffer is full; the plain (non-give-back) variant drops the rejected value.
-        let err = match dq.try_push_front_mut_within_capacity(Tracked(99, counter.clone())) {
+        let err = match dq.try_push_front_mut_within_capacity(Tracked(counter.clone())) {
             Err(e) => e,
             Ok(_) => panic!("expected full-buffer error"),
         };
@@ -2635,124 +2641,114 @@ mod tests {
 
     // --- destructor accounting --------------------------------------------------
 
-    use crate::test_helpers::DropCounter;
-    use std::sync::Arc;
+    use crate::test_helpers::{Ledger, TrackedItem};
 
-    #[allow(dead_code)]
-    struct Tracked(u32, Arc<DropCounter>);
-    impl Drop for Tracked {
-        fn drop(&mut self) {
-            self.1.record_drop();
+    /// Seeds a deque with `count` tracked items (ids `0..count`) sharing
+    /// `ledger`, returning the filled deque. Each id is registered live before
+    /// insertion, matching [`TrackedItem`]'s construction contract.
+    fn seed_tracked(count: u32, ledger: &Arc<Ledger>) -> VecDeque<TrackedItem<()>> {
+        let mut dq: VecDeque<TrackedItem<()>> =
+            VecDeque::try_with_capacity((count as usize).max(4)).expect("allocation ok");
+        for i in 0..count {
+            ledger.register(i);
+            assert_eq!(
+                dq.try_push_back_within_capacity(TrackedItem {
+                    id: i,
+                    ledger: ledger.clone(),
+                    inner: (),
+                }),
+                Ok(())
+            );
         }
+        dq
     }
 
     #[test]
-    // FIXME: Use a ledger
     fn pop_drops_removed_element_exactly_once() {
-        let counter = Arc::new(DropCounter::new());
-        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
-        for i in 0..4u32 {
-            assert_eq!(
-                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
-                Ok(())
-            );
-        }
-        assert_eq!(counter.get(), 0);
-        assert_eq!(dq.pop_back().map(|t| t.0), Some(3));
-        assert_eq!(counter.get(), 1);
-        assert_eq!(dq.pop_front().map(|t| t.0), Some(0));
-        assert_eq!(counter.get(), 2);
-        // Two survivors remain in the deque.
+        let ledger = Arc::new(Ledger::new());
+        let mut dq = seed_tracked(4, &ledger);
+        assert_eq!(ledger.live_ids(), std::vec![0, 1, 2, 3]);
+        assert_eq!(dq.pop_back().map(|t| t.id), Some(3));
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(dq.pop_front().map(|t| t.id), Some(0));
+        assert_eq!(ledger.drop_count(0), 1);
+        // Two survivors remain in the deque; nothing double-dropped yet.
         assert_eq!(dq.len(), 2);
+        assert_eq!(ledger.live_ids(), std::vec![1, 2]);
+        assert!(ledger.double_dropped().is_empty());
         drop(dq);
-        // Total of four drops: every element exactly once.
-        assert_eq!(counter.get(), 4);
+        // Every element dropped exactly once; nothing leaked or doubled.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4u32));
     }
 
     #[test]
-    // FIXME: Use a ledger
     fn truncate_drops_only_the_removed_tail() {
-        let counter = Arc::new(DropCounter::new());
-        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
-        for i in 0..5u32 {
-            assert_eq!(
-                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
-                Ok(())
-            );
-        }
-        assert_eq!(counter.get(), 0);
+        let ledger = Arc::new(Ledger::new());
+        let mut dq = seed_tracked(5, &ledger);
         dq.truncate(2);
-        // Exactly three elements (indices 2, 3, 4) were dropped.
-        assert_eq!(counter.get(), 3);
+        // Exactly the tail (ids 2, 3, 4) was dropped; the front survives.
+        assert_eq!(ledger.drop_count(2), 1);
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        assert_eq!(ledger.live_ids(), std::vec![0, 1]);
         assert_eq!(dq.len(), 2);
         drop(dq);
-        // Two more survivors drop on final cleanup -> total five.
-        assert_eq!(counter.get(), 5);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5u32));
     }
 
     #[test]
-    // FIXME: Use a ledger
     fn clear_drops_everything() {
-        let counter = Arc::new(DropCounter::new());
-        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
-        for i in 0..5u32 {
-            assert_eq!(
-                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
-                Ok(())
-            );
-        }
-        assert_eq!(counter.get(), 0);
+        let ledger = Arc::new(Ledger::new());
+        let mut dq = seed_tracked(5, &ledger);
         dq.clear();
-        assert_eq!(counter.get(), 5);
+        // All five dropped immediately by clear(); nothing still live.
+        assert!(ledger.live_ids().is_empty());
         assert!(dq.is_empty());
+        assert!(ledger.double_dropped().is_empty());
         drop(dq);
-        // Nothing left to drop.
-        assert_eq!(counter.get(), 5);
+        // Nothing left to drop; no leaks, no double-frees.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5u32));
     }
 
     #[test]
-    // FIXME: Use a ledger
     fn retain_back_drops_only_the_trimmed_front() {
-        let counter = Arc::new(DropCounter::new());
-        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(8).expect("allocation ok");
-        for i in 0..5u32 {
-            assert_eq!(
-                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
-                Ok(())
-            );
-        }
-        assert_eq!(counter.get(), 0);
-        // Keep the last two; the first three (indices 0, 1, 2) are dropped.
+        let ledger = Arc::new(Ledger::new());
+        let mut dq = seed_tracked(5, &ledger);
+        // Keep the last two; the first three (ids 0, 1, 2) are dropped.
         dq.retain_back(2);
-        assert_eq!(counter.get(), 3);
+        assert_eq!(ledger.drop_count(0), 1);
+        assert_eq!(ledger.drop_count(1), 1);
+        assert_eq!(ledger.drop_count(2), 1);
+        assert_eq!(ledger.live_ids(), std::vec![3, 4]);
         assert_eq!(dq.len(), 2);
         drop(dq);
-        // The two survivors drop on final cleanup -> total five.
-        assert_eq!(counter.get(), 5);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5u32));
     }
 
     #[test]
-    // FIXME: Use a ledger
     fn retain_back_zero_on_full_deque_drops_everything_once() {
-        let counter = Arc::new(DropCounter::new());
-        let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(4).expect("allocation ok");
-        // Fill exactly to capacity so removed == len == capacity — the former
-        // UB path now routed through clear().
-        for i in 0..4u32 {
-            assert_eq!(
-                dq.try_push_back_within_capacity(Tracked(i, counter.clone())),
-                Ok(())
-            );
-        }
+        let ledger = Arc::new(Ledger::new());
+        let mut dq = seed_tracked(4, &ledger);
+        // Capacity is exactly 4 here, so removed == len == capacity — the
+        // former UB path now routed through clear().
         assert_eq!(dq.len(), dq.capacity());
-        assert_eq!(counter.get(), 0);
         dq.retain_back(0);
         // Every element dropped exactly once by the operation itself.
-        assert_eq!(counter.get(), 4);
+        assert!(ledger.live_ids().is_empty());
         assert!(dq.is_empty());
+        assert!(ledger.double_dropped().is_empty());
         drop(dq);
-        // Nothing left to drop.
-        assert_eq!(counter.get(), 4);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4u32));
     }
 
     // --- try_remove -----------------------------------------------------------
