@@ -257,6 +257,16 @@ impl<T, A: Allocator> VecDeque<T, A> {
         self.len == 0
     }
 
+    /// Returns a reference to the allocator this deque uses.
+    ///
+    /// Useful for building further polyfilled collections on the same
+    /// allocator, or for inspecting which allocator a deque was constructed
+    /// with.
+    #[inline]
+    pub const fn allocator(&self) -> &A {
+        self.buf.allocator()
+    }
+
     /// Provides a reference to the front element, or `None` if the deque is
     /// empty.
     pub fn front(&self) -> Option<&T> {

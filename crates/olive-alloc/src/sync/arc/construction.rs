@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn try_new_in_with_custom_allocator() {
         let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(7i64, alloc).unwrap();
         assert_eq!(*arc, 7);
         assert_eq!(Arc::strong_count(&arc), 1);
@@ -447,7 +447,7 @@ mod tests {
         // the given allocator handle — which we observe being dropped exactly
         // once when the `Weak` itself is dropped.
         let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
         let w: Weak<u64, _> = Weak::new_in(alloc);
         assert!(is_dangling_weak(w.ptr.as_ptr()));
         assert!(w.inner().is_none());

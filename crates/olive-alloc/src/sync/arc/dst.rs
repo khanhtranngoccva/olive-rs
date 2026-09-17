@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn try_from_slice_in_custom_allocator_drops_handle_once() {
         let drops = StdArc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
         let arr = [9u8, 8, 7];
         let arc = Arc::try_from_slice_in(&arr[..], alloc).unwrap();
         assert_eq!(&*arc, &[9, 8, 7]);

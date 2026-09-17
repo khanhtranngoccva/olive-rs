@@ -28,7 +28,7 @@ For any container or iterator you touch, the tests should cover:
   [`test_helpers.rs`](../crates/olive-alloc/src/test_helpers.rs): `FailAlloc` to
   force every allocation to fail, `FlakyClone` / `BudgetedFlaky` to place a
   `try_clone` failure at a deterministic point inside a long operation, and
-  `LocalCountingAlloc` to watch the allocator instance itself. Failure-in-the-middle
+  `DropCountingAlloc` to watch the allocator instance itself. Failure-in-the-middle
   of an operation is where leaks and double-frees live.
 - **Panic safety.** Where a guard seals the object against a closure panic
   (e.g. `RetainGuard`), arm a `PanicArmer`, trigger the panic mid-operation, and

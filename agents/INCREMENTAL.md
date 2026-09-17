@@ -76,7 +76,7 @@ In practice this phase delivers:
   `Drop` relies on).
 - Tests proving `Drop` behaves correctly under the invariants — no leak, no
   double-free, correct deallocation layout — using the harness described in
-  [`TESTING.md`](./TESTING.md) (`Ledger`, `LocalCountingAlloc`, `FailAlloc`).
+  [`TESTING.md`](./TESTING.md) (`Ledger`, `DropCountingAlloc`, `FailAlloc`).
 
 **Note gaps explicitly.** At this stage other methods are not implemented yet, so
 `Drop` testing necessarily has *insufficient variant coverage* — one cannot reach

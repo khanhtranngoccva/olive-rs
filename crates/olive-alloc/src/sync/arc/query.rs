@@ -231,12 +231,12 @@ mod tests {
     #[test]
     fn allocator_returns_backing_handle() {
         let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(1i32, alloc).unwrap();
         // The returned reference must alias the exact handle stored inside the
         // Arc: reading a field through it observes the same state as the
         // original (here: the shared drop counter is still alive).
-        let got: &crate::test_helpers::LocalCountingAlloc = Arc::allocator(&arc);
+        let got: &crate::test_helpers::DropCountingAlloc = Arc::allocator(&arc);
         let _ = std::format!("{got:?}");
         assert_eq!(drops.get(), 0);
         drop(arc);
@@ -316,9 +316,9 @@ mod tests {
     fn weak_allocator_returns_backing_handle() {
         // The returned reference aliases the exact handle stored inside the Weak.
         let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::LocalCountingAlloc::new(drops.clone());
+        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
         let w: Weak<u64, _> = Weak::new_in(alloc);
-        let got: &crate::test_helpers::LocalCountingAlloc = w.allocator();
+        let got: &crate::test_helpers::DropCountingAlloc = w.allocator();
         let _ = std::format!("{got:?}");
         assert_eq!(drops.get(), 0);
         drop(w);

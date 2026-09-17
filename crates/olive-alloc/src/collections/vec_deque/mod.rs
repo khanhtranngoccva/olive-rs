@@ -12,6 +12,7 @@
 
 mod allocation;
 mod construction;
+mod convert;
 mod drain;
 mod into_iter;
 mod iter;

@@ -133,7 +133,7 @@ colocated tests. Notes on deviations from this plan:
   and the test allocators all implement `TryDefault` without failure), but a
   failing allocator default propagates as an error.
 - Tests cover: empty/unallocated state of `new`/`new_in`, allocator-handle
-  drop-exactly-once via `LocalCountingAlloc`, zero-capacity no-allocation, ZST
+  drop-exactly-once via `DropCountingAlloc`, zero-capacity no-allocation, ZST
   capacity (`usize::MAX`) without allocation, overflow →
   `CapacityOverflow`, OOM → AllocError-kind error via `FailAlloc`, and
   global-vs-generic agreement. No `TODO(deque-step-N)` markers were needed:
@@ -276,7 +276,7 @@ until then, test with empty/ZST deques), Miri run.
 
 - Use `Ledger` + `FlakyTrackedItem` for drop-invariant verification.
 - Use `FailAlloc` for OOM paths.
-- Use `LocalCountingAlloc` to verify the allocator is dropped exactly once.
+- Use `DropCountingAlloc` to verify the allocator is dropped exactly once.
 - Wrap panic-prone operations in `catch_unwind` + `AssertUnwindSafe` and assert
   ledger consistency afterwards.
 - Run under Miri for any step involving raw pointer manipulation.

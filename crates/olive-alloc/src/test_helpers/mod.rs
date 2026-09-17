@@ -150,11 +150,11 @@ impl TryClone for CloneBudget {
 /// out. Delegates all memory operations to `Global`. Per-test isolation via the
 /// `Arc` shared with the test body.
 #[derive(Debug, Clone)]
-pub struct LocalCountingAlloc {
+pub struct DropCountingAlloc {
     drops: Arc<DropCounter>,
 }
 
-impl LocalCountingAlloc {
+impl DropCountingAlloc {
     /// Builds a counting allocator sharing one drop counter with the test.
     pub fn new(drops: Arc<DropCounter>) -> Self {
         Self { drops }
@@ -162,7 +162,7 @@ impl LocalCountingAlloc {
 }
 
 // SAFETY: delegates all operations to `Global`; no additional invariants.
-unsafe impl Allocator for LocalCountingAlloc {
+unsafe impl Allocator for DropCountingAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         crate::alloc::Global.allocate(layout)
     }
@@ -172,13 +172,13 @@ unsafe impl Allocator for LocalCountingAlloc {
     }
 }
 
-impl Drop for LocalCountingAlloc {
+impl Drop for DropCountingAlloc {
     fn drop(&mut self) {
         self.drops.record_drop();
     }
 }
 
-impl TryClone for LocalCountingAlloc {
+impl TryClone for DropCountingAlloc {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         // Cloning an `Arc` never fails in this framework's test harness.
         Ok(Self {
@@ -190,7 +190,7 @@ impl TryClone for LocalCountingAlloc {
 // SAFETY: cloning is infallible (the shared `Arc` clone cannot fail here) and all
 // memory operations delegate to `Global`, so a cloned handle is equivalent to
 // the original.
-unsafe impl AllocatorTryClone for LocalCountingAlloc {}
+unsafe impl AllocatorTryClone for DropCountingAlloc {}
 
 /// An [`Allocator`] whose allocation forwards to `Global` but whose
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.

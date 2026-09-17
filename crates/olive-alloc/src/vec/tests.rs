@@ -15,7 +15,7 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 use super::*;
 use crate::test_helpers::{
     CloneBudget, DropCounter, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger,
-    LocalCountingAlloc, PanicArmer,
+    DropCountingAlloc, PanicArmer,
 };
 use std::format;
 use std::sync::Arc;
@@ -916,8 +916,8 @@ fn into_iter_zst_as_slice_length_matches_len() {
 #[test]
 fn into_iter_drops_allocator_exactly_once() {
     let counter = Arc::new(DropCounter::new());
-    let alloc = LocalCountingAlloc::new(counter.clone());
-    let mut v: Vec<i32, LocalCountingAlloc> = Vec::new_in(alloc);
+    let alloc = DropCountingAlloc::new(counter.clone());
+    let mut v: Vec<i32, DropCountingAlloc> = Vec::new_in(alloc);
     for i in 0..5i32 {
         v.try_push(i).unwrap();
     }
