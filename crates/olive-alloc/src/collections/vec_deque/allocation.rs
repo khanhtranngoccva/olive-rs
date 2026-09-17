@@ -12,6 +12,7 @@ use core::mem::size_of;
 use core::ptr;
 use olive_core::alloc::Allocator;
 use olive_core::alloc_errors::{TryReserveError, TryReserveErrorKind};
+use olive_core::try_traits::try_clone::TryClone;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -55,6 +56,52 @@ impl core::fmt::Display for TryVecDequeInsertError {
 }
 
 impl core::error::Error for TryVecDequeInsertError {}
+
+/// Error returned by fallible deque operations that invoke a user-supplied
+/// fallible closure, such as [`VecDeque::try_resize_with`].
+///
+/// The closure may fail with any error type `E`, and the capacity reservation
+/// itself may also fail independently. Mirrors `Vec`'s `TryVecWithClosureError`.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryVecDequeWithClosureError<E> {
+    /// A capacity reservation on the deque failed (overflow or OOM).
+    Reserve(TryReserveError),
+    /// The closure returned an error.
+    Closure(E),
+}
+
+impl<E: core::fmt::Debug> core::fmt::Debug for TryVecDequeWithClosureError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Reserve(e) => f
+                .debug_tuple("TryVecDequeWithClosureError::Reserve")
+                .field(e)
+                .finish(),
+            Self::Closure(e) => f
+                .debug_tuple("TryVecDequeWithClosureError::Closure")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for TryVecDequeWithClosureError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Reserve(e) => write!(f, "deque operation failed: {e}"),
+            Self::Closure(e) => write!(f, "deque operation failed: {e}"),
+        }
+    }
+}
+
+impl<E: core::error::Error> core::error::Error for TryVecDequeWithClosureError<E> {}
+
+impl<E> From<TryReserveError> for TryVecDequeWithClosureError<E> {
+    #[inline]
+    fn from(err: TryReserveError) -> Self {
+        Self::Reserve(err)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Reservation
@@ -700,6 +747,107 @@ impl<T, A: Allocator> VecDeque<T, A> {
 }
 
 // ---------------------------------------------------------------------------
+// Fallible resize
+// ---------------------------------------------------------------------------
+
+impl<T, A: Allocator> VecDeque<T, A> {
+    /// Resizes the deque so its length becomes `new_len`, filling any new slots
+    /// with clones of `value`.
+    ///
+    /// If `new_len` is greater than the current length, the deque is extended by
+    /// cloning `value` via [`TryClone`]. If smaller, it is truncated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`super::TryVecDequeWithCloneError`] on a reservation or
+    /// clone failure. On a mid-loop clone failure the deque is rolled back to
+    /// its original length so no partially-produced elements remain.
+    // FIXME: Make TryVecDequeWithCloneError be in the common file
+    pub fn try_resize(
+        &mut self,
+        new_len: usize,
+        value: &T,
+    ) -> Result<(), super::traits::TryVecDequeWithCloneError>
+    where
+        T: TryClone,
+    {
+        use super::traits::TryVecDequeWithCloneError;
+        let current = self.len;
+        if new_len <= current {
+            self.truncate(new_len);
+            return Ok(());
+        }
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
+        let extra = new_len - current;
+        self.try_reserve(extra)?;
+        // SAFETY: the guard is a local that drops before this function returns,
+        // so `self` outlives it.
+        let guard = unsafe { self.truncate_back_guard() };
+        for _ in 0..extra {
+            match value.try_clone() {
+                Ok(cloned) => {
+                    // SAFETY: capacity was reserved above for all `extra`.
+                    unsafe { self.push_back_within_cap(cloned) };
+                }
+                Err(e) => {
+                    return Err(TryVecDequeWithCloneError::Clone(e));
+                }
+            }
+        }
+        core::mem::forget(guard);
+        Ok(())
+    }
+
+    /// Resizes the deque so its length becomes `new_len`, producing new
+    /// elements with the fallible closure `f`.
+    ///
+    /// The closure is invoked only after capacity is secured. If it returns an
+    /// error, the deque is truncated back to its original length so no
+    /// partially-produced elements remain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecDequeWithClosureError<E>`] if either the capacity
+    /// reservation fails or the closure returns `Err(e)`.
+    pub fn try_resize_with<E, F>(
+        &mut self,
+        new_len: usize,
+        mut f: F,
+    ) -> Result<(), TryVecDequeWithClosureError<E>>
+    where
+        F: FnMut() -> Result<T, E>,
+    {
+        let current = self.len;
+        if new_len <= current {
+            self.truncate(new_len);
+            return Ok(());
+        }
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
+        let extra = new_len - current;
+        self.try_reserve(extra)
+            .map_err(TryVecDequeWithClosureError::Reserve)?;
+        // SAFETY: the guard is a local that drops before this function returns,
+        // so `self` outlives it.
+        let guard = unsafe { self.truncate_back_guard() };
+        for _ in 0..extra {
+            match f() {
+                Ok(item) => {
+                    // SAFETY: capacity was reserved above for all `extra`.
+                    unsafe { self.push_back_within_cap(item) };
+                }
+                Err(e) => {
+                    // Guard drops here and truncates back to `current`.
+                    return Err(TryVecDequeWithClosureError::Closure(e));
+                }
+            }
+        }
+        // Success: defuse the guard so it doesn't truncate the new elements.
+        core::mem::forget(guard);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -707,8 +855,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use super::*;
+    use crate::collections::vec_deque::traits::TryVecDequeWithCloneError;
     use crate::test_helpers::{BudgetedAlloc, FailAlloc};
     use core::mem::size_of;
+    use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
     /// Concatenate the two halves of a deque into a fixed-size array for
     /// comparison. Returns `None` if the combined length exceeds `N`.
@@ -1702,5 +1852,154 @@ mod tests {
         assert_eq!(a.try_prepend(&mut c), Ok(()));
         assert_eq!(a.len(), 4);
         assert!(c.is_empty());
+    }
+
+    // --- try_resize ------------------------------------------------------------
+
+    #[test]
+    fn try_resize_shrink_truncates() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_resize(3, &99), Ok(()));
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(dq.len(), 3);
+    }
+
+    #[test]
+    fn try_resize_same_length_is_noop() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_resize(3, &99), Ok(()));
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+    }
+
+    #[test]
+    fn try_resize_grow_appends_clones_within_capacity() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        assert_eq!(dq.try_push_back(2), Ok(()));
+        assert_eq!(dq.try_resize(5, &42), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([1, 2, 42, 42, 42]));
+    }
+
+    #[test]
+    fn try_resize_grow_from_empty() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        assert_eq!(dq.try_resize(4, &7), Ok(()));
+        assert_eq!(collect_into_array::<4>(&dq), Some([7, 7, 7, 7]));
+    }
+
+    #[test]
+    fn try_resize_oom_leaves_original_intact() {
+        // Budget of 1 spends on the initial allocation; any growth must fail.
+        let mut dq = VecDeque::<i32, _>::try_with_capacity_in(2, BudgetedAlloc::new(1))
+            .expect("initial allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        assert_eq!(dq.try_push_back(2), Ok(()));
+        let res = dq.try_resize(5, &9);
+        assert!(matches!(res, Err(TryVecDequeWithCloneError::Reserve(_))));
+        // Original elements survive unchanged.
+        assert_eq!(collect_any::<2, BudgetedAlloc>(&dq), Some([1, 2]));
+        assert_eq!(dq.len(), 2);
+    }
+
+    /// A value whose `try_clone` always fails, used to exercise the resize
+    /// rollback path deterministically.
+    #[derive(Debug, Clone, Copy)]
+    #[allow(unused)]
+    struct FailingClone(i32);
+
+    impl TryClone for FailingClone {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            Err(TryCloneError::Other("always fails"))
+        }
+    }
+
+    #[test]
+    fn try_resize_clone_failure_rolls_back_to_original() {
+        let mut dq: VecDeque<FailingClone> = VecDeque::new();
+        assert_eq!(dq.try_push_back(FailingClone(1)), Ok(()));
+        assert_eq!(dq.try_push_back(FailingClone(2)), Ok(()));
+        let res = dq.try_resize(5, &FailingClone(9));
+        assert!(matches!(res, Err(TryVecDequeWithCloneError::Clone(_))));
+        // Rolled back to the original length of 2.
+        assert_eq!(dq.len(), 2);
+    }
+
+    // --- try_resize_with -------------------------------------------------------
+
+    #[test]
+    fn try_resize_with_shrink_truncates_without_calling_closure() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [1, 2, 3, 4, 5] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        let mut calls = 0usize;
+        let res = dq.try_resize_with(2, || {
+            calls += 1;
+            Ok::<i32, ()>(99)
+        });
+        assert_eq!(res, Ok(()));
+        assert_eq!(calls, 0, "closure must not run when shrinking");
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn try_resize_with_grow_invokes_closure_per_slot() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let mut counter = 1i32;
+        let res = dq.try_resize_with(4, || {
+            counter += 1;
+            Ok::<i32, ()>(counter)
+        });
+        assert_eq!(res, Ok(()));
+        // New slots are filled in order: 2, 3, 4.
+        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn try_resize_with_oom_returns_reserve_error() {
+        let mut dq = VecDeque::<i32, _>::try_with_capacity_in(2, BudgetedAlloc::new(1))
+            .expect("initial allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        assert_eq!(dq.try_push_back(2), Ok(()));
+        let res = dq.try_resize_with(6, || Ok::<i32, ()>(0));
+        assert!(matches!(res, Err(TryVecDequeWithClosureError::Reserve(_))));
+        assert_eq!(collect_any::<2, BudgetedAlloc>(&dq), Some([1, 2]));
+        assert_eq!(dq.len(), 2);
+    }
+
+    #[test]
+    fn try_resize_with_closure_error_rolls_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        assert_eq!(dq.try_push_back(2), Ok(()));
+        let mut seen = 0usize;
+        let res = dq.try_resize_with(5, || {
+            seen += 1;
+            if seen == 2 {
+                Err("boom")
+            } else {
+                Ok(seen as i32)
+            }
+        });
+        assert!(matches!(res, Err(TryVecDequeWithClosureError::Closure(_))));
+        // Rolled back to the original length of 2.
+        assert_eq!(dq.len(), 2);
+        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+    }
+
+    #[test]
+    fn try_resize_zst() {
+        let mut dq: VecDeque<()> = VecDeque::new();
+        assert_eq!(dq.try_resize(3, &()), Ok(()));
+        assert_eq!(dq.len(), 3);
+        assert_eq!(dq.try_resize(1, &()), Ok(()));
+        assert_eq!(dq.len(), 1);
     }
 }

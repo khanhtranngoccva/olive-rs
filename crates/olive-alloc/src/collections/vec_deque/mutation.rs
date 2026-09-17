@@ -68,6 +68,51 @@ impl core::fmt::Display for TryVecDequeInsertWithinCapacityError {
 
 impl core::error::Error for TryVecDequeInsertWithinCapacityError {}
 
+/// Error returned by [`VecDeque::try_remove`] when the provided index is out of
+/// bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TryVecDequeRemoveError {
+    /// The index that was provided.
+    pub index: usize,
+    /// The deque's length at the time of the call.
+    pub len: usize,
+}
+
+impl core::fmt::Display for TryVecDequeRemoveError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "index {} is out of bounds, deque length is {} (index must be smaller than length)",
+            self.index, self.len
+        )
+    }
+}
+
+impl core::error::Error for TryVecDequeRemoveError {}
+
+/// Error returned by [`VecDeque::try_swap`] when either index is out of bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TryVecDequeSwapError {
+    /// The first index that was provided.
+    pub i: usize,
+    /// The second index that was provided.
+    pub j: usize,
+    /// The deque's length at the time of the call.
+    pub len: usize,
+}
+
+impl core::fmt::Display for TryVecDequeSwapError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "swap indices ({}, {}) are out of bounds, deque length is {}",
+            self.i, self.j, self.len
+        )
+    }
+}
+
+impl core::error::Error for TryVecDequeSwapError {}
+
 // ---------------------------------------------------------------------------
 // Within-capacity pushes
 // ---------------------------------------------------------------------------
@@ -306,7 +351,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
             return Err((value, TryVecDequeInsertWithinCapacityError::OutOfBounds));
         }
         if self.len >= self.capacity() {
-            return Err((value, TryVecDequeInsertWithinCapacityError::Full { len: self.len }));
+            return Err((
+                value,
+                TryVecDequeInsertWithinCapacityError::Full { len: self.len },
+            ));
         }
         // SAFETY: both preconditions upheld above.
         let ptr = unsafe { self.insert_within_cap(index, value) };
@@ -1038,6 +1086,34 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 }
 
+/// Truncates a deque back to a recorded length if dropped without being
+/// defused.
+///
+/// Created via [`VecDeque::truncate_back_guard`]. Used by atomic bulk-append
+/// operations (`try_resize`, `try_resize_with`, and future `*_with_rollback`
+/// extend variants) so that a mid-loop failure leaves no partially-appended
+/// elements behind. Defuse with [`core::mem::forget`] on success.
+///
+/// # Safety contract
+///
+/// The caller must ensure the deque outlives the guard (i.e., the guard is a
+/// local variable in the same function that holds `&mut self`). This is
+/// guaranteed by construction when using [`VecDeque::truncate_back_guard`].
+pub(super) struct TruncateBackGuard<T, A: Allocator> {
+    ptr: *mut VecDeque<T, A>,
+    len: usize,
+}
+
+impl<T, A: Allocator> Drop for TruncateBackGuard<T, A> {
+    fn drop(&mut self) {
+        // SAFETY: the pointer was obtained from a valid `&mut VecDeque` at guard
+        // construction time; the deque is alive for the entire scope (the guard
+        // is a local that drops before the enclosing function returns).
+        let dq_ref = unsafe { &mut *self.ptr };
+        dq_ref.truncate(self.len);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Removal (never allocates)
 // ---------------------------------------------------------------------------
@@ -1143,6 +1219,201 @@ impl<T, A: Allocator> VecDeque<T, A> {
             return None;
         }
         self.pop_front()
+    }
+
+    // -----------------------------------------------------------------------
+    // Indexed removal and swap
+    // -----------------------------------------------------------------------
+
+    /// Removes and returns the element at position `index`, shifting later
+    /// elements toward the logical front (note that physical buffer
+    /// optimizations are made).
+    ///
+    /// Removal never allocates, so this cannot fail — the only error is an
+    /// out-of-bounds index, reported through the returned [`Result`] rather than
+    /// unwinding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecDequeRemoveError`] if `index >= len`.
+    pub fn try_remove(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
+        let len = self.len;
+        if index >= len {
+            return Err(TryVecDequeRemoveError { index, len });
+        }
+        // Read the removed element out before shifting anything over it.
+        let removed = unsafe {
+            let idx = self.to_wrapped_index(index);
+            ptr::read(self.buf.ptr().add(idx.as_index()))
+        };
+        // Close the hole left by the removal by shifting the cheaper side.
+        // Elements ahead of `index` number `k = len - index - 1`; elements
+        // behind it number `index`. Shifting the shorter side minimizes the
+        // amount moved, exactly as `insert_within_cap` does for insertion.
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted index < len")]
+        let k = len - index - 1;
+        if k < index && k > 0 {
+            // Shift tail `[index+1..len)` one slot toward the front, landing it
+            // on top of the vacated slot at `index`.
+            // SAFETY: `k > 0` implies `index + 1 < len <= capacity`, so the
+            // source is in-bounds; the destination is the vacated slot at
+            // `index`. Overlap is bounded by a one-slot offset, satisfying
+            // `wrap_copy`'s invariant.
+            #[allow(clippy::arithmetic_side_effects, reason = "index + 1 < len")]
+            unsafe {
+                self.wrap_copy(
+                    self.to_wrapped_index(index + 1),
+                    self.to_wrapped_index(index),
+                    k,
+                );
+            }
+        }
+        // NOT index > 0 - the head always has to shift when the tail exists.
+        // k > 0 guards against UB.
+        else if k >= index && k > 0 {
+            // Shift head `[0..index)` one slot toward the back: retreat `head`
+            // to the physical slot of logical index 1, then move the head run
+            // onto the vacated slot. Computing the new head via
+            // `to_wrapped_index(1)` (rather than `wrap_add(head, 1)`) keeps it
+            // in-bounds even when the deque is full, because `k > 0` implies
+            // `len >= 2`, so logical index 1 lies strictly inside the live
+            // region.
+            let old_head = self.head;
+            // SAFETY: `k > 0` gives `len = k + index + 1 >= 2`, so logical
+            // index 1 is strictly inside the live region `[0..len)`.
+            self.head = unsafe { self.to_wrapped_index(1) };
+            // SAFETY: the head run `[0..index)` moves one slot forward; overlap
+            // is bounded by a one-slot offset, satisfying `wrap_copy`'s
+            // invariant. Every destination slot was part of the old live region.
+            unsafe {
+                self.wrap_copy(old_head, self.head, index);
+            }
+        }
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "if len == 0, then index >= len, which caused early return above"
+        )]
+        {
+            self.len -= 1;
+        }
+        Ok(removed)
+    }
+
+    /// Swaps the elements at positions `i` and `j`.
+    ///
+    /// Neither element is dropped; their values are exchanged in place. This
+    /// operation never allocates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecDequeSwapError`] if either `i >= len` or `j >= len`.
+    pub fn try_swap(&mut self, i: usize, j: usize) -> Result<(), TryVecDequeSwapError> {
+        let len = self.len;
+        if i >= len || j >= len {
+            return Err(TryVecDequeSwapError { i, j, len });
+        }
+        // SAFETY: both indices are validated to be `< len <= capacity`, so both
+        // wrapped slots hold initialized elements.
+        unsafe {
+            let ri = self.to_wrapped_index(i);
+            let rj = self.to_wrapped_index(j);
+            ptr::swap(
+                self.buf.ptr().add(ri.as_index()),
+                self.buf.ptr().add(rj.as_index()),
+            );
+        }
+        Ok(())
+    }
+
+    /// Removes the element at position `index` and replaces it with the last
+    /// element (back), returning the removed element. Does not preserve
+    /// ordering. *O*(1).
+    ///
+    /// Equivalent to swapping `index` with the back, then popping the back.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecDequeRemoveError`] if `index >= len`.
+    pub fn try_swap_remove_back(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
+        let len = self.len;
+        if index >= len {
+            return Err(TryVecDequeRemoveError { index, len });
+        }
+        // Swap the target with the back (unless it already is the back), then
+        // pop the back.
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted index < len")]
+        let back_idx = len - 1;
+        if index != back_idx {
+            // SAFETY: both `index` and `back_idx` are `< len <= capacity`.
+            unsafe {
+                let ri = self.to_wrapped_index(index);
+                let rb = self.to_wrapped_index(back_idx);
+                ptr::swap(
+                    self.buf.ptr().add(ri.as_index()),
+                    self.buf.ptr().add(rb.as_index()),
+                );
+            }
+        }
+        // Pop the back (which now holds the original element at `index`).
+        // `pop_back` handles the length decrement and slot read.
+        // SAFETY: `len > 0` (since `index < len`), so `pop_back` returns `Some`.
+        Ok(self.pop_back().expect("deque non-empty"))
+    }
+
+    /// Removes the element at position `index` and replaces it with the first
+    /// element (front), returning the removed element. Does not preserve
+    /// ordering. *O*(1).
+    ///
+    /// Equivalent to swapping `index` with the front, then popping the front.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecDequeRemoveError`] if `index >= len`.
+    pub fn try_swap_remove_front(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
+        let len = self.len;
+        if index >= len {
+            return Err(TryVecDequeRemoveError { index, len });
+        }
+        // Swap the target with the front (unless it already is the front),
+        // then pop the front.
+        if index != 0 {
+            // SAFETY: both `index` and `0` are `< len <= capacity`.
+            unsafe {
+                let ri = self.to_wrapped_index(index);
+                let rf = self.to_wrapped_index(0);
+                ptr::swap(
+                    self.buf.ptr().add(ri.as_index()),
+                    self.buf.ptr().add(rf.as_index()),
+                );
+            }
+        }
+        // Pop the front (which now holds the original element at `index`).
+        // `pop_front` handles the head advance and length decrement.
+        // SAFETY: `len > 0` (since `index < len`), so `pop_front` returns `Some`.
+        Ok(self.pop_front().expect("deque non-empty"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Truncate from back guard (shared rollback primitive)
+    // -----------------------------------------------------------------------
+
+    /// Creates a [`TruncateBackGuard`] pinned at the deque's current length.
+    ///
+    /// If the guard is dropped without being defused via
+    /// [`core::mem::forget`], the deque is truncated back to the recorded
+    /// length, undoing any elements appended after the guard was created.
+    /// This provides atomic all-or-nothing semantics for fallible bulk-append
+    /// operations (resize, extend-with-rollback, etc.).
+    ///
+    /// # Safety
+    /// The caller must ensure the deque outlives the guard
+    /// (guaranteed when the guard is a local in the same function).
+    #[inline]
+    pub(super) unsafe fn truncate_back_guard(&mut self) -> TruncateBackGuard<T, A> {
+        TruncateBackGuard {
+            ptr: &raw mut *self,
+            len: self.len,
+        }
     }
 
     /// Shortens the deque, keeping only the first `new_len` elements and
@@ -1818,7 +2089,13 @@ mod tests {
             assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
         }
         // The closure doubles the element before accepting it.
-        assert_eq!(dq.pop_back_if(|x| { *x *= 2; true }), Some(8));
+        assert_eq!(
+            dq.pop_back_if(|x| {
+                *x *= 2;
+                true
+            }),
+            Some(8)
+        );
         assert_eq!(dq.back(), Some(&3));
     }
 
@@ -1829,7 +2106,13 @@ mod tests {
             assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
         }
         // The closure negates the element before accepting it.
-        assert_eq!(dq.pop_front_if(|x| { *x = -*x; true }), Some(-1));
+        assert_eq!(
+            dq.pop_front_if(|x| {
+                *x = -*x;
+                true
+            }),
+            Some(-1)
+        );
         assert_eq!(dq.front(), Some(&2));
     }
 
@@ -1842,7 +2125,13 @@ mod tests {
             assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
         }
         // Mutate the back but reject it.
-        assert_eq!(dq.pop_back_if(|x| { *x += 100; false }), None);
+        assert_eq!(
+            dq.pop_back_if(|x| {
+                *x += 100;
+                false
+            }),
+            None
+        );
         assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 104]));
     }
 
@@ -1853,7 +2142,13 @@ mod tests {
             assert_eq!(dq.try_push_back_within_capacity(v), Ok(()));
         }
         // Mutate the front but reject it.
-        assert_eq!(dq.pop_front_if(|x| { *x += 100; false }), None);
+        assert_eq!(
+            dq.pop_front_if(|x| {
+                *x += 100;
+                false
+            }),
+            None
+        );
         assert_eq!(collect_into_array::<4>(&dq), Some([101, 2, 3, 4]));
     }
 
@@ -2122,5 +2417,329 @@ mod tests {
         drop(dq);
         // Nothing left to drop.
         assert_eq!(counter.get(), 5);
+    }
+
+    // --- try_remove -----------------------------------------------------------
+
+    #[test]
+    fn try_remove_front_middle_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_remove(0), Ok(10));
+        assert_eq!(collect_into_array::<3>(&dq), Some([20, 30, 40]));
+        assert_eq!(dq.try_remove(1), Ok(30));
+        assert_eq!(collect_into_array::<2>(&dq), Some([20, 40]));
+        assert_eq!(dq.try_remove(1), Ok(40));
+        assert_eq!(collect_into_array::<1>(&dq), Some([20]));
+        assert_eq!(dq.try_remove(0), Ok(20));
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_remove_out_of_bounds_reports_len() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let err = match dq.try_remove(5) {
+            Err(e) => e,
+            Ok(_) => panic!("expected out-of-bounds"),
+        };
+        assert_eq!(err.index, 5);
+        assert_eq!(err.len, 1);
+        // The deque is untouched.
+        assert_eq!(dq.len(), 1);
+        assert_eq!(dq.get(0), Some(&1));
+    }
+
+    #[test]
+    fn try_remove_on_empty_is_out_of_bounds() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        let err = match dq.try_remove(0) {
+            Err(e) => e,
+            Ok(_) => panic!("expected out-of-bounds"),
+        };
+        assert_eq!(err.index, 0);
+        assert_eq!(err.len, 0);
+    }
+
+    /// Build a wrapped deque `[50, 40, 10, 20, 30]` at full capacity so that
+    /// removals exercise the wrap-boundary shift path.
+    fn wrapped_full_dq() -> VecDeque<i32> {
+        let mut dq = VecDeque::<i32>::try_with_capacity(5).expect("allocation ok");
+        assert_eq!(dq.try_push_back(10), Ok(()));
+        assert_eq!(dq.try_push_back(20), Ok(()));
+        assert_eq!(dq.try_push_back(30), Ok(()));
+        assert_eq!(dq.try_push_front(40), Ok(()));
+        assert_eq!(dq.try_push_front(50), Ok(()));
+        assert_eq!(dq.capacity(), 5);
+        dq
+    }
+
+    #[test]
+    fn try_remove_wrapped_at_each_position() {
+        let mut dq = wrapped_full_dq();
+        assert_eq!(dq.try_remove(0), Ok(50));
+        assert_eq!(collect_into_array::<4>(&dq), Some([40, 10, 20, 30]));
+
+        let mut dq = wrapped_full_dq();
+        assert_eq!(dq.try_remove(1), Ok(40));
+        assert_eq!(collect_into_array::<4>(&dq), Some([50, 10, 20, 30]));
+
+        let mut dq = wrapped_full_dq();
+        assert_eq!(dq.try_remove(2), Ok(10));
+        assert_eq!(collect_into_array::<4>(&dq), Some([50, 40, 20, 30]));
+
+        let mut dq = wrapped_full_dq();
+        assert_eq!(dq.try_remove(3), Ok(20));
+        assert_eq!(collect_into_array::<4>(&dq), Some([50, 40, 10, 30]));
+
+        let mut dq = wrapped_full_dq();
+        assert_eq!(dq.try_remove(4), Ok(30));
+        assert_eq!(collect_into_array::<4>(&dq), Some([50, 40, 10, 20]));
+    }
+
+    #[test]
+    fn try_remove_single_element_then_empty() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(7), Ok(()));
+        assert_eq!(dq.try_remove(0), Ok(7));
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_remove_front_of_two_shifts_head() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(10), Ok(()));
+        assert_eq!(dq.try_push_back(20), Ok(()));
+        assert_eq!(dq.try_remove(0), Ok(10));
+        assert_eq!(collect_into_array::<1>(&dq), Some([20]));
+    }
+
+    #[test]
+    fn try_remove_middle_of_three_equal_sides() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_remove(1), Ok(20));
+        assert_eq!(collect_into_array::<2>(&dq), Some([10, 30]));
+    }
+
+    #[test]
+    fn try_remove_near_back_prefers_tail_shift() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_remove(2), Ok(30));
+        assert_eq!(collect_into_array::<3>(&dq), Some([10, 20, 40]));
+    }
+
+    #[test]
+    fn try_remove_near_front_prefers_head_shift() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_remove(1), Ok(20));
+        assert_eq!(collect_into_array::<3>(&dq), Some([10, 30, 40]));
+    }
+
+    // --- try_swap -------------------------------------------------------------
+
+    #[test]
+    fn try_swap_exchanges_two_elements() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap(0, 3), Ok(()));
+        assert_eq!(collect_into_array::<4>(&dq), Some([40, 20, 30, 10]));
+    }
+
+    #[test]
+    fn try_swap_same_index_is_noop() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(99), Ok(()));
+        assert_eq!(dq.try_swap(0, 0), Ok(()));
+        assert_eq!(collect_into_array::<1>(&dq), Some([99]));
+    }
+
+    #[test]
+    fn try_swap_adjacent_indices() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        for v in [1, 2, 3] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap(1, 2), Ok(()));
+        assert_eq!(collect_into_array::<3>(&dq), Some([1, 3, 2]));
+    }
+
+    #[test]
+    fn try_swap_out_of_bounds_first_index() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let err = match dq.try_swap(5, 0) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.i, 5);
+        assert_eq!(err.j, 0);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn try_swap_out_of_bounds_second_index() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let err = match dq.try_swap(0, 3) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.i, 0);
+        assert_eq!(err.j, 3);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn try_swap_on_empty_fails() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        let err = match dq.try_swap(0, 0) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.len, 0);
+    }
+
+    #[test]
+    fn try_swap_wrapped_buffer() {
+        let mut dq = wrapped_full_dq(); // [50, 40, 10, 20, 30]
+        assert_eq!(dq.try_swap(0, 4), Ok(()));
+        assert_eq!(collect_into_array::<5>(&dq), Some([30, 40, 10, 20, 50]));
+    }
+
+    // --- try_swap_remove_back ---------------------------------------------------
+
+    #[test]
+    fn try_swap_remove_back_replaces_with_last() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_back(0), Ok(10));
+        // Back (40) moved to front; 10 returned.
+        assert_eq!(collect_into_array::<3>(&dq), Some([40, 20, 30]));
+    }
+
+    #[test]
+    fn try_swap_remove_back_middle() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_back(1), Ok(20));
+        // Back (40) swapped into index 1; popped.
+        assert_eq!(collect_into_array::<3>(&dq), Some([10, 40, 30]));
+    }
+
+    #[test]
+    fn try_swap_remove_back_already_at_back() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_back(2), Ok(30));
+        assert_eq!(collect_into_array::<2>(&dq), Some([10, 20]));
+    }
+
+    #[test]
+    fn try_swap_remove_back_single_element() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(7), Ok(()));
+        assert_eq!(dq.try_swap_remove_back(0), Ok(7));
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_swap_remove_back_out_of_bounds() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let err = match dq.try_swap_remove_back(3) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.index, 3);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn try_swap_remove_back_wrapped() {
+        let mut dq = wrapped_full_dq(); // [50, 40, 10, 20, 30]
+        assert_eq!(dq.try_swap_remove_back(0), Ok(50));
+        // Back (30) swapped to front; 50 returned.
+        assert_eq!(collect_into_array::<4>(&dq), Some([30, 40, 10, 20]));
+    }
+
+    // --- try_swap_remove_front --------------------------------------------------
+
+    #[test]
+    fn try_swap_remove_front_replaces_with_first() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_front(3), Ok(40));
+        // Front (10) swapped to index 3; front popped.
+        assert_eq!(collect_into_array::<3>(&dq), Some([20, 30, 10]));
+    }
+
+    #[test]
+    fn try_swap_remove_front_middle() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30, 40] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_front(1), Ok(20));
+        // Index 1 (20) swapped with front (10); front (now 20) popped.
+        assert_eq!(collect_into_array::<3>(&dq), Some([10, 30, 40]));
+    }
+
+    #[test]
+    fn try_swap_remove_front_already_at_front() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        for v in [10, 20, 30] {
+            assert_eq!(dq.try_push_back(v), Ok(()));
+        }
+        assert_eq!(dq.try_swap_remove_front(0), Ok(10));
+        assert_eq!(collect_into_array::<2>(&dq), Some([20, 30]));
+    }
+
+    #[test]
+    fn try_swap_remove_front_single_element() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(7), Ok(()));
+        assert_eq!(dq.try_swap_remove_front(0), Ok(7));
+        assert!(dq.is_empty());
+    }
+
+    #[test]
+    fn try_swap_remove_front_out_of_bounds() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
+        assert_eq!(dq.try_push_back(1), Ok(()));
+        let err = match dq.try_swap_remove_front(5) {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert_eq!(err.index, 5);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn try_swap_remove_front_wrapped() {
+        let mut dq = wrapped_full_dq(); // [50, 40, 10, 20, 30]
+        assert_eq!(dq.try_swap_remove_front(4), Ok(30));
+        // Front (50) swapped to index 4; front popped.
+        assert_eq!(collect_into_array::<4>(&dq), Some([40, 10, 20, 50]));
     }
 }

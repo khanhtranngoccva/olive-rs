@@ -24,10 +24,13 @@ use crate::alloc::{Allocator, Global};
 use crate::collections::vec_deque::wrapped_index::WrappedIndex;
 use crate::raw_vec::RawVec;
 
-pub use allocation::TryVecDequeInsertError;
+pub use allocation::{TryVecDequeInsertError, TryVecDequeWithClosureError};
 pub use drain::Drain;
 pub use iter::{Iter, IterMut};
-pub use mutation::{TryVecDequeInsertWithinCapacityError, TryVecDequePushWithinCapacityError};
+pub use mutation::{
+    TryVecDequeInsertWithinCapacityError, TryVecDequePushWithinCapacityError,
+    TryVecDequeRemoveError, TryVecDequeSwapError,
+};
 pub use traits::TryVecDequeWithCloneError;
 
 // ---------------------------------------------------------------------------
