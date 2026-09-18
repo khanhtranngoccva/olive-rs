@@ -192,6 +192,12 @@ impl TryClone for DropCountingAlloc {
 // the original.
 unsafe impl AllocatorTryClone for DropCountingAlloc {}
 
+impl TryDefault for DropCountingAlloc {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::new(Arc::new(DropCounter::new())))
+    }
+}
+
 /// An [`Allocator`] whose allocation forwards to `Global` but whose
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
 #[derive(Debug, Clone)]

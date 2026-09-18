@@ -27,7 +27,7 @@ use core::borrow::BorrowMut;
 // must be annotated individually to compile.
 use core::cmp;
 use core::fmt;
-use core::mem::ManuallyDrop;
+use core::mem::{ManuallyDrop, size_of};
 use core::ops::{Deref, DerefMut, Index, IndexMut};
 use core::ptr::{self, NonNull};
 use core::slice;
@@ -42,7 +42,13 @@ use olive_core::slice::{TrySliceRangeError, try_range};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
-use olive_core::try_traits::try_from_iterator::TryFromIterator;
+
+mod convert;
+mod drain;
+mod into_iter;
+mod traits;
+pub use drain::Drain;
+pub use into_iter::IntoIter;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -2097,10 +2103,51 @@ impl<T, A: Allocator> Vec<T, A> {
         Ok(vec)
     }
 
+    /// Fallible conversion of an array into a vector on the given allocator,
+    /// moving each element without cloning. The buffer is allocated with
+    /// exactly `N` slots of capacity.
+    ///
+    /// This is the allocator-aware backend for [`TryFrom<[T; N]>`](core::convert::TryFrom).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if reserving the initial buffer fails.
+    pub fn try_from_array_in<const N: usize>(
+        array: [T; N],
+        alloc: A,
+    ) -> Result<Self, TryReserveError> {
+        if N == 0 {
+            return Ok(Self::new_in(alloc));
+        }
+        if size_of::<T>() == 0 {
+            // ZST elements occupy no memory and need no buffer; just record
+            // the length (capacity reports as `usize::MAX`, matching std).
+            // SAFETY: a zero-length logical slice of ZSTs has no pointer
+            // validity requirements beyond what `new_in` guarantees.
+            let mut v = Self::new_in(alloc);
+            unsafe { v.set_len(N) };
+            return Ok(v);
+        }
+        // Allocate directly on the target allocator and move each element in.
+        let mut dest = Self::try_with_capacity_in(N, alloc)?;
+        // SAFETY: we wrap the array in `ManuallyDrop`, so its drop glue never
+        // runs; every element below is moved out exactly once by the copy.
+        let mut src = ManuallyDrop::new(array);
+        let src_ptr = src.as_mut_ptr();
+        // SAFETY: both pointers are valid for `N` reads/writes, do not overlap
+        // (stack vs heap), and `T` is properly aligned on both sides. The
+        // destination has exactly `N` reserved slots.
+        unsafe { ptr::copy_nonoverlapping(src_ptr, dest.as_mut_ptr(), N) };
+        // SAFETY: all `N` slots were just initialized by the copy above.
+        unsafe { dest.set_len(N) };
+        Ok(dest)
+    }
+
     /// Fallibly collects an iterator into a [`Vec<T>`] on the given allocator,
     /// using the size hint to pre-allocate when possible.
     ///
-    /// This is the allocator-aware backend for [`TryFromIterator`]. It reserves
+    /// This is the allocator-aware backend for
+    /// [`TryFromIterator`](olive_core::try_traits::try_from_iterator::TryFromIterator). It reserves
     /// up front from the hint's upper bound and grows as needed if the iterator
     /// yields more elements than advertised.
     ///
@@ -2125,16 +2172,6 @@ impl<T, A: Allocator> Vec<T, A> {
             unsafe { vec.force_push(item) };
         }
         Ok(vec)
-    }
-}
-
-/// Fallible construction of a `Vec<T>` on the default [`Global`] allocator from
-/// a borrowed slice, cloning each element via [`TryClone`].
-impl<T: TryClone> TryFrom<&[T]> for Vec<T, Global> {
-    type Error = TryVecWithCloneError;
-
-    fn try_from(slice: &[T]) -> Result<Self, Self::Error> {
-        Self::try_from_slice_in(slice, Global)
     }
 }
 
@@ -2322,21 +2359,6 @@ impl<T> TryDefault for Vec<T, Global> {
         Ok(Vec::new())
     }
 }
-
-// Collects into the default (`Global`) allocator. For a custom allocator use
-// [`Vec::try_from_iter_in`].
-impl<T> TryFromIterator<T> for Vec<T, Global> {
-    type Error = TryReserveError;
-
-    fn try_from_iter<I: IntoIterator<Item = T>>(iter: I) -> Result<Self, Self::Error> {
-        Self::try_from_iter_in(iter, Global)
-    }
-}
-
-mod drain;
-mod into_iter;
-pub use drain::Drain;
-pub use into_iter::IntoIter;
 
 impl<T, A: Allocator> IntoIterator for Vec<T, A> {
     type Item = T;

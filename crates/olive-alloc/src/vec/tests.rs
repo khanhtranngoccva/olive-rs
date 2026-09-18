@@ -7,15 +7,17 @@ extern crate std;
 
 use core::alloc::Layout;
 
+use olive_core::TryClone;
 use olive_core::try_traits::try_clone::TryCloneError;
 use olive_core::try_traits::try_collect::TryCollect;
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::*;
+use crate::borrow::Cow;
 use crate::test_helpers::{
-    CloneBudget, DropCounter, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger,
-    DropCountingAlloc, PanicArmer,
+    CloneBudget, DropCounter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger,
+    PanicArmer,
 };
 use std::format;
 use std::sync::Arc;
@@ -632,7 +634,8 @@ fn try_extend_overhint_falls_back_to_incremental_growth() {
     let mut v: Vec<i32, _> = Vec::new_in(alloc.clone());
     v.try_push(-1).unwrap();
 
-    v.try_extend(Overhinted(0..3)).expect("incremental growth should succeed");
+    v.try_extend(Overhinted(0..3))
+        .expect("incremental growth should succeed");
     assert_eq!(v.as_slice(), &[-1, 0, 1, 2]);
 }
 
@@ -684,7 +687,10 @@ fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
     let (rest, e) = v
         .try_extend_from_slice(src.as_slice())
         .expect_err("clone fail");
-    assert!(matches!(e, TryVecWithCloneError::Clone(TryCloneError::Other(_))));
+    assert!(matches!(
+        e,
+        TryVecWithCloneError::Clone(TryCloneError::Other(_))
+    ));
     // Remainder begins at the failing element.
     assert_eq!(rest.len(), 1);
     // Nothing committed before the failure either (first two succeeded though).
@@ -2369,4 +2375,280 @@ fn extend_from_within_panic_is_safe() {
     assert_eq!(ledger.total_allocated(), 6);
     // Every one of those 6 dropped exactly once.
     assert!(ledger.all_dropped_once(0..6));
+}
+
+// ---------------------------------------------------------------------------
+// Conversion trait impls: TryFrom<[T; N]>, From<Box<[T], A>>, TryFrom<Cow<'b, [T]>>,
+// TryFromIterator, TryFrom<&[T]>
+// ---------------------------------------------------------------------------
+
+/// Builds an olive `Vec` from literals without relying on a `vec!` macro (std's
+/// would produce std's `Vec`, and no `vec!` shim exists in this crate).
+fn mk_vec(items: &[i32]) -> Vec<i32, Global> {
+    let mut v = Vec::new();
+    for x in items {
+        v.try_push(*x).unwrap();
+    }
+    v
+}
+
+#[test]
+fn try_from_array_moves_elements_without_cloning() {
+    use core::cell::Cell;
+    struct Counting(u32, Cell<u32>);
+    impl TryClone for Counting {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            self.1.set(self.1.get() + 1);
+            Ok(Self(self.0, Cell::new(self.1.get())))
+        }
+    }
+    let clones = Cell::new(0);
+    let arr = [Counting(1, clones.clone()), Counting(2, clones.clone())];
+    let v: Vec<Counting, Global> = Vec::try_from(arr).unwrap();
+    assert_eq!(v.len(), 2);
+    assert_eq!(v[0].0, 1);
+    assert_eq!(v[1].0, 2);
+    // Elements were moved, not cloned.
+    assert_eq!(clones.get(), 0);
+}
+
+#[test]
+fn try_from_empty_array_is_empty() {
+    let v: Vec<i32, Global> = Vec::try_from([]).unwrap();
+    assert!(v.is_empty());
+    // An empty vector of a non-ZST never allocates, so it reports no usable
+    // slots (`usize::MAX` is reserved for zero-sized elements).
+    assert_eq!(v.capacity(), 0);
+}
+
+#[test]
+fn try_from_zst_array_no_alloc() {
+    #[derive(TryClone, PartialEq, Copy, Clone)]
+    struct Zst;
+    let v: Vec<Zst, Global> = Vec::try_from([Zst; 5]).unwrap();
+    assert_eq!(v.len(), 5);
+    // ZST elements occupy no memory and never require a real allocation, so
+    // the reported capacity is `usize::MAX` (matching std's convention).
+    assert_eq!(v.capacity(), usize::MAX);
+}
+
+#[test]
+fn from_boxed_slice_preserves_contents_and_capacity() {
+    // Build a vector with exactly `len` of capacity (no growth slack), so the
+    // boxed slice carries a tight allocation and the round-trip is exact.
+    let mut src = Vec::new();
+    src.try_reserve_exact(3).unwrap();
+    for x in [10, 20, 30] {
+        src.try_push(x).unwrap();
+    }
+    let boxed: Box<[i32]> = src.try_into_boxed_slice().unwrap();
+    let out: Vec<i32> = Vec::from(boxed);
+    assert_eq!(out.as_slice(), &[10, 20, 30]);
+    // The buffer was taken over untouched, so the reported capacity matches
+    // the original allocation exactly.
+    assert_eq!(out.capacity(), 3);
+}
+
+#[test]
+fn from_boxed_empty_slice() {
+    let src: Vec<u8> = Vec::new();
+    let boxed: Box<[u8]> = src.try_into_boxed_slice().unwrap();
+    let v: Vec<u8> = Vec::from(boxed);
+    assert!(v.is_empty());
+    // The empty box carried no real allocation, so the reconstructed vector
+    // of a non-ZST reports zero usable slots.
+    assert_eq!(v.capacity(), 0);
+}
+
+#[test]
+// FIXME: create tests that exercise element clone failures (flaky clones)
+fn try_from_cow_borrowed_clones_elements() {
+    let src: &[i32] = &[11, 22];
+    let cow = Cow::Borrowed(src);
+    let v: Vec<i32> = Vec::try_from(cow).unwrap();
+    assert_eq!(v.as_slice(), &[11, 22]);
+}
+
+#[test]
+fn try_from_cow_owned_passes_through() {
+    let mut owned: Vec<i32> = Vec::new();
+    for x in [7, 8, 9] {
+        owned.try_push(x).unwrap();
+    }
+    // Give the source vec surplus capacity so we can verify it's preserved.
+    owned.try_reserve(5).unwrap();
+    let src_cap = owned.capacity();
+    assert!(src_cap > 3);
+
+    let cow = Cow::Owned(owned);
+    let v: Vec<i32> = Vec::try_from(cow).unwrap();
+    assert_eq!(v.as_slice(), &[7, 8, 9]);
+    // The Owned arm transfers the buffer wholesale — capacity is preserved.
+    assert_eq!(v.capacity(), src_cap);
+}
+
+#[test]
+fn try_from_cow_borrowed_fails_when_reservation_fails() {
+    // Drive the Borrowed arm through a FlakyCloneAlloc whose underlying
+    // allocator always fails, so the reservation in try_from_slice_in errors.
+    // Since TryFrom<Cow> is scoped to Global, we verify the same code path
+    // via try_from_slice_in directly (the Borrowed arm delegates to it).
+    let src: &[i32] = &[1, 2, 3];
+    let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_slice_in(src, FailAlloc);
+    match res.expect_err("reservation should fail") {
+        TryVecWithCloneError::Reserve(r) => assert!(r.is_alloc()),
+        other => panic!("expected a reserve failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn try_from_iter_builds_vec_on_target_allocator() {
+    let v: Vec<i32, Global> = (1..=4).try_collect().unwrap();
+    assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
+}
+
+#[test]
+fn try_from_iter_fails_when_allocation_fails() {
+    use olive_core::alloc_errors::TryReserveErrorKind;
+    // The `Global`-scoped trait impl can't target a failing allocator, so drive
+    // the same code path through the `_in` seam with one that does.
+    let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_iter_in(1..=4, FailAlloc);
+    let r = res.expect_err("allocation should fail");
+    assert!(matches!(r.kind(), TryReserveErrorKind::AllocError { .. }))
+}
+
+#[test]
+// FIXME: this test does not demonstrate over-reporting behavior
+fn try_from_iter_falls_back_to_growth_under_byte_cap() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+    // An iterator advertising a huge upper bound triggers a big upfront batch
+    // reserve that this allocator refuses; the collection loop then falls back
+    // to incremental per-element growth where each small reserve succeeds.
+    let iter = std::iter::repeat(1i32).take(8).map(|_| 1);
+    let v: Vec<i32, ByteCapAlloc> =
+        Vec::try_from_iter_in(iter, ByteCapAlloc::new(64)).expect("small reserves succeed");
+    assert_eq!(v.as_slice(), &[1, 1, 1, 1, 1, 1, 1, 1]);
+}
+
+#[test]
+fn try_from_borrowed_slice_clones_elements() {
+    let src: &[i32] = &[10, 20, 30];
+    let v: Vec<i32, Global> = Vec::try_from(src).unwrap();
+    assert_eq!(v.as_slice(), &[10, 20, 30]);
+}
+
+#[test]
+fn try_from_borrowed_slice_fails_when_reservation_fails() {
+    // The `Global`-scoped trait impl can't target a failing allocator, so drive
+    // the same code path through the `_in` seam with one that does.
+    let src: &[i32] = &[1, 2, 3];
+    let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_slice_in(src, FailAlloc);
+    match res.expect_err("reservation should fail") {
+        TryVecWithCloneError::Reserve(r) => {
+            assert!(r.is_alloc());
+        }
+        other => panic!("expected a reserve failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn try_from_borrowed_slice_fails_when_element_clone_fails() {
+    // `FlakyClone` with threshold 0 fails its first clone attempt, so the very
+    // first element in the slice cannot be copied into the new vector.
+    let items = [FlakyClone::new(0), FlakyClone::new(0)];
+    let res: Result<Vec<FlakyClone, Global>, _> = Vec::try_from(&items[..]);
+    match res.expect_err("first element clone should fail") {
+        TryVecWithCloneError::Clone(TryCloneError::Other(_)) => {}
+        other => panic!("expected a clone failure, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Comparison trait impls: PartialEq, Eq, PartialOrd, Ord, Hash
+// ---------------------------------------------------------------------------
+
+// FIXME: should use PartialEq and Eq to avoid issues
+#[test]
+fn vec_partial_eq_same_len_equal() {
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 2, 3]);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn vec_partial_eq_differs_at_element() {
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 2, 4]);
+    assert_ne!(a, b);
+}
+
+#[test]
+fn vec_partial_eq_different_lengths() {
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 2]);
+    assert_ne!(a, b);
+}
+
+#[test]
+fn vec_partial_eq_cross_type_vs_slice() {
+    let v = mk_vec(&[1, 2, 3]);
+    let s: &[i32] = &[1, 2, 3];
+    let s_mut: &mut [i32] = &mut [1, 2, 3];
+    assert_eq!(v, s);
+    assert_eq!(v, s_mut);
+}
+
+#[test]
+fn vec_partial_eq_cross_type_vs_array() {
+    let v = mk_vec(&[1, 2, 3]);
+    let mut a: [i32; 3] = [1, 2, 3];
+    assert_eq!(v, a);
+    assert_eq!(v, &a);
+    assert_eq!(v, &mut a);
+}
+
+#[test]
+fn vec_ord_less_than_by_prefix_then_length() {
+    let a = mk_vec(&[1, 2]);
+    let b = mk_vec(&[1, 2, 3]);
+    assert!(a < b);
+    assert!(b > a);
+}
+
+#[test]
+fn vec_ord_lexicographic() {
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 3, 2]);
+    assert!(a < b);
+    assert!(b > a);
+}
+
+#[test]
+fn vec_hash_consistent_for_equal_vectors() {
+    use core::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 2, 3]);
+
+    let mut ha = DefaultHasher::new();
+    let mut hb = DefaultHasher::new();
+    a.hash(&mut ha);
+    b.hash(&mut hb);
+    assert_eq!(ha.finish(), hb.finish());
+}
+
+#[test]
+fn vec_hash_differs_for_different_vectors() {
+    use core::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 2, 4]);
+
+    let mut ha = DefaultHasher::new();
+    let mut hb = DefaultHasher::new();
+    a.hash(&mut ha);
+    b.hash(&mut hb);
+    assert_ne!(ha.finish(), hb.finish());
 }

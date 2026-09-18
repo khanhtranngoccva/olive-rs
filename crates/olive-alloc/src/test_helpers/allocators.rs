@@ -1,6 +1,5 @@
 //! Specialized test allocators that implement [`TryDefault`] in addition to
-//! [`Allocator`], used to exercise failure paths in `TryDefault` impls for
-//! smart pointers.
+//! [`Allocator`], used to exercise allocator-specific code paths in tests.
 
 use core::alloc::Layout;
 use core::ptr::NonNull;

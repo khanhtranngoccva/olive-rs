@@ -2193,10 +2193,10 @@ impl<T: ?Sized, A: Allocator + Default> Default for Weak<T, A> {
     }
 }
 
-impl<T: ?Sized, A: Allocator + TryDefault> TryDefault for Weak<T, A> {
+impl<T: ?Sized> TryDefault for Weak<T, Global> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self::new_in(A::try_default()?))
+        Ok(Self::new())
     }
 }
 

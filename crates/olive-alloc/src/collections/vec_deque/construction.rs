@@ -113,15 +113,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 }
 
-// An empty deque never allocates, so its default construction is infallible —
-// even when the allocator itself can be defaulted fallibly. The bound on `A`
-// mirrors std's `Default` impls for allocator-parameterized types: the
-// allocator must have a canonical default of its own.
-impl<T, A: Allocator + TryDefault> TryDefault for VecDeque<T, A> {
+// An empty deque never allocates, so its default construction is infallible.
+impl<T> TryDefault for VecDeque<T, Global> {
     #[inline]
     fn try_default() -> Result<Self, olive_core::prelude::TryDefaultError> {
-        let alloc = A::try_default()?;
-        Ok(Self::new_in(alloc))
+        Ok(Self::new())
     }
 }
 
@@ -276,30 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn try_default_with_custom_allocator_defaults_the_allocator() {
-        // An allocator whose `try_default` fails must propagate as an error —
-        // proving the impl actually calls `A::try_default()` rather than using
-        // a hardcoded default.
-        #[derive(Debug)]
-        struct NoDefaultAlloc;
-        unsafe impl Allocator for NoDefaultAlloc {
-            fn allocate(&self, layout: Layout) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
-                Global.allocate(layout)
-            }
-            unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: Layout) {
-                unsafe { Global.deallocate(ptr, layout) };
-            }
-        }
-        impl TryDefault for NoDefaultAlloc {
-            fn try_default() -> Result<Self, olive_core::prelude::TryDefaultError> {
-                Err(olive_core::prelude::TryDefaultError::Other(
-                    "no canonical allocator",
-                ))
-            }
-        }
-
-        let res: Result<VecDeque<i32, NoDefaultAlloc>, _> = TryDefault::try_default();
-        assert!(res.is_err(), "allocator default failure must propagate");
+    fn try_default_global_produces_empty_deque() {
+        let d: VecDeque<i32, Global> = TryDefault::try_default().unwrap();
+        assert!(d.is_empty());
+        assert_eq!(d.capacity(), 0);
     }
 
     // --- Cross-checks ---------------------------------------------------------

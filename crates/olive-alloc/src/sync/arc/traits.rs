@@ -5,6 +5,7 @@
 
 use super::pointers::{self, checked_increment};
 use super::{Arc, Weak};
+use crate::alloc::Global;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug, Formatter};
 use core::ops::Deref;
@@ -136,10 +137,9 @@ impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
 // Default construction (sized)
 // ---------------------------------------------------------------------------
 
-impl<T: TryDefault, A: Allocator + TryDefault> TryDefault for Arc<T, A> {
+impl<T: TryDefault> TryDefault for Arc<T, Global> {
     fn try_default() -> Result<Self, TryDefaultError> {
-        let alloc = A::try_default()?;
-        let uninit = Self::try_new_uninit_in(alloc).map_err(TryDefaultError::Alloc)?;
+        let uninit = Self::try_new_uninit().map_err(TryDefaultError::Alloc)?;
         let value = T::try_default()?;
         // SAFETY: we just initialized the Arc with strong == 1 and weak == 0 (excluding the implicit ref).
         Ok(unsafe { uninit.write(value) })
@@ -155,10 +155,10 @@ impl<T: ?Sized, A: Allocator + Default> Default for Weak<T, A> {
     }
 }
 
-impl<T: ?Sized, A: Allocator + TryDefault> TryDefault for Weak<T, A> {
+impl<T: ?Sized> TryDefault for Weak<T, Global> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self::new_in(A::try_default()?))
+        Ok(Self::new())
     }
 }
 
@@ -171,10 +171,9 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
-    use crate::test_helpers::allocators::FailDefaultAlloc;
-    use crate::test_helpers::{CloneBudget, FailAlloc, FlakyCloneAlloc};
-    use std::sync::Arc as StdArc;
+    use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::string::String;
+    use std::sync::Arc as StdArc;
 
     // --- Deref ---------------------------------------------------------------
 
@@ -378,26 +377,18 @@ mod tests {
         assert_eq!(*arc, None);
     }
 
-    // --- TryDefault failure modes --------------------------------------------
+    // --- TryDefault (Global-scoped) ------------------------------------------
 
     #[test]
-    fn arc_try_default_alloc_default_failure() {
-        // The allocator's own `try_default` fails before any allocation is made.
-        let res: Result<Arc<i32, FailDefaultAlloc>, _> = TryDefault::try_default();
-        assert!(res.is_err());
+    fn arc_try_default_global_succeeds() {
+        let a: Arc<i32, Global> = TryDefault::try_default().unwrap();
+        assert_eq!(*a, 0);
     }
 
     #[test]
-    fn arc_try_default_allocation_failure() {
-        // The allocator default succeeds but the heap allocation fails.
-        let res: Result<Arc<i32, FailAlloc>, _> = TryDefault::try_default();
-        assert!(matches!(res, Err(TryDefaultError::Alloc(_))));
-    }
-
-    #[test]
-    fn weak_try_default_alloc_default_failure() {
-        // The allocator's own `try_default` fails; no allocation is attempted.
-        let res: Result<Weak<i32, FailDefaultAlloc>, _> = TryDefault::try_default();
-        assert!(res.is_err());
+    fn weak_try_default_global_dangling() {
+        let w: Weak<i32, Global> = TryDefault::try_default().unwrap();
+        // A dangling weak never referred to an allocation; upgrade yields None.
+        assert!(w.try_upgrade().unwrap().is_none());
     }
 }

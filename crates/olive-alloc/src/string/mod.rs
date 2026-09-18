@@ -256,8 +256,9 @@ impl<A: Allocator> String<A> {
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
     /// initial allocation fails.
     #[inline]
-    pub fn try_with_capacity(cap: usize) -> Result<Self, TryReserveError> {
-        Self::try_with_capacity_in(cap, Global)
+    pub fn try_with_capacity_in(cap: usize, alloc: A) -> Result<Self, TryReserveError> {
+        let buf = Vec::<u8, A>::try_with_capacity_in(cap, alloc)?;
+        Ok(Self { buf })
     }
 
     /// Converts a `&str` into a `String` by copying its contents, allocating
