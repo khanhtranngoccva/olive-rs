@@ -267,13 +267,19 @@ impl<T, A: Allocator> VecDeque<T, A> {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let mut deque = Self::new_in(alloc);
-        // Best-effort batch reserve from the hint; ignore failures so a bogus
-        // hint cannot abort collection before any element is seen.
-        let _ = deque.try_reserve_total(upper.unwrap_or(lower));
+        // Best-effort batch reserve from the hint (the deque is empty, so the
+        // hint is an increment). Adaptive, so a refused over-provisioned
+        // amortized size falls back to an exact-sized allocation. Ignore
+        // failures so a bogus hint cannot abort collection before any element
+        // is seen; the loop below falls back to incremental growth.
+        let cap = upper.unwrap_or(lower);
+        let _ = deque.try_reserve_adaptive(cap);
         for item in iter {
             // The iterator may yield more elements than its hint promised.
             if deque.len == deque.capacity() {
-                deque.try_reserve(1)?;
+                // Adaptive: a refused amortized doubling falls back to an
+                // exact +1 growth instead of failing.
+                deque.try_reserve_adaptive(1)?;
             }
             // SAFETY: a spare slot exists (we grew if needed).
             unsafe { deque.push_back_within_cap(item) };
@@ -307,8 +313,11 @@ impl<T, A: Allocator> TryExtend<T> for VecDeque<T, A> {
         S: ResumableSource<Item = T>,
     {
         let (head, mut inner, hint) = source.decompose_with_size_hint();
-        // Ignore over-reserve failures; growth happens lazily below.
-        let _ = self.try_reserve_total(hint.estimated_total());
+        // Best-effort reserve of room for the *incoming* elements (an increment,
+        // not an absolute total). Adaptive, so a refused over-provisioned
+        // amortized size falls back to an exact-sized allocation. Over-reserve
+        // failures are ignored; growth happens lazily below.
+        let _ = self.try_reserve_adaptive(hint.estimated_total());
         // Push the head first.
         if let Some(head) = head {
             if let Err((head, err)) = self.try_push_back_give_back(head) {
@@ -322,7 +331,9 @@ impl<T, A: Allocator> TryExtend<T> for VecDeque<T, A> {
         // failure.
         while let Some(next) = inner.next() {
             if self.len == self.capacity() {
-                if let Err(e) = self.try_reserve(1) {
+                // Adaptive: a refused amortized doubling falls back to an
+                // exact +1 growth instead of failing.
+                if let Err(e) = self.try_reserve_adaptive(1) {
                     return Err((Resume::new(next, inner), e));
                 }
             }
@@ -361,7 +372,7 @@ where
         if other.is_empty() {
             return Ok(());
         }
-        self.try_reserve(other.len())
+        self.try_reserve_adaptive(other.len())
             .map_err(|e| (other, TryVecDequeWithCloneError::Reserve(e)))?;
         let mut i = 0usize;
         for item in other {
@@ -416,8 +427,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
         S: ResumableSource<Item = T>,
     {
         let (head, mut inner, hint) = source.decompose_with_size_hint();
-        // Ignore over-reserve failures; growth happens lazily below.
-        let _ = self.try_reserve_total(hint.estimated_total());
+        // Best-effort reserve of room for the *incoming* elements.
+        // Adaptive, so a refused over-provisioned
+        // amortized size falls back to an exact-sized allocation. Over-reserve
+        // failures are ignored; growth happens lazily below.
+        let _ = self.try_reserve_adaptive(hint.estimated_total());
         // Push the head first.
         if let Some(head) = head {
             if let Err((head, err)) = self.try_push_front_give_back(head) {
@@ -432,7 +446,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // element on failure.
         while let Some(next) = inner.next() {
             if self.len == self.capacity() {
-                if let Err(e) = self.try_reserve(1) {
+                // Adaptive: a refused amortized doubling falls back to an
+                // exact +1 growth instead of failing.
+                if let Err(e) = self.try_reserve_adaptive(1) {
                     return Err((Resume::new(next, inner), e));
                 }
             }
@@ -881,6 +897,20 @@ mod tests {
     }
 
     #[test]
+    fn try_extend_from_slice_uses_adaptive_reserve_under_byte_cap() {
+        use crate::test_helpers::allocators::ByteCapAlloc;
+        let mut dq: VecDeque<i32, ByteCapAlloc> =
+            VecDeque::try_with_capacity_in(15, ByteCapAlloc::new(64)).unwrap();
+        // Fill the deque to capacity.
+        dq.try_extend(0..15).unwrap();
+        // 15 * 2 * 4 = 120 bytes.
+        dq.try_extend_from_slice(&[15])
+            .expect("adaptive reserve should absorb the over-provisioned request");
+        assert_eq!(dq.len(), 16);
+        assert_eq!(dq.back(), Some(&15));
+    }
+
+    #[test]
     fn try_extend_from_slice_clone_failure_returns_residual() {
         // Three source elements where the third one fails to clone. The first
         // two are committed to the deque; the residual slice begins at index 2
@@ -999,6 +1029,26 @@ mod tests {
         // Last item (2) ends up at the front; -1 stays at the back.
         assert_eq!(dq.front(), Some(&2));
         assert_eq!(dq.back(), Some(&-1));
+    }
+
+    #[test]
+    fn try_extend_front_falls_back_to_exact_when_amortized_refused() {
+        use crate::test_helpers::allocators::ByteCapAlloc;
+
+        // A deque of exactly 15 i32s occupies 60 bytes within a 64-byte cap.
+        // Pushing one more triggers growth: the amortized path asks for
+        // max(15*2, 16) = 30 elements = 120 bytes (> 64, refused), while the
+        // exact fallback asks for 16*4 = 64 bytes (= cap, accepted). Without
+        // the adaptive fallback this operation would spuriously fail.
+        let mut dq: VecDeque<i32, ByteCapAlloc> =
+            VecDeque::try_with_capacity_in(15, ByteCapAlloc::new(64)).unwrap();
+        dq.try_extend(0..15).unwrap();
+        assert_eq!(dq.len(), 15);
+
+        dq.try_extend_front([15]).expect("exact fallback should fit within the cap");
+        assert_eq!(dq.len(), 16);
+        assert_eq!(dq.front(), Some(&15));
+        assert_eq!(dq.back(), Some(&14));
     }
 
     #[test]

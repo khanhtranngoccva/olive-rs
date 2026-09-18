@@ -922,6 +922,33 @@ impl<T, A: Allocator> Vec<T, A> {
         self.raw.try_reserve_exact(self.len, additional)
     }
 
+    /// Ensures the vector has room for at least `additional` more elements,
+    /// preferring amortized growth but falling back to an exact-sized
+    /// allocation when the amortized reserve is refused.
+    ///
+    /// This first attempts [`Self::try_reserve`], which grows by doubling so
+    /// that future appends are cheap. If that allocation fails — typically
+    /// because a tight allocator cannot satisfy the larger amortized size — it
+    /// retries with [`Self::try_reserve_exact`], which asks for only the
+    /// minimum memory required (`len + additional`). The exact request is
+    /// always no larger than the amortized one, so it can succeed where the
+    /// amortized attempt failed.
+    ///
+    /// Use this for bulk operations (e.g. extending from a slice of known
+    /// length) where reserving up front is desirable but a refusal of the
+    /// over-provisioned amortized size should not be fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if both the amortized and the exact
+    /// reservations fail.
+    pub fn try_reserve_adaptive(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        match self.try_reserve(additional) {
+            Ok(()) => Ok(()),
+            Err(_) => self.try_reserve_exact(additional),
+        }
+    }
+
     /// Ensures the vector has room for at least `total` elements *in total*
     /// (an absolute target, not an increment).
     ///
@@ -1355,8 +1382,10 @@ impl<T, A: Allocator> Vec<T, A> {
         if count == 0 {
             return Ok(());
         }
-        // Reserve up front so the vector never allocates during the hot path push.
-        self.try_reserve(count)
+        // Reserve up front so the vector never allocates during the hot path
+        // push. Adaptive, so a refused over-provisioned amortized size falls
+        // back to an exact-sized allocation instead of failing.
+        self.try_reserve_adaptive(count)
             .map_err(TryVecExtendFromWithinError::Reserve)?;
         // If any clone or push fails mid-loop (or the body panics), the guard
         // truncates back to `len`, dropping every appended element exactly once.
@@ -1868,7 +1897,7 @@ impl<T, A: Allocator> Vec<T, A> {
         if other.is_empty() {
             return Ok(());
         }
-        self.try_reserve(other.len())
+        self.try_reserve_adaptive(other.len())
             .map_err(TryVecWithCloneError::Reserve)?;
         let len_before = self.len;
         let guard = RollbackGuard(&raw mut *self, len_before);
@@ -1901,7 +1930,7 @@ impl<T, A: Allocator> Vec<T, A> {
         if extra == 0 {
             return Ok(());
         }
-        self.try_reserve(extra)?;
+        self.try_reserve_adaptive(extra)?;
         let src = other.as_mut_ptr();
         let dst = unsafe { self.as_mut_ptr().add(self.len) };
         // SAFETY: `self` and `other` are distinct vectors; their buffers never overlap.
@@ -1941,7 +1970,7 @@ impl<T, A: Allocator> Vec<T, A> {
         }
         #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = new_len - current;
-        self.try_reserve(extra)
+        self.try_reserve_adaptive(extra)
             .map_err(TryVecWithCloneError::Reserve)?;
         let guard = RollbackGuard(&raw mut *self, current);
         for _ in 0..extra {
@@ -1985,7 +2014,7 @@ impl<T, A: Allocator> Vec<T, A> {
         }
         #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = { new_len - current };
-        self.try_reserve(extra)
+        self.try_reserve_adaptive(extra)
             .map_err(TryVecWithClosureError::Reserve)?;
         let guard = RollbackGuard(&raw mut *self, current);
         for _ in 0..extra {
@@ -2147,21 +2176,21 @@ impl<T, A: Allocator> Vec<T, A> {
     /// using the size hint to pre-allocate when possible.
     ///
     /// This is the allocator-aware backend for
-    /// [`TryFromIterator`](olive_core::try_traits::try_from_iterator::TryFromIterator). It reserves
-    /// up front from the hint's upper bound and grows as needed if the iterator
-    /// yields more elements than advertised.
+    /// [`TryFromIterator`](olive_core::try_traits::try_from_iterator::TryFromIterator).
     ///
     /// # Errors
     ///
-    /// Returns [`TryReserveError`] if a reservation fails.
+    /// Returns [`TryReserveError`] if reserving capacity for an incoming element
+    /// fails.
     pub fn try_from_iter_in<I: IntoIterator<Item = T>>(
         iter: I,
         alloc: A,
     ) -> Result<Self, TryReserveError> {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
-        let capacity = upper.unwrap_or(lower);
-        let mut vec = Self::try_with_capacity_in(capacity, alloc)?;
+        let mut vec = Self::new_in(alloc);
+        let cap = upper.unwrap_or(lower);
+        let _ = vec.try_reserve_adaptive(cap);
         for item in iter {
             // The iterator may yield more elements than its hint promised.
             if vec.len == vec.capacity() {
@@ -2278,7 +2307,7 @@ impl<T, A: Allocator> TryExtend<T> for Vec<T, A> {
     {
         let (head, mut inner, hint) = source.decompose_with_size_hint();
         // Ignore over-reserve.
-        let _ = self.try_reserve_total(hint.estimated_total());
+        let _ = self.try_reserve_adaptive(hint.estimated_total());
         // Push the head first.
         if let Some(head) = head {
             if let Err((head, err)) = self.try_push_give_back(head) {
@@ -2313,7 +2342,7 @@ where
         if other.is_empty() {
             return Ok(());
         }
-        self.try_reserve(other.len())
+        self.try_reserve_adaptive(other.len())
             .map_err(|e| (other, TryVecWithCloneError::Reserve(e)))?;
         let mut i = 0usize;
         for item in other {
@@ -2335,10 +2364,7 @@ where
 
 impl<T: TryClone, A: AllocatorTryClone> TryClone for Vec<T, A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let mut out = Self::new_in(self.raw.allocator().try_clone()?);
-        if !self.is_empty() {
-            out.try_reserve(self.len).map_err(TryCloneError::Reserve)?;
-        }
+        let mut out = Self::try_with_capacity_in(self.len, self.raw.allocator().try_clone()?)?;
         for elem in self.iter() {
             match elem.try_clone() {
                 // SAFETY: capacity was reserved above for every element.

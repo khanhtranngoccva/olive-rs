@@ -473,6 +473,33 @@ impl<A: Allocator> String<A> {
         self.buf.try_reserve_exact(additional)
     }
 
+    /// Ensures the string has room for at least `additional` more bytes,
+    /// preferring amortized growth but falling back to an exact-sized
+    /// allocation when the amortized reserve is refused.
+    ///
+    /// This first attempts [`Self::try_reserve`], which grows by doubling so
+    /// that future appends are cheap. If that allocation fails — typically
+    /// because a tight allocator cannot satisfy the larger amortized size — it
+    /// retries with [`Self::try_reserve_exact`], which asks for only the
+    /// minimum memory required (`len + additional`). The exact request is
+    /// always no larger than the amortized one, so it can succeed where the
+    /// amortized attempt failed.
+    ///
+    /// Use this for bulk operations (e.g. appending a known-length fragment)
+    /// where reserving up front is desirable but a refusal of the
+    /// over-provisioned amortized size should not be fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if both the amortized and the exact
+    /// reservations fail.
+    pub fn try_reserve_adaptive(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        match self.try_reserve(additional) {
+            Ok(()) => Ok(()),
+            Err(_) => self.try_reserve_exact(additional),
+        }
+    }
+
     /// Ensures the string has room for at least `total` bytes *in total*
     /// (an absolute target, not an increment).
     ///
@@ -548,7 +575,7 @@ impl<A: Allocator> String<A> {
         if s.is_empty() {
             return Ok(());
         }
-        self.buf.try_reserve(s.len())?;
+        self.try_reserve_adaptive(s.len())?;
         // SAFETY: the reservation above guarantees `s.len()` spare bytes, and
         // `s` is valid UTF-8, so appending it preserves the invariant.
         unsafe {
@@ -591,8 +618,7 @@ impl<A: Allocator> String<A> {
         let self_len = self.len();
         let s_len = s.len();
 
-        self.buf
-            .try_reserve(s_len)
+        self.try_reserve_adaptive(s_len)
             .map_err(TryStringInsertError::Reserve)?;
 
         // SAFETY: after `reserve`, `[0..self_len + s_len)` is valid writable
@@ -954,7 +980,7 @@ impl<A: Allocator> String<A> {
         // source pointer. After reserving, the data is intact at the same
         // logical offsets, and the destination (at offset `len`) does not
         // overlap the source (which ends at most at `len`).
-        self.try_reserve(count)
+        self.try_reserve_adaptive(count)
             .map_err(TryStringExtendFromWithinError::Reserve)?;
         let base = self.buf.as_mut_ptr();
         // SAFETY: `base + start` and `base + len` are within the allocation;
@@ -1023,7 +1049,7 @@ impl<A: Allocator> String<A> {
         let added = replacement.len();
         let delta = added.saturating_sub(removed);
         if delta > 0 {
-            self.try_reserve(delta)?;
+            self.try_reserve_adaptive(delta)?;
         }
         let ptr = self.buf.as_mut_ptr();
         // Move the trailing segment `[end..len]` to make room, accounting for
@@ -2005,7 +2031,7 @@ impl<A: Allocator> TryExtend<char> for String<A> {
     {
         let (head, mut inner, hint) = source.decompose_with_size_hint();
         // Ignore over-reserve.
-        let _ = self.try_reserve_total(hint.estimated_total());
+        let _ = self.try_reserve_adaptive(hint.estimated_total());
         if let Some(head) = head {
             if let Err(e) = self.try_push(head) {
                 return Err((Resume::new(head, inner), e));

@@ -31,10 +31,11 @@ impl TryDefault for FailDefaultAlloc {
 /// An allocator that rejects any single allocation whose size exceeds a
 /// configured byte cap, delegating smaller requests to [`crate::alloc::Global`].
 ///
-/// Useful for exercising the over-hint fallback in `try_from_iter_in`: an
+/// Useful for exercising the over-hint absorption in `try_from_iter_in`: an
 /// iterator advertising a large upper bound triggers a big upfront batch
-/// reserve that this allocator refuses, forcing the collection loop to fall
-/// back to incremental per-element growth where each small reserve succeeds.
+/// reserve that this allocator refuses; the constructor absorbs that failure and
+/// falls back to incremental per-element growth where each small reserve
+/// succeeds or use exact reservation.
 #[derive(Debug, Clone)]
 pub struct ByteCapAlloc {
     /// Maximum bytes allowed in a single allocation. Requests larger than this

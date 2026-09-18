@@ -156,6 +156,33 @@ impl<T, A: Allocator> VecDeque<T, A> {
         Ok(())
     }
 
+    /// Ensures the deque has room for at least `additional` more elements,
+    /// preferring amortized growth but falling back to an exact-sized
+    /// allocation when the amortized reserve is refused.
+    ///
+    /// This first attempts [`Self::try_reserve`], which grows by doubling so
+    /// that future appends are cheap. If that allocation fails — typically
+    /// because a tight allocator cannot satisfy the larger amortized size — it
+    /// retries with [`Self::try_reserve_exact`], which asks for only the
+    /// minimum memory required (`len + additional`). The exact request is
+    /// always no larger than the amortized one, so it can succeed where the
+    /// amortized attempt failed.
+    ///
+    /// Use this for bulk operations (e.g. extending from a slice of known
+    /// length) where reserving up front is desirable but a refusal of the
+    /// over-provisioned amortized size should not be fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if both the amortized and the exact
+    /// reservations fail.
+    pub fn try_reserve_adaptive(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        match self.try_reserve(additional) {
+            Ok(()) => Ok(()),
+            Err(_) => self.try_reserve_exact(additional),
+        }
+    }
+
     /// Ensures the deque has room for at least `total` elements *in total*
     /// (an absolute target, not an increment).
     ///
@@ -167,7 +194,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// allocation fails.
     pub fn try_reserve_total(&mut self, total: usize) -> Result<(), TryReserveError> {
         let additional = total.saturating_sub(self.len);
-        self.try_reserve(additional)
+        self.try_reserve_adaptive(additional)
     }
 }
 
@@ -197,7 +224,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// Returns `(T, TryReserveError)` if growing the buffer fails.
     pub fn try_push_back_give_back(&mut self, value: T) -> Result<(), (T, TryReserveError)> {
         if self.len == self.capacity() {
-            if let Err(e) = self.try_reserve(1) {
+            // Adaptive: a refused over-provisioned amortized doubling falls
+            // back to an exact +1 growth instead of failing.
+            if let Err(e) = self.try_reserve_adaptive(1) {
                 return Err((value, e));
             }
         }
@@ -227,7 +256,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// Returns `(T, TryReserveError)` if growing the buffer fails.
     pub fn try_push_front_give_back(&mut self, value: T) -> Result<(), (T, TryReserveError)> {
         if self.len == self.capacity() {
-            if let Err(e) = self.try_reserve(1) {
+            // Adaptive: a refused over-provisioned amortized doubling falls
+            // back to an exact +1 growth instead of failing.
+            if let Err(e) = self.try_reserve_adaptive(1) {
                 return Err((value, e));
             }
         }
@@ -261,7 +292,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
         value: T,
     ) -> Result<&mut T, (T, TryReserveError)> {
         if self.len == self.capacity() {
-            if let Err(e) = self.try_reserve(1) {
+            // Adaptive: a refused over-provisioned amortized doubling falls
+            // back to an exact +1 growth instead of failing.
+            if let Err(e) = self.try_reserve_adaptive(1) {
                 return Err((value, e));
             }
         }
@@ -293,7 +326,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
         value: T,
     ) -> Result<&mut T, (T, TryReserveError)> {
         if self.len == self.capacity() {
-            if let Err(e) = self.try_reserve(1) {
+            // Adaptive: a refused over-provisioned amortized doubling falls
+            // back to an exact +1 growth instead of failing.
+            if let Err(e) = self.try_reserve_adaptive(1) {
                 return Err((value, e));
             }
         }
@@ -368,7 +403,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
             return Err((value, TryVecDequeInsertError::OutOfBounds));
         }
         if self.len == self.capacity() {
-            if let Err(e) = self.try_reserve(1) {
+            // Adaptive: a refused over-provisioned amortized doubling falls
+            // back to an exact +1 growth instead of failing.
+            if let Err(e) = self.try_reserve_adaptive(1) {
                 return Err((value, TryVecDequeInsertError::Reserve(e)));
             }
         }
@@ -402,8 +439,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
             return Ok(());
         }
         // Reserve enough room for all incoming elements. If this fails, we
-        // haven't touched either deque yet.
-        self.try_reserve(count)?;
+        // haven't touched either deque yet. Adaptive, so a refused
+        // over-provisioned amortized size falls back to an exact-sized
+        // allocation instead of failing.
+        self.try_reserve_adaptive(count)?;
         // Copy elements from `other` into `self`'s back slots, one by one.
         // We iterate over `other`'s logical order (front to back) and write
         // each into the next available back slot of `self`.
@@ -457,8 +496,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
         if count == 0 {
             return Ok(());
         }
-        // Reserve enough room.
-        self.try_reserve(count)?;
+        // Reserve enough room. Adaptive, so a refused over-provisioned
+        // amortized size falls back to an exact-sized allocation instead of
+        // failing.
+        self.try_reserve_adaptive(count)?;
 
         #[allow(
             clippy::arithmetic_side_effects,
@@ -774,7 +815,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
         #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = new_len - current;
-        self.try_reserve(extra)?;
+        self.try_reserve_adaptive(extra)?;
         // SAFETY: the guard is a local that drops before this function returns,
         // so `self` outlives it.
         let guard = unsafe { self.truncate_back_guard() };
@@ -819,7 +860,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
         #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = new_len - current;
-        self.try_reserve(extra)
+        self.try_reserve_adaptive(extra)
             .map_err(TryVecDequeWithClosureError::Reserve)?;
         // SAFETY: the guard is a local that drops before this function returns,
         // so `self` outlives it.

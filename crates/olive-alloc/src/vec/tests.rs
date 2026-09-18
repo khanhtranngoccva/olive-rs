@@ -670,6 +670,38 @@ fn try_extend_from_slice_trait_success() {
 }
 
 #[test]
+fn try_reserve_adaptive_falls_back_to_exact_when_amortized_refused() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+    let mut v: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(15, ByteCapAlloc::new(64)).expect("should create vector");
+    v.try_extend(0..15).expect("capacity is sufficient");
+    v.try_reserve_adaptive(1)
+        .expect("exact reserve should succeed");
+    assert!(v.capacity() >= 16);
+}
+
+#[test]
+fn try_reserve_adaptive_succeeds_via_amortized_path_when_affordable() {
+    // With a generous cap the first (amortized) attempt succeeds outright, so no
+    // fallback is needed and the result still holds the requested room.
+    let mut v: Vec<i32> = Vec::new();
+    v.try_reserve_adaptive(16).expect("affordable reserve");
+    assert!(v.capacity() >= 16);
+}
+
+#[test]
+fn try_extend_from_slice_uses_adaptive_reserve_under_byte_cap() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+    let mut v: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(15, ByteCapAlloc::new(64)).expect("should create vector");
+    v.try_extend(0..15).expect("capacity is sufficient");
+    v.try_extend_from_slice(&[15])
+        .expect("adaptive reserve should absorb the over-provisioned request");
+    assert_eq!(v.len(), 16);
+    assert_eq!(v.last(), Some(&15));
+}
+
+#[test]
 fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
     let mut v: Vec<FlakyClone> = Vec::new();
     let mut src: Vec<FlakyClone> = Vec::new();
@@ -2461,12 +2493,25 @@ fn from_boxed_empty_slice() {
 }
 
 #[test]
-// FIXME: create tests that exercise element clone failures (flaky clones)
 fn try_from_cow_borrowed_clones_elements() {
     let src: &[i32] = &[11, 22];
     let cow = Cow::Borrowed(src);
     let v: Vec<i32> = Vec::try_from(cow).unwrap();
     assert_eq!(v.as_slice(), &[11, 22]);
+}
+
+#[test]
+fn try_from_cow_borrowed_fails_when_element_clone_fails() {
+    // The Borrowed arm delegates to `try_from_slice_in`, which clones each
+    // element via `TryClone`. A `FlakyClone` with threshold 0 fails its first
+    // clone attempt, so the very first element cannot be copied into the new
+    // vector and the conversion surfaces a `Clone` error.
+    let items = [FlakyClone::new(0), FlakyClone::new(0)];
+    let cow = Cow::Borrowed(items.as_slice());
+    match Vec::try_from(cow).expect_err("first element clone should fail") {
+        TryVecWithCloneError::Clone(TryCloneError::Other(_)) => {}
+        other => panic!("expected a clone failure, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2517,17 +2562,63 @@ fn try_from_iter_fails_when_allocation_fails() {
     assert!(matches!(r.kind(), TryReserveErrorKind::AllocError { .. }))
 }
 
+/// An iterator whose `size_hint` advertises a far larger upper bound than the
+/// number of elements it actually yields — the canonical "over-reporting" case.
+struct OverhintedIter {
+    remaining: usize,
+    advertised_upper: usize,
+}
+
+impl Iterator for OverhintedIter {
+    type Item = i32;
+
+    fn next(&mut self) -> Option<i32> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        let value = (self.advertised_upper - self.remaining) as i32;
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            self.remaining.min(self.advertised_upper),
+            Some(self.advertised_upper),
+        )
+    }
+}
+
 #[test]
-// FIXME: this test does not demonstrate over-reporting behavior
-fn try_from_iter_falls_back_to_growth_under_byte_cap() {
+fn try_from_iter_absorbs_overhint_and_grows_incrementally() {
     use crate::test_helpers::allocators::ByteCapAlloc;
-    // An iterator advertising a huge upper bound triggers a big upfront batch
-    // reserve that this allocator refuses; the collection loop then falls back
-    // to incremental per-element growth where each small reserve succeeds.
-    let iter = std::iter::repeat(1i32).take(8).map(|_| 1);
-    let v: Vec<i32, ByteCapAlloc> =
-        Vec::try_from_iter_in(iter, ByteCapAlloc::new(64)).expect("small reserves succeed");
-    assert_eq!(v.as_slice(), &[1, 1, 1, 1, 1, 1, 1, 1]);
+    // The iterator advertises an upper bound of 1_000 but yields only 4
+    // elements. The upfront best-effort reserve for 1_000 slots (~4 KB) is
+    // rejected by the byte-capped allocator; `try_from_iter_in` absorbs that
+    // failure and falls back to incremental per-element growth, where each
+    // small reserve stays within the cap. Collection therefore succeeds with
+    // all four real elements — the bogus hint did not abort it.
+    let iter = OverhintedIter {
+        remaining: 4,
+        advertised_upper: 1_000,
+    };
+    let v: Vec<i32, ByteCapAlloc> = Vec::try_from_iter_in(iter, ByteCapAlloc::new(64))
+        .expect("over-hint should be absorbed via incremental growth");
+    assert_eq!(v.as_slice(), &[997, 998, 999, 1_000]);
+}
+
+#[test]
+fn try_from_iter_still_fails_on_genuine_oom_under_byte_cap() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+    // Contrast to the absorption case above: the iterator's hint is honest
+    // (it really does yield 20 elements), so the upfront reserve is legitimate
+    // yet exceeds the 64-byte cap, and incremental growth cannot recover either
+    // — reaching 20 i32s requires a buffer of at least 80 bytes, beyond the
+    // cap. A genuine OOM is surfaced, not swallowed by the over-hint fallback.
+    let iter = std::iter::repeat(1i32).take(20);
+    let res: Result<Vec<i32, ByteCapAlloc>, _> = Vec::try_from_iter_in(iter, ByteCapAlloc::new(64));
+    let e = res.expect_err("genuine OOM should surface");
+    assert!(e.is_alloc())
 }
 
 #[test]
