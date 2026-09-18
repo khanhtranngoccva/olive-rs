@@ -16,6 +16,7 @@ mod convert;
 mod drain;
 mod into_iter;
 mod iter;
+mod macros;
 mod mutation;
 mod query;
 mod traits;

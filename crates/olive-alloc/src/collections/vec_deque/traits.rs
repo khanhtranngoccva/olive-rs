@@ -2,9 +2,13 @@
 //!
 //! Covers the fallible construction and extension traits from `olive-core`:
 //! [`TryClone`], [`TryExtend`], [`TryExtendFromSlice`], and
-//! [`TryFromIterator`], plus a standard-library [`Debug`] impl.
+//! [`TryFromIterator`], plus standard-library trait impls (`Debug`,
+//! `PartialEq`/`Eq`, `PartialOrd`/`Ord`, `Hash`, `Index`/`IndexMut`).
 
+use core::cmp::Ordering;
 use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::ops::{Index, IndexMut};
 
 use olive_core::alloc::{Allocator, AllocatorTryClone};
 use olive_core::alloc_errors::TryReserveError;
@@ -13,9 +17,11 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
-use super::VecDeque;
-use crate::alloc::Global;
 use super::TryVecDequeWithCloneError;
+use super::VecDeque;
+use super::macros::__impl_slice_eq1;
+use crate::alloc::Global;
+use crate::vec::Vec;
 
 // ---------------------------------------------------------------------------
 // Debug
@@ -30,6 +36,166 @@ where
     /// out physically. An empty deque renders as `[]`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PartialEq / Eq
+// ---------------------------------------------------------------------------
+
+impl<T: PartialEq, A: Allocator> PartialEq for VecDeque<T, A> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len != other.len {
+            return false;
+        }
+        let (sa, sb) = self.as_slices();
+        let (oa, ob) = other.as_slices();
+        match sa.len().cmp(&oa.len()) {
+            Ordering::Equal => sa == oa && sb == ob,
+            Ordering::Less => {
+                // The front halves differ in length. Split into three sections so
+                // each compared pair is element-aligned:
+                //   self : [a b c | d e f]
+                //   other: [0 1 2 3 | 4 5]
+                //   → sa == oa_front && sb_mid == oa_mid && sb_back == ob
+                let front = sa.len();
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted sa.len() < oa.len()"
+                )]
+                let mid = oa.len() - front;
+                let (oa_front, oa_mid) = oa.split_at(front);
+                let (sb_mid, sb_back) = sb.split_at(mid);
+                debug_assert_eq!(sa.len(), oa_front.len());
+                debug_assert_eq!(sb_mid.len(), oa_mid.len());
+                debug_assert_eq!(sb_back.len(), ob.len());
+                sa == oa_front && sb_mid == oa_mid && sb_back == ob
+            }
+            Ordering::Greater => {
+                // Mirror image of the branch above.
+                let front = oa.len();
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted sa.len() > oa.len()"
+                )]
+                let mid = sa.len() - front;
+                let (sa_front, sa_mid) = sa.split_at(front);
+                let (ob_mid, ob_back) = ob.split_at(mid);
+                debug_assert_eq!(sa_front.len(), oa.len());
+                debug_assert_eq!(sa_mid.len(), ob_mid.len());
+                debug_assert_eq!(sb.len(), ob_back.len());
+                sa_front == oa && sa_mid == ob_mid && sb == ob_back
+            }
+        }
+    }
+}
+
+impl<T: Eq, A: Allocator> Eq for VecDeque<T, A> {}
+
+// Cross-type equality against slices, arrays, and vectors. Each reduces to an
+// element-wise compare of the two logical sequences (see `__impl_slice_eq1`).
+__impl_slice_eq1! { [] VecDeque<T, A>, Vec<U, A>, }
+__impl_slice_eq1! { [] VecDeque<T, A>, &[U], }
+__impl_slice_eq1! { [] VecDeque<T, A>, &mut [U], }
+__impl_slice_eq1! { [const N: usize] VecDeque<T, A>, [U; N], }
+__impl_slice_eq1! { [const N: usize] VecDeque<T, A>, &[U; N], }
+__impl_slice_eq1! { [const N: usize] VecDeque<T, A>, &mut [U; N], }
+
+// ---------------------------------------------------------------------------
+// PartialOrd / Ord
+// ---------------------------------------------------------------------------
+
+impl<T: PartialOrd, A: Allocator> PartialOrd for VecDeque<T, A> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<T: Ord, A: Allocator> Ord for VecDeque<T, A> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hash
+// ---------------------------------------------------------------------------
+
+impl<T: Hash, A: Allocator> Hash for VecDeque<T, A> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the length first so that a deque which is a strict prefix of
+        // another cannot collide with it. (We can't use the unstable
+        // `write_length_prefix`; hashing the raw `usize` achieves the same
+        // disambiguation.)
+        self.len.hash(state);
+        self.iter().for_each(|elem| elem.hash(state));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Index / IndexMut
+// ---------------------------------------------------------------------------
+
+impl<T, A: Allocator> Index<usize> for VecDeque<T, A> {
+    type Output = T;
+
+    /// Retrieves a reference to an item at the specified index.
+    ///
+    /// # Choosing between `dq[i]` and `get()`
+    ///
+    /// - **Element may or may not exist** — use [`VecDeque::get`] and handle
+    ///   the `None` case.
+    /// - **The element should always be there, but proving it would be awkward**
+    ///   — use `get(index).expect("why it must be present")`. The `expect`
+    ///   message gives far better diagnostics than a bare index panic.
+    /// - **It is obvious from adjacent code that the bound holds** (e.g. inside
+    ///   a loop bounded by `len`) — implicit indexing `dq[i]` is acceptable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= len`. The message reports both the offending index
+    /// and the deque's actual length so the mismatch is visible at a glance.
+    #[inline]
+    fn index(&self, index: usize) -> &T {
+        if index >= self.len {
+            panic!(
+                "VecDeque::index: index {index} out of bounds (len = {})",
+                self.len
+            );
+        }
+        self.get(index)
+            .expect("unreachable: bounds already checked")
+    }
+}
+
+impl<T, A: Allocator> IndexMut<usize> for VecDeque<T, A> {
+    /// Retrieves a mutable reference to an item at the specified index.
+    ///
+    /// # Choosing between `dq[i]` and `get_mut()`
+    ///
+    /// - **Element may or may not exist** — use [`VecDeque::get_mut`] and
+    ///   handle the `None` case.
+    /// - **The element should always be there, but proving it would be awkward**
+    ///   — use `get_mut(index).expect("why it must be present")`. The `expect`
+    ///   message gives far better diagnostics than a bare index panic.
+    /// - **It is obvious from adjacent code that the bound holds** (e.g. inside
+    ///   a loop bounded by `len`) — implicit indexing `dq[i]` is acceptable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= len`. The message reports both the offending index
+    /// and the deque's actual length so the mismatch is visible at a glance.
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        if index >= self.len {
+            panic!(
+                "VecDeque::index_mut: index {index} out of bounds (len = {})",
+                self.len
+            );
+        }
+        self.get_mut(index)
+            .expect("unreachable: bounds already checked")
     }
 }
 
@@ -290,6 +456,23 @@ mod tests {
     use crate::test_helpers::{CloneBudget, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger};
     use std::format;
     use std::sync::Arc;
+
+    /// Builds a `VecDeque<i32>` whose logical contents are `[front, back]`,
+    /// arranged in a wrapped layout (split across the buffer end).
+    fn make_wrapped_two(front: i32, back: i32) -> VecDeque<i32> {
+        let mut dq = VecDeque::<i32>::try_with_capacity(3).expect("allocation ok");
+        // Fill the 3-slot ring so the head advances past the start.
+        for v in [0, 1, front] {
+            dq.try_push_back(v).unwrap();
+        }
+        dq.pop_front();
+        dq.pop_front();
+        dq.try_push_back(back).unwrap();
+        // Logical contents are [front, back]; head = 2, len = 2 → wrapped.
+        assert_eq!(dq.as_slices(), (&[front][..], &[back][..]));
+        assert!(!dq.is_contiguous());
+        dq
+    }
 
     // --- Debug ---------------------------------------------------------------
 
@@ -863,5 +1046,366 @@ mod tests {
         assert_eq!(dq.get(1), Some(&7));
         assert_eq!(dq.get(2), Some(&3));
         assert_eq!(dq.get(3), Some(&4));
+    }
+
+    // --- PartialEq / Eq -----------------------------------------------------
+
+    #[test]
+    fn partial_eq_same_layout() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        for v in [1, 2, 3] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_different_lengths_not_equal() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        for v in [1, 2, 3] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        a.try_push_back(4).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_different_elements_not_equal() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        a.try_push_back(1).unwrap();
+        b.try_push_back(2).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_both_empty() {
+        let a: VecDeque<i32> = VecDeque::new();
+        let b: VecDeque<i32> = VecDeque::new();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_wrapped_vs_unwrapped_same_elements() {
+        // Build an unwrapped deque [3, 4].
+        let mut plain: VecDeque<i32> = VecDeque::new();
+        plain.try_push_back(3).unwrap();
+        plain.try_push_back(4).unwrap();
+
+        // Same logical contents in a guaranteed-wrapped layout.
+        let wrapped = make_wrapped_two(3, 4);
+        assert_eq!(plain, wrapped);
+    }
+
+    /// Builds a plain `VecDeque<i32>` holding the given logical contents in a
+    /// wrapped layout (split across the buffer end), using exactly `cap` slots.
+    fn make_wrapped(values: &[i32], cap: usize, front_shift: usize) -> VecDeque<i32> {
+        assert!(
+            values.len() <= cap && front_shift < cap,
+            "need values.len() <= cap and front_shift < cap"
+        );
+        let mut dq = VecDeque::<i32>::try_with_capacity(cap).expect("allocation ok");
+        // Advance the head toward the buffer end. Each `push_front` places the
+        // item ahead of the previous ones, so feed the leading values in
+        // reverse to preserve their logical order.
+        for &v in values[..front_shift].iter().rev() {
+            dq.try_push_front(v).unwrap();
+        }
+        // Fill the remainder from the back; these follow the pushed-front items.
+        for &v in &values[front_shift..] {
+            dq.try_push_back(v).unwrap();
+        }
+        dq
+    }
+
+    #[test]
+    fn partial_eq_cross_half_split_mismatch_less_branch() {
+        // Both deques are wrapped, with equal lengths but different `as_slices`
+        // split points, and they differ exactly at the element adjacent to the
+        // split boundary. Here `sa.len() < oa.len()`, exercising the
+        // `Ordering::Less` branch of `PartialEq::eq`.
+        let a = make_wrapped(&[3, 4, 5], 3, 1);
+        assert_eq!(a.as_slices(), (&[3][..], &[4, 5][..]));
+
+        let b = make_wrapped(&[2, 3, 9], 3, 2);
+        assert_eq!(b.as_slices(), (&[2, 3][..], &[9][..]));
+
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_cross_half_split_mismatch_equal_branch() {
+        // Both deques are wrapped, with equal lengths and same `as_slices`
+        // split points. Here `sa.len() == oa.len()`, exercising the
+        // `Ordering::Equal` branch of `PartialEq::eq`.
+        let a = make_wrapped(&[3, 4, 5], 3, 1);
+        assert_eq!(a.as_slices(), (&[3][..], &[4, 5][..]));
+
+        let b = make_wrapped(&[3, 3, 9], 3, 1);
+        assert_eq!(b.as_slices(), (&[3][..], &[3, 9][..]));
+
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn partial_eq_cross_half_split_mismatch_greater_branch() {
+        // Mirror image of the test above: same layouts swapped, so
+        // `sa.len() > oa.len()` and the `Ordering::Greater` branch runs.
+        let a = make_wrapped(&[2, 3, 9], 3, 2);
+        assert_eq!(a.as_slices(), (&[2, 3][..], &[9][..]));
+
+        let b = make_wrapped(&[3, 4, 5], 3, 1);
+        assert_eq!(b.as_slices(), (&[3][..], &[4, 5][..]));
+
+        assert_ne!(a, b);
+    }
+
+    /// Builds a `Vec<i32>` holding the given values via the fallible API.
+    fn make_vec(values: &[i32]) -> Vec<i32> {
+        let mut v: Vec<i32> = Vec::new();
+        for &val in values {
+            v.try_push(val).expect("push ok");
+        }
+        v
+    }
+
+    #[test]
+    fn partial_eq_cross_type_vec() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        for v in [1, 2, 3] {
+            dq.try_push_back(v).unwrap();
+        }
+        let v = make_vec(&[1, 2, 3]);
+        // Deque → Vec direction (the impl we added). The reverse (Vec →
+        // Deque) is not implemented, matching std.
+        assert!(dq == v);
+        assert!(dq != make_vec(&[1, 2, 4]));
+        assert!(dq != make_vec(&[1, 2]));
+    }
+
+    #[test]
+    fn partial_eq_cross_type_slice_ref() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        for v in [7, 8, 9] {
+            dq.try_push_back(v).unwrap();
+        }
+        let mut s = [7i32, 8, 9];
+        assert_eq!(dq, &s[..]);
+        assert_eq!(dq, &mut s[..]);
+
+        let mut t = [7i32, 8, 0];
+        assert_ne!(dq, &t[..]);
+        assert_ne!(dq, &mut t[..]);
+    }
+
+    #[test]
+    fn partial_eq_cross_type_array() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        for v in [5, 6] {
+            dq.try_push_back(v).unwrap();
+        }
+        assert_eq!(dq, [5i32, 6]);
+        assert_eq!(dq, &[5i32, 6]);
+        assert_eq!(dq, &mut [5i32, 6]);
+        assert_ne!(dq, [5i32, 7]);
+        assert_ne!(dq, &[5i32, 7]);
+        assert_ne!(dq, &mut [5i32, 7]);
+    }
+
+    #[test]
+    fn partial_eq_cross_type_wrapped_layout() {
+        // A wrapped deque must compare equal to every cross-type shape holding
+        // the same logical contents, exercising the as_slices split path. The
+        // wrap is forced by the stored logical capacity (cap 3), which is
+        // deterministic.
+        let dq = make_wrapped(&[2, 3, 4], 3, 1);
+
+        // Arrays and array references.
+        assert_eq!(dq, [2i32, 3, 4]);
+        assert_eq!(dq, &[2i32, 3, 4]);
+        assert_eq!(dq, &mut [2i32, 3, 4]);
+
+        // Slice references (immutable and mutable).
+        let mut s = [2i32, 3, 4];
+        assert_eq!(dq, &s[..]);
+        assert_eq!(dq, &mut s[..]);
+
+        // Vectors.
+        assert_eq!(dq, make_vec(&[2, 3, 4]));
+
+        // Inequalities across different types.
+        assert_ne!(dq, [1i32, 2, 3]);
+        assert_ne!(dq, &[1i32, 2, 3]);
+        assert_ne!(dq, &mut [1i32, 2, 3]);
+        assert_ne!(dq, &[1i32, 2, 3][..]);
+        assert_ne!(dq, &mut [1i32, 2, 3][..]);
+        assert_ne!(dq, make_vec(&[1, 2, 3]));
+    }
+
+    // --- PartialOrd / Ord ----------------------------------------------------
+
+    #[test]
+    fn partial_ord_less_than() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        a.try_push_back(1).unwrap();
+        b.try_push_back(2).unwrap();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Greater));
+        assert_eq!(a.cmp(&b), Ordering::Less);
+        assert_eq!(b.cmp(&a), Ordering::Greater);
+    }
+
+    #[test]
+    fn partial_ord_prefix_is_less() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        a.try_push_back(1).unwrap();
+        b.try_push_back(1).unwrap();
+        b.try_push_back(2).unwrap();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Greater));
+        assert_eq!(a.cmp(&b), Ordering::Less);
+        assert_eq!(b.cmp(&a), Ordering::Greater);
+    }
+
+    #[test]
+    fn partial_ord_equal_deques_compare_equal() {
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        for v in [5, 6, 7] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+        assert!(a == b);
+    }
+
+    #[test]
+    fn ord_wrapped_deque_compares_correctly() {
+        // A wrapped deque [3, 4] compares equal to an unwrapped [3, 4], and a
+        // wrapped deque with different contents orders accordingly. The wrap is
+        // forced by the stored logical capacity, which is deterministic.
+        let mut plain: VecDeque<i32> = VecDeque::new();
+        plain.try_push_back(3).unwrap();
+        plain.try_push_back(4).unwrap();
+
+        let wrapped = make_wrapped_two(3, 4);
+        assert_eq!(wrapped.cmp(&plain), Ordering::Equal);
+
+        // Same layout but a larger element at the back → Greater.
+        let bigger = make_wrapped_two(3, 5);
+        assert_eq!(bigger.cmp(&plain), Ordering::Greater);
+        assert_eq!(plain.partial_cmp(&bigger), Some(Ordering::Less));
+    }
+
+    // --- Hash ----------------------------------------------------------------
+
+    #[test]
+    fn hash_equal_deques_have_equal_hashes() {
+        use core::hash::Hasher;
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        for v in [10, 20, 30] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        let mut ha = DefaultHasher::new();
+        let mut hb = DefaultHasher::new();
+        a.hash(&mut ha);
+        b.hash(&mut hb);
+        assert_eq!(ha.finish(), hb.finish());
+    }
+
+    #[test]
+    fn hash_wrapped_and_unwrapped_same_elements_match() {
+        use core::hash::Hasher;
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut plain: VecDeque<i32> = VecDeque::new();
+        plain.try_push_back(3).unwrap();
+        plain.try_push_back(4).unwrap();
+
+        // Same logical contents in a guaranteed-wrapped layout.
+        let wrapped = make_wrapped_two(3, 4);
+
+        let mut hp = DefaultHasher::new();
+        let mut hw = DefaultHasher::new();
+        plain.hash(&mut hp);
+        wrapped.hash(&mut hw);
+        assert_eq!(hp.finish(), hw.finish());
+    }
+
+    #[test]
+    fn hash_different_lengths_differ() {
+        use core::hash::Hasher;
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32> = VecDeque::new();
+        a.try_push_back(1).unwrap();
+        b.try_push_back(1).unwrap();
+        b.try_push_back(2).unwrap();
+
+        let mut ha = DefaultHasher::new();
+        let mut hb = DefaultHasher::new();
+        a.hash(&mut ha);
+        b.hash(&mut hb);
+        // Length prefix ensures these differ even though a is a prefix of b.
+        assert_ne!(ha.finish(), hb.finish());
+    }
+
+    // --- Index / IndexMut ------------------------------------------------------
+
+    #[test]
+    fn index_returns_element() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        for v in [10, 20, 30] {
+            dq.try_push_back(v).unwrap();
+        }
+        assert_eq!(dq[0], 10);
+        assert_eq!(dq[1], 20);
+        assert_eq!(dq[2], 30);
+    }
+
+    #[test]
+    #[should_panic(expected = "VecDeque::index: index 5 out of bounds (len = 1)")]
+    fn index_out_of_bounds_panics() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        dq.try_push_back(1).unwrap();
+        let _ = &dq[5];
+    }
+
+    #[test]
+    fn index_mut_modifies_element() {
+        let mut dq: VecDeque<i32> = VecDeque::new();
+        for v in [10, 20, 30] {
+            dq.try_push_back(v).unwrap();
+        }
+        dq[1] = 99;
+        assert_eq!(dq.get(1), Some(&99));
+    }
+
+    #[test]
+    fn index_on_wrapped_deque() {
+        let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("ok");
+        for v in [1, 2, 3, 4] {
+            dq.try_push_back(v).unwrap();
+        }
+        dq.pop_front();
+        dq.pop_front();
+        dq.try_push_back(5).unwrap();
+        assert!(!dq.is_contiguous());
+        // Logical order: [3, 4, 5]
+        assert_eq!(dq[0], 3);
+        assert_eq!(dq[1], 4);
+        assert_eq!(dq[2], 5);
     }
 }
