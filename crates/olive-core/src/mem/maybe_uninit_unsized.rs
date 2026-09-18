@@ -238,10 +238,13 @@ mod tests {
         // Reading the pointer back does not dereference the pointee.
         let recovered = wrapped.as_ptr();
         assert_eq!(recovered.addr(), orig.addr());
-        // Metadata (length) must match too. Explicit `&` keeps the reference
-        // creation visible to the linter rather than relying on an implicit
-        // autoref through a raw-pointer deref.
-        assert_eq!(unsafe { (&*recovered).len() }, 3);
+        // Metadata (length) must match too.
+        let len: usize;
+        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+        {
+            len = unsafe { (& *recovered).len() };
+        }
+        assert_eq!(len, 3);
     }
 
     /// `from_mut` + `assume_init_mut` must recover the same mutable reference
@@ -276,7 +279,12 @@ mod tests {
         let recovered = wrapped.as_ptr();
         assert_eq!(recovered.addr(), ptr.addr());
         // Metadata (length) must survive the round-trip.
-        assert_eq!(unsafe { (&*recovered).len() }, 4);
+        let len: usize;
+        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+        {
+            len = unsafe { (& *recovered).len() };
+        }
+        assert_eq!(len, 4);
 
         let mptr: *mut [u8] = &mut data[..] as *mut [u8];
         // SAFETY: `mptr` is valid for reads/writes of `[u8]` for this scope,
@@ -285,7 +293,12 @@ mod tests {
             unsafe { MaybeUninitUnsized::from_mut_ptr(mptr) };
         let mrecovered = mwrapped.as_mut_ptr();
         assert_eq!(mrecovered.addr(), mptr.addr());
-        assert_eq!(unsafe { (&*mrecovered).len() }, 4);
+        let mlen: usize;
+        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+        {
+            mlen = unsafe { (& *mrecovered).len() };
+        }
+        assert_eq!(mlen, 4);
     }
 
     /// `ptr_from_ptr` / `ptr_from_mut_ptr` are the borrow-free raw-pointer
@@ -303,7 +316,12 @@ mod tests {
         let back: *const [u8] = wrapped as *const [u8];
         assert_eq!(back.addr(), ptr.addr());
         // SAFETY: `back` aliases `data`, which is alive and initialized.
-        assert_eq!(unsafe { (&*back).len() }, 4);
+        let len: usize;
+        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+        {
+            len = unsafe { (& *back).len() };
+        }
+        assert_eq!(len, 4);
 
         let mptr: *mut [u8] = &mut data[..] as *mut [u8];
         // SAFETY: `mptr` is a valid, aligned `*mut [u8]`.
@@ -311,6 +329,11 @@ mod tests {
         let mback: *mut [u8] = mwrapped as *mut [u8];
         assert_eq!(mback.addr(), mptr.addr());
         // SAFETY: `mback` aliases `data`, which is alive and initialized.
-        assert_eq!(unsafe { (&*mback).len() }, 4);
+        let mlen: usize;
+        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+        {
+            mlen = unsafe { (& *mback).len() };
+        }
+        assert_eq!(mlen, 4);
     }
 }
