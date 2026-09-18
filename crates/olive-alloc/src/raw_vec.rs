@@ -221,6 +221,20 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// Like [`Self::try_with_capacity`], but parameterized over the choice of allocator for
     /// the returned `RawVec`.
     ///
+    /// The constructor will not allocate more than requested.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned buffer is deterministic. For
+    /// non-zero-sized `T`, the capacity is exactly `capacity`, so callers can
+    /// rely on `self.capacity() == capacity` when asserting on allocations in
+    /// tests. For zero-sized `T`, the capacity is always reported as
+    /// `usize::MAX` regardless of the request (and no memory is allocated).
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `capacity`.
+    ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the

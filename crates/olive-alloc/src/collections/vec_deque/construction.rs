@@ -31,12 +31,25 @@ impl<T> VecDeque<T, Global> {
         Self::new_in(Global)
     }
 
-    /// Constructs a new, empty `VecDeque<T>` with the given capacity on the
-    /// global allocator.
+    /// Constructs a new, empty `VecDeque<T>` with exactly the given capacity
+    /// on the global allocator.
     ///
-    /// The deque will contain no elements, but will have capacity for at least
-    /// `capacity` of them before needing to reallocate. For zero-sized types
-    /// the request is honored without allocating any memory at all.
+    /// The deque will contain no elements and can hold `capacity` of them
+    /// before needing to reallocate; unlike the fallible growth methods, this
+    /// constructor does not allocate more than requested. If `capacity` is
+    /// zero, the deque will not allocate.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned deque is deterministic. For
+    /// non-zero-sized `T`, the capacity is exactly `capacity`, so callers can
+    /// rely on `self.capacity() == capacity` when asserting on allocations in
+    /// tests. For zero-sized `T`, the capacity is always reported as
+    /// `usize::MAX` regardless of the request (and no memory is allocated).
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `capacity`.
     ///
     /// # Errors
     ///
@@ -67,6 +80,23 @@ impl<T, A: Allocator> VecDeque<T, A> {
 
     /// Like [`Self::try_with_capacity`], but parameterized over the choice of
     /// allocator for the returned `VecDeque`.
+    ///
+    /// The deque will contain no elements and can hold `capacity` of them
+    /// before needing to reallocate; unlike the fallible growth methods, this
+    /// constructor does not allocate more than requested. If `capacity` is
+    /// zero, the deque will not allocate.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned deque is deterministic. For
+    /// non-zero-sized `T`, the capacity is exactly `capacity`, so callers can
+    /// rely on `self.capacity() == capacity` when asserting on allocations in
+    /// tests. For zero-sized `T`, the capacity is always reported as
+    /// `usize::MAX` regardless of the request (and no memory is allocated).
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `capacity`.
     ///
     /// # Errors
     ///

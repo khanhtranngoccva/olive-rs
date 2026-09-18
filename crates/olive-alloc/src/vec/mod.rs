@@ -424,11 +424,23 @@ impl<T> Vec<T, Global> {
         }
     }
 
-    /// Constructs a new, empty `Vec<T>` with at least the specified capacity.
+    /// Constructs a new, empty `Vec<T>` with exactly the specified capacity.
     ///
-    /// The vector will be able to hold at least `capacity` elements without
-    /// reallocating. This method is allowed to allocate for more elements than
-    /// `capacity`. If `capacity` is zero, the vector will not allocate.
+    /// The vector can hold `capacity` elements without reallocating; unlike
+    /// the fallible growth methods, this constructor does not allocate more
+    /// than requested. If `capacity` is zero, the vector will not allocate.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned vector is deterministic. For
+    /// non-zero-sized `T`, the capacity is exactly `capacity`, so callers can
+    /// rely on `self.capacity() == capacity` when asserting on allocations in
+    /// tests. For zero-sized `T`, the capacity is always reported as
+    /// `usize::MAX` regardless of the request (and no memory is allocated).
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `capacity`.
     ///
     /// # Errors
     ///
@@ -774,6 +786,22 @@ impl<T, A: Allocator> Vec<T, A> {
     }
 
     /// Creates an empty `Vec` with room to hold exactly `capacity` elements.
+    ///
+    /// The vector can hold `capacity` elements without reallocating; unlike
+    /// the fallible growth methods, this constructor does not allocate more
+    /// than requested. If `capacity` is zero, the vector will not allocate.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned vector is deterministic. For
+    /// non-zero-sized `T`, the capacity is exactly `capacity`, so callers can
+    /// rely on `self.capacity() == capacity` when asserting on allocations in
+    /// tests. For zero-sized `T`, the capacity is always reported as
+    /// `usize::MAX` regardless of the request (and no memory is allocated).
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `capacity`.
     ///
     /// # Errors
     ///

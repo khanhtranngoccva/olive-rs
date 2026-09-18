@@ -78,11 +78,27 @@ impl String {
         Self { buf: Vec::new() }
     }
 
-    /// Creates an empty `String` with the given capacity.
+    /// Creates an empty `String` with exactly the given capacity.
     ///
-    /// The string will be able to hold at least `cap` bytes without
-    /// reallocating. If `cap` exceeds the maximum representable allocation,
-    /// this returns a capacity-overflow error rather than panicking.
+    /// The string can hold `cap` bytes without reallocating; unlike the
+    /// fallible growth methods, this constructor does not allocate more than
+    /// requested. If `cap` is zero, no memory is allocated.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned string is deterministic. Since the
+    /// backing buffer stores `u8` (a non-zero-sized type), the capacity is
+    /// exactly `cap`, so callers can rely on `self.capacity() == cap` when
+    /// asserting on allocations in tests.
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `cap`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the requested capacity overflows or the
+    /// initial allocation fails.
     #[inline]
     pub fn try_with_capacity(cap: usize) -> Result<Self, TryReserveError> {
         Self::try_with_capacity_in(cap, Global)
@@ -217,12 +233,31 @@ impl<A: Allocator> String<A> {
         }
     }
 
-    /// Creates an empty `String` with the given capacity, allocating through
-    /// `alloc`.
+    /// Creates an empty `String` with exactly the given capacity, allocating
+    /// through `alloc`.
+    ///
+    /// The string can hold `cap` bytes without reallocating; unlike the
+    /// fallible growth methods, this constructor does not allocate more than
+    /// requested. If `cap` is zero, no memory is allocated.
+    ///
+    /// ## Determinism
+    ///
+    /// The capacity of the returned string is deterministic. Since the
+    /// backing buffer stores `u8` (a non-zero-sized type), the capacity is
+    /// exactly `cap`, so callers can rely on `self.capacity() == cap` when
+    /// asserting on allocations in tests.
+    ///
+    /// The method does not ask for more allocation memory than needed: if
+    /// the allocator returns a buffer larger than the request, the reported
+    /// capacity is still clamped to the requested `cap`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the requested capacity overflows or the
+    /// initial allocation fails.
     #[inline]
-    pub fn try_with_capacity_in(cap: usize, alloc: A) -> Result<Self, TryReserveError> {
-        let buf = Vec::<u8, A>::try_with_capacity_in(cap, alloc)?;
-        Ok(Self { buf })
+    pub fn try_with_capacity(cap: usize) -> Result<Self, TryReserveError> {
+        Self::try_with_capacity_in(cap, Global)
     }
 
     /// Converts a `&str` into a `String` by copying its contents, allocating
