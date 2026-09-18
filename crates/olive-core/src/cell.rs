@@ -70,7 +70,9 @@ impl<T: TryDefault> TryDefault for Cell<T> {
 impl<T: TryDefault> TryDefault for LazyCell<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(LazyCell::new(|| T::try_default().expect("lazy default failed")))
+        Ok(LazyCell::new(|| {
+            T::try_default().expect("lazy default failed")
+        }))
     }
 }
 
@@ -153,7 +155,6 @@ impl<T: TryDefault> TryDefault for RefCell<T> {
 // UnsafeCell
 // ---------------------------------------------------------------------------
 //
-
 
 #[cfg(test)]
 mod tests {

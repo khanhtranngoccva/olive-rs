@@ -5,7 +5,7 @@
 //! item accessible from the Olive namespace.
 pub use core::ops::*;
 
-// These modules can be private because they only contain trait implementations that 
+// These modules can be private because they only contain trait implementations that
 // can be accessed publicly.
 mod control_flow;
 mod range;

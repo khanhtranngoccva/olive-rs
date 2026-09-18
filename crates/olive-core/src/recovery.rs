@@ -108,9 +108,7 @@ pub trait ResumableSource {
     /// inner iterator's [`size_hint`](Iterator::size_hint), adjusted upward by
     /// one when a stranded head is present. Callers that only want the parts
     /// should use [`Self::decompose`] directly.
-    fn decompose_with_size_hint(
-        self,
-    ) -> (Option<Self::Item>, Self::Inner, LossySizeHint)
+    fn decompose_with_size_hint(self) -> (Option<Self::Item>, Self::Inner, LossySizeHint)
     where
         Self: Sized,
     {

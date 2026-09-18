@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn arc_into_raw_from_raw_roundtrip() {
         let arc = Arc::try_new(99u32).unwrap();
-        
+
         let raw = Arc::into_raw(arc);
         assert_eq!(unsafe { *raw }, 99);
 

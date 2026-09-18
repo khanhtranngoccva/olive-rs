@@ -1,9 +1,9 @@
 //! [`TryCollect`] and [`TryCollectInto`]: fallible analogues of
 //! [`Iterator::collect`] and [`Iterator::collect_into`].
 
-use crate::recovery::{ResumableSource, Resume};
 use super::try_extend::TryExtend;
 use super::try_from_iterator::TryFromIterator;
+use crate::recovery::{ResumableSource, Resume};
 
 /// A fallible analogue of [`Iterator::collect`].
 ///

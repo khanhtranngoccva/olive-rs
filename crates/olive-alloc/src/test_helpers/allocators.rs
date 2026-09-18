@@ -70,4 +70,3 @@ impl TryDefault for ByteCapAlloc {
         Ok(Self::new(usize::MAX))
     }
 }
-

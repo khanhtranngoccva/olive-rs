@@ -282,7 +282,7 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
         // the memory orderings
         //
         // It's not necessary to check for the locked state here, because the
-        // weak count can only be locked if there was precisely one implicit weak 
+        // weak count can only be locked if there was precisely one implicit weak
         // ref (in Arc::is_unique), meaning that only Arcs exist.
 
         // Because `fetch_sub` is already atomic, we do not need to synchronize

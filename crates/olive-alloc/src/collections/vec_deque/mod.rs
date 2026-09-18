@@ -46,9 +46,9 @@ pub use mutation::{
 /// Error returned by fallible deque operations that may both reserve capacity
 /// and clone elements.
 ///
-/// Covers [`TryClone`](olive_core::try_traits::TryClone) on [`VecDeque`] — 
-/// any operation whose failure modes are limited to a capacity reservation 
-/// ([`TryReserveError`]) or an element clone failure ([`TryCloneError`]). 
+/// Covers [`TryClone`](olive_core::try_traits::TryClone) on [`VecDeque`] —
+/// any operation whose failure modes are limited to a capacity reservation
+/// ([`TryReserveError`]) or an element clone failure ([`TryCloneError`]).
 /// Mirrors `Vec`'s `TryVecWithCloneError`.
 #[derive(Clone, PartialEq, Eq)]
 pub enum TryVecDequeWithCloneError {

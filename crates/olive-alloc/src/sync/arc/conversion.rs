@@ -197,8 +197,8 @@ mod tests {
     use crate::alloc::Global;
     use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::fmt::Write as _;
-    use std::sync::Arc as StdArc;
     use std::string::String;
+    use std::sync::Arc as StdArc;
 
     // --- Happy paths --------------------------------------------------------
 

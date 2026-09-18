@@ -1543,7 +1543,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
             self.clear();
             return;
         }
-        #[allow(clippy::arithmetic_side_effects, reason = "asserted 0 < keep < self.len")]
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted 0 < keep < self.len"
+        )]
         let removed = self.len - keep;
         // Resolve the logical front range `[0..removed)` into one or two
         // contiguous physical runs *before* mutating anything. The range lies

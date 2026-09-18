@@ -74,7 +74,7 @@ impl TryReserveErrorKind {
 /// value is returned to the caller so the program can react (free memory, back
 /// off, retry, or degrade gracefully).
 ///
-/// The error is hoisted here because the core traits should be aware of 
+/// The error is hoisted here because the core traits should be aware of
 /// this error.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TryReserveError {

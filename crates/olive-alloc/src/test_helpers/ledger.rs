@@ -112,7 +112,12 @@ impl Ledger {
 
     /// Number of times `id` has been dropped (0 if never).
     pub fn drop_count(&self, id: u32) -> usize {
-        self.drop_counts.read().unwrap().get(&id).copied().unwrap_or(0)
+        self.drop_counts
+            .read()
+            .unwrap()
+            .get(&id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Map of every id that has been dropped at least once, to its count.
@@ -165,4 +170,3 @@ impl Ledger {
         true
     }
 }
-

@@ -242,7 +242,7 @@ mod tests {
         let len: usize;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            len = unsafe { (& *recovered).len() };
+            len = unsafe { (&*recovered).len() };
         }
         assert_eq!(len, 3);
     }
@@ -282,7 +282,7 @@ mod tests {
         let len: usize;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            len = unsafe { (& *recovered).len() };
+            len = unsafe { (&*recovered).len() };
         }
         assert_eq!(len, 4);
 
@@ -296,7 +296,7 @@ mod tests {
         let mlen: usize;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            mlen = unsafe { (& *mrecovered).len() };
+            mlen = unsafe { (&*mrecovered).len() };
         }
         assert_eq!(mlen, 4);
     }
@@ -319,7 +319,7 @@ mod tests {
         let len: usize;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            len = unsafe { (& *back).len() };
+            len = unsafe { (&*back).len() };
         }
         assert_eq!(len, 4);
 
@@ -332,7 +332,7 @@ mod tests {
         let mlen: usize;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            mlen = unsafe { (& *mback).len() };
+            mlen = unsafe { (&*mback).len() };
         }
         assert_eq!(mlen, 4);
     }

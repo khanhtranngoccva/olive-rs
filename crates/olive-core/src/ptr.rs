@@ -327,7 +327,7 @@ mod tests {
         let greeting: &str;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            greeting = unsafe { (& *moved).greet() };
+            greeting = unsafe { (&*moved).greet() };
         }
         assert_eq!(greeting, "woof");
 
@@ -339,7 +339,7 @@ mod tests {
         let mgreeting: &str;
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            mgreeting = unsafe { (& *moved_back).greet() };
+            mgreeting = unsafe { (&*moved_back).greet() };
         }
         assert_eq!(mgreeting, "meow");
     }

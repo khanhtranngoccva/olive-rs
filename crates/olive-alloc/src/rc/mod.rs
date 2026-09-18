@@ -1546,9 +1546,9 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         alloc: &A,
     ) -> Result<(), TryRcOutOfBoundsError> {
         // NOTE: taking `alloc` by reference avoids paying for an allocator clone
-        // that this operation does not need and reduces the caller need to clone 
-        // the allocator. 
-        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // that this operation does not need and reduces the caller need to clone
+        // the allocator.
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an
         // unintentional refcount decrement.
         // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by
@@ -1586,9 +1586,9 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         alloc: &A,
     ) -> Result<(), TryRcOutOfBoundsError> {
         // NOTE: taking `alloc` by reference avoids paying for an allocator clone
-        // that this operation does not need and reduces the caller need to clone 
-        // the allocator. 
-        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an 
+        // that this operation does not need and reduces the caller need to clone
+        // the allocator.
+        // The reconstituted handle is wrapped in `ManuallyDrop` to prevent an
         // unintentional refcount decrement.
         // The allocator reference also helps avoid allocator leaks.
         // SAFETY: caller guarantees `ptr` is a live `Rc` allocation backed by

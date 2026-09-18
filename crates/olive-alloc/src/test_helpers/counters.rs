@@ -8,8 +8,8 @@
 
 extern crate std;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A per-test clone counter. Each test constructs its own instance so there is
 /// no cross-test interference from parallel execution. Backed by an atomic so a

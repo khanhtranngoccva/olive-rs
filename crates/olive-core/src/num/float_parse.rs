@@ -1,4 +1,4 @@
-//! Foundational-trait impls for floating point number parsing types, 
+//! Foundational-trait impls for floating point number parsing types,
 //! for example, [`core::num::ParseFloatError`].
 
 use core::num::ParseFloatError;

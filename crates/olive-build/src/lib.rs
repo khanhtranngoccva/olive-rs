@@ -7,7 +7,7 @@
 //! # Detection items
 //!
 //! ## Unstable features
-//! 
+//!
 //! Two independent signals indicate that unstable features (`#![feature(...)]`)
 //! are permitted:
 //!
@@ -28,8 +28,8 @@
 //! ## Running Miri with full provenance
 //!
 //! There are certain parts where Miri cannot successfully run without unstable features:
-//! - Cloning unsized heap items from references require copying pointer metadata. Normally, 
-//!   we can simply use a pointer hack, but it causes undefined behavior when on Miri 
+//! - Cloning unsized heap items from references require copying pointer metadata. Normally,
+//!   we can simply use a pointer hack, but it causes undefined behavior when on Miri
 //!   (although it is sound otherwise).
 //!
 //! Consuming crates therefore refuse to build under a *genuine* Miri invocation
@@ -118,7 +118,8 @@ pub fn is_miri() -> bool {
     std::env::var_os("MIRI_SYSROOT").is_some()
         || std::env::var("RUSTC")
             .map(|rustc| {
-                rustc.ends_with("/miri") || rustc.ends_with("\\miri.exe")
+                rustc.ends_with("/miri")
+                    || rustc.ends_with("\\miri.exe")
                     || rustc.ends_with("miri.exe")
             })
             .unwrap_or(false)

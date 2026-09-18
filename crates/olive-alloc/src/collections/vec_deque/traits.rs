@@ -1045,7 +1045,8 @@ mod tests {
         dq.try_extend(0..15).unwrap();
         assert_eq!(dq.len(), 15);
 
-        dq.try_extend_front([15]).expect("exact fallback should fit within the cap");
+        dq.try_extend_front([15])
+            .expect("exact fallback should fit within the cap");
         assert_eq!(dq.len(), 16);
         assert_eq!(dq.front(), Some(&15));
         assert_eq!(dq.back(), Some(&14));

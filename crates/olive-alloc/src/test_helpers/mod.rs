@@ -19,8 +19,8 @@ pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
 
 extern crate std;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -105,11 +105,7 @@ impl CloneBudget {
         // the counter is already zero, so the sole failure value is `Err(0)`.
         self.remaining
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
-                if cur > 0 {
-                    Some(cur - 1)
-                } else {
-                    None
-                }
+                if cur > 0 { Some(cur - 1) } else { None }
             })
             .is_ok()
     }
@@ -142,7 +138,6 @@ impl TryClone for CloneBudget {
         })
     }
 }
-
 
 /// A pass-through allocator whose own `Drop` is recorded by a shared counter, so
 /// a test can verify the allocator instance was destroyed exactly once (neither
@@ -288,11 +283,7 @@ unsafe impl Allocator for BudgetedAlloc {
         let had_budget = self
             .remaining
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
-                if cur > 0 {
-                    Some(cur - 1)
-                } else {
-                    None
-                }
+                if cur > 0 { Some(cur - 1) } else { None }
             })
             .is_ok();
         if !had_budget {

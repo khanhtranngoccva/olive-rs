@@ -154,7 +154,10 @@ pub(crate) fn try_default_tuples(input: TokenStream) -> TokenStream {
 
     for arity in 1..=max {
         let type_params: Vec<_> = (0..arity).map(|i| quote::format_ident!("T{i}")).collect();
-        let bounds: Vec<_> = type_params.iter().map(|t| quote!(#t: #trait_path)).collect();
+        let bounds: Vec<_> = type_params
+            .iter()
+            .map(|t| quote!(#t: #trait_path))
+            .collect();
 
         let types_joined: proc_macro2::TokenStream = {
             let mut ts = proc_macro2::TokenStream::new();

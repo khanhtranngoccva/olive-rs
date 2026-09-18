@@ -44,5 +44,4 @@ mod tests {
         let cloned = cf.try_clone().unwrap();
         assert_eq!(cloned, cf);
     }
-
 }

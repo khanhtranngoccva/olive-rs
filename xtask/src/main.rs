@@ -115,7 +115,8 @@ fn cmd_leak_test(workspace: bool) -> ExitCode {
         args.extend(scope_flags());
     }
     let mut cmd = Command::new("cargo");
-    cmd.args(&args).env("RUSTFLAGS", "-Zunstable-options -Zsanitizer=leak");
+    cmd.args(&args)
+        .env("RUSTFLAGS", "-Zunstable-options -Zsanitizer=leak");
     println!("$ {}", render_cmd(&cmd));
     exec(cmd)
 }
@@ -181,7 +182,8 @@ fn cmd_control_doc(args: DocArgs) -> ExitCode {
     // std linkage issue.
     let manifest_path = library_dir.join("Cargo.toml");
 
-    let rustdocflags = r#"["--document-private-items","--document-hidden-items","-Z","unstable-options"]"#;
+    let rustdocflags =
+        r#"["--document-private-items","--document-hidden-items","-Z","unstable-options"]"#;
 
     let mut cmd = Command::new("cargo");
     cmd.arg("+nightly")
@@ -235,7 +237,9 @@ fn cmd_control_doc(args: DocArgs) -> ExitCode {
         match Command::new(&browser).arg(&url).spawn() {
             Ok(_) => {}
             Err(e) => {
-                eprintln!("warning: failed to open browser '{browser}' ({e}); use the URL above manually.");
+                eprintln!(
+                    "warning: failed to open browser '{browser}' ({e}); use the URL above manually."
+                );
             }
         }
     } else {
@@ -248,20 +252,30 @@ fn cmd_control_doc(args: DocArgs) -> ExitCode {
 /// Map the host architecture to the value `STD_ENV_ARCH` expects.
 fn arch_env_var() -> &'static str {
     #[cfg(target_arch = "x86_64")]
-    { "x86_64" }
+    {
+        "x86_64"
+    }
     #[cfg(target_arch = "aarch64")]
-    { "aarch64" }
+    {
+        "aarch64"
+    }
     #[cfg(target_arch = "arm")]
-    { "arm" }
+    {
+        "arm"
+    }
     #[cfg(target_arch = "riscv64")]
-    { "riscv64" }
+    {
+        "riscv64"
+    }
     #[cfg(not(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
         target_arch = "arm",
         target_arch = "riscv64"
     )))]
-    { "x86_64" }
+    {
+        "x86_64"
+    }
 }
 
 /// Run `rustc` with the given args and return trimmed stdout, or None on error.
@@ -304,7 +318,10 @@ fn exec(mut cmd: Command) -> ExitCode {
             }
         }
         Err(e) => {
-            eprintln!("failed to run `{}`: {e}", cmd.get_program().to_string_lossy());
+            eprintln!(
+                "failed to run `{}`: {e}",
+                cmd.get_program().to_string_lossy()
+            );
             ExitCode::FAILURE
         }
     }
