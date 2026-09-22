@@ -31,21 +31,22 @@
 //   since leaf edges are empty and need no data representation. In an internal node,
 //   an edge both identifies a position and contains a pointer to a child node.
 
+use super::scratch::Nodes;
 use crate::alloc::{AllocError, Allocator, AllocatorTryClone, Layout};
 use crate::boxed::Box;
+use crate::collections::btree::node::marker::Internal;
 use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
 use core::ptr::{self, NonNull};
 use core::slice::SliceIndex;
-use olive_core::try_traits::try_clone::TryCloneError;
 
 const B: usize = 6;
 pub(super) const CAPACITY: usize = 2 * B - 1;
 pub(super) const MIN_LEN_AFTER_SPLIT: usize = B - 1;
-const KV_IDX_CENTER: usize = B - 1;
-const EDGE_IDX_LEFT_OF_CENTER: usize = B - 1;
-const EDGE_IDX_RIGHT_OF_CENTER: usize = B;
+pub(super) const KV_IDX_CENTER: usize = B - 1;
+pub(super) const EDGE_IDX_LEFT_OF_CENTER: usize = B - 1;
+pub(super) const EDGE_IDX_RIGHT_OF_CENTER: usize = B;
 
 const fn __compile_time_assertions() {
     const {
@@ -58,22 +59,22 @@ const fn __compile_time_assertions() {
 const __ASSERTIONS: () = __compile_time_assertions();
 
 /// The underlying representation of leaf nodes and part of the representation of internal nodes.
-struct LeafNode<K, V> {
+pub(super) struct LeafNode<K, V> {
     /// We want to be covariant in `K` and `V`.
-    parent: Option<NonNull<InternalNode<K, V>>>,
+    pub(super) parent: Option<NonNull<InternalNode<K, V>>>,
 
     /// This node's index into the parent node's `edges` array.
     /// `*node.parent.edges[node.parent_idx]` should be the same thing as `node`.
     /// This is only guaranteed to be initialized when `parent` is non-null.
-    parent_idx: MaybeUninit<u16>,
+    pub(super) parent_idx: MaybeUninit<u16>,
 
     /// The number of keys and values this node stores.
-    len: u16,
+    pub(super) len: u16,
 
     /// The arrays storing the actual data of the node. Only the first `len` elements of each
     /// array are initialized and valid.
-    keys: [MaybeUninit<K>; CAPACITY],
-    vals: [MaybeUninit<V>; CAPACITY],
+    pub(super) keys: [MaybeUninit<K>; CAPACITY],
+    pub(super) vals: [MaybeUninit<V>; CAPACITY],
 }
 
 impl<K, V> LeafNode<K, V> {
@@ -82,7 +83,7 @@ impl<K, V> LeafNode<K, V> {
     /// # Safety
     ///
     /// The caller must ensure that `this` points to a (possibly uninitialized) `LeafNode`
-    unsafe fn init(this: *mut Self) {
+    pub(super) unsafe fn init(this: *mut Self) {
         // As a general policy, we leave fields uninitialized if they can be, as this should
         // be both slightly faster and easier to track in Valgrind.
         unsafe {
@@ -93,7 +94,7 @@ impl<K, V> LeafNode<K, V> {
     }
 
     /// Creates a new boxed `LeafNode`.
-    fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
+    pub(super) fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
         let mut leaf = Box::try_new_uninit_in(alloc)?;
         unsafe {
             // SAFETY: `leaf` points to allocated memory for a `LeafNode`, which
@@ -111,13 +112,13 @@ impl<K, V> LeafNode<K, V> {
 /// node, allowing code to act on leaf and internal nodes generically without having to even check
 /// which of the two a pointer is pointing at. This property is enabled by the use of `repr(C)`.
 #[repr(C)]
-struct InternalNode<K, V> {
-    data: LeafNode<K, V>,
+pub(super) struct InternalNode<K, V> {
+    pub(super) data: LeafNode<K, V>,
 
     /// The pointers to the children of this node. `len + 1` of these are considered
     /// initialized and valid, except that near the end, while the tree is held
     /// through borrow type `Dying`, some of these pointers are dangling.
-    edges: [MaybeUninit<BoxedNode<K, V>>; 2 * B],
+    pub(super) edges: [MaybeUninit<BoxedNode<K, V>>; 2 * B],
 }
 
 impl<K, V> InternalNode<K, V> {
@@ -127,7 +128,7 @@ impl<K, V> InternalNode<K, V> {
     /// An invariant of internal nodes is that they have at least one
     /// initialized and valid edge. This function does not set up
     /// such an edge.
-    unsafe fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
+    pub(super) unsafe fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
         let mut node = Box::<Self, _>::try_new_uninit_in(alloc)?;
         unsafe {
             // SAFETY: `node` points to allocated memory for an `InternalNode`;
@@ -145,7 +146,7 @@ impl<K, V> InternalNode<K, V> {
 /// However, `BoxedNode` contains no information as to which of the two types
 /// of nodes it actually contains, and, partially due to this lack of information,
 /// is not a separate type and has no destructor.
-type BoxedNode<K, V> = NonNull<LeafNode<K, V>>;
+pub(super) type BoxedNode<K, V> = NonNull<LeafNode<K, V>>;
 
 // N.B. `NodeRef` is always covariant in `K` and `V`, even when the `BorrowType`
 // is `Mut`. This is technically wrong, but cannot result in any unsafety due to
@@ -205,11 +206,11 @@ pub(super) struct NodeRef<BorrowType, K, V, Type> {
     /// the node itself does not store. We only need to store the height of the root
     /// node, and derive every other node's height from it.
     /// Must be zero if `Type` is `Leaf` and non-zero if `Type` is `Internal`.
-    height: usize,
+    pub(super) height: usize,
     /// The pointer to the leaf or internal node. The definition of `InternalNode`
     /// ensures that the pointer is valid either way.
-    node: NonNull<LeafNode<K, V>>,
-    _marker: PhantomData<(BorrowType, Type)>,
+    pub(super) node: NonNull<LeafNode<K, V>>,
+    pub(super) _marker: PhantomData<(BorrowType, Type)>,
 }
 
 /// The root node of an owned tree.
@@ -249,24 +250,32 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
 }
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
-    /// Creates a new internal (height > 0) `NodeRef`
-    fn new_internal<A: AllocatorTryClone>(child: Root<K, V>, alloc: A) -> Result<Self, AllocError> {
-        let mut new_node = unsafe { InternalNode::new(alloc)? };
-        new_node.edges[0].write(child.node);
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "if height overflowed, the number of nodes would have overflown and OOM must have been triggered beforehand"
-        )]
-        {
-            Ok(NodeRef::from_new_internal(
-                new_node,
-                NonZero::new(child.height + 1).unwrap(),
-            ))
+    /// Creates a new internal (height > 0) `NodeRef` from a partially initialized allocation created by InternalNode::new.
+    fn from_uninitialized_internal<A: AllocatorTryClone>(
+        mut boxed: Box<InternalNode<K, V>, A>,
+        child: Root<K, V>,
+    ) -> Self {
+        // SAFETY: we initialize the first edge before wrapping it, satisfying
+        // the precondition of `from_new_internal`.
+        unsafe {
+            boxed.edges[0].write(child.node);
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "if height overflowed, the number of nodes would have overflown and OOM must have been triggered beforehand"
+            )]
+            {
+                NodeRef::from_new_internal(boxed, NonZero::new(child.height + 1).unwrap())
+            }
         }
     }
 
-    /// Creates a new internal (height > 0) `NodeRef` from an existing internal node
-    fn from_new_internal<A: AllocatorTryClone>(
+    /// Creates a new internal (height > 0) `NodeRef` from an existing internal node.
+    ///
+    /// # Safety
+    ///
+    /// The first edge of `internal.edges` must already be initialized and valid; the remaining edges may be uninitialized. This is satisfied when the
+    /// caller has moved the left child's edge into slot 0 before calling.
+    unsafe fn from_new_internal<A: AllocatorTryClone>(
         internal: Box<InternalNode<K, V>, A>,
         height: NonZero<usize>,
     ) -> Self {
@@ -348,7 +357,7 @@ impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
     /// Exposes the leaf portion of any leaf or internal node.
     ///
     /// Returns a raw ptr to avoid invalidating other references to this node.
-    fn as_leaf_ptr(this: &Self) -> *mut LeafNode<K, V> {
+    pub(super) fn as_leaf_ptr(this: &Self) -> *mut LeafNode<K, V> {
         // The node must be valid for at least the LeafNode portion.
         // This is not a reference in the NodeRef type because we don't know if
         // it should be unique or shared.
@@ -618,7 +627,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
 impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
     /// # Safety
     /// - The node has more than `idx` initialized elements.
-    unsafe fn into_key_val_mut_at(mut self, idx: usize) -> (&'a K, &'a mut V) {
+    pub(super) unsafe fn into_key_val_mut_at(mut self, idx: usize) -> (&'a K, &'a mut V) {
         // We only create a reference to the one element we are interested in,
         // to avoid aliasing with outstanding references to other elements,
         // in particular, those returned to the caller in earlier iterations.
@@ -653,7 +662,10 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
 impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     /// # Safety
     /// Every item returned by `range` is a valid edge index for the node.
-    unsafe fn correct_childrens_parent_links<R: Iterator<Item = usize>>(&mut self, range: R) {
+    pub(super) unsafe fn correct_childrens_parent_links<R: Iterator<Item = usize>>(
+        &mut self,
+        range: R,
+    ) {
         for i in range {
             debug_assert!(i <= self.len());
             unsafe { Handle::new_edge(self.reborrow_mut(), i) }.correct_parent_link();
@@ -669,7 +681,11 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
 impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// Sets the node's link to its parent edge,
     /// without invalidating other references to the node.
-    fn set_parent_link(&mut self, parent: NonNull<InternalNode<K, V>>, parent_idx: usize) {
+    pub(super) fn set_parent_link(
+        &mut self,
+        parent: NonNull<InternalNode<K, V>>,
+        parent_idx: usize,
+    ) {
         let leaf = Self::as_leaf_ptr(self);
         unsafe { (*leaf).parent = Some(parent) };
         unsafe { (*leaf).parent_idx.write(parent_idx as u16) };
@@ -691,8 +707,25 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
         Ok(NodeRef::new_leaf(alloc)?.forget_type())
     }
 
-    // FIXME: push_internal_level was here, but this algorithm is insufficient -
-    // during insertion, we should allocate every node in a planned batch.
+    /// Adds a new internal node with a single edge pointing to the previous root node,
+    /// make that new node the root node, and return it.
+    ///
+    /// This increases the height by 1 and is the opposite of `pop_internal_level`.
+    pub(super) fn push_internal_level<A: AllocatorTryClone>(
+        &mut self,
+        reserved_top: Box<InternalNode<K, V>, A>,
+    ) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
+        super::mem::take_mut(self, |old_root| {
+            NodeRef::from_uninitialized_internal(reserved_top, old_root).forget_type()
+        });
+
+        // `self.borrow_mut()`, except that we just forgot we're internal now:
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
 
     /// Removes the internal root node, using its first child as the new root node.
     /// As it is intended only to be called when the root node has only one child,
@@ -910,8 +943,8 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
 /// to the left of the node, one between the two pairs, and one at the right of the node.
 // Patcher's notes: the documentation of Edge handles in the Leaf node likely discusses the edge handles that are used to insert a new key/value.
 pub(super) struct Handle<Node, Type> {
-    node: Node,
-    idx: usize,
+    pub(super) node: Node,
+    pub(super) idx: usize,
     _marker: PhantomData<Type>,
 }
 
@@ -1086,8 +1119,8 @@ pub(super) enum LeftOrRight<T> {
 /// The goal of the split point is for its key and value to end up in a parent node;
 /// the keys, values and edges to the left of the split point become the left child;
 /// the keys, values and edges to the right of the split point become the right child.
-fn splitpoint(edge_idx: usize) -> (usize, LeftOrRight<usize>) {
-    debug_assert!(edge_idx <= CAPACITY);
+pub(super) fn splitpoint(edge_idx: usize) -> (usize, LeftOrRight<usize>) {
+    debug_assert!(edge_idx <= CAPACITY + 1);
     // Rust issue #74834 tries to explain these symmetric rules.
     match edge_idx {
         0..EDGE_IDX_LEFT_OF_CENTER => (KV_IDX_CENTER - 1, LeftOrRight::Left(edge_idx)),
@@ -1109,7 +1142,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// Inserts a new key-value pair between the key-value pairs to the right and left of
     /// this edge. This method assumes that there is enough space in the node for the new
     /// pair to fit.
-    unsafe fn insert_fit(
+    pub(super) unsafe fn insert_fit(
         mut self,
         key: K,
         val: V,
@@ -1132,9 +1165,46 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
 }
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge> {
-    // There used to be a split() method here - but after splitting, a stranded value appears
-    // while nodes are still being allocated. The algorithm attempts to propagate the
-    // value upwards while splitting the nodes up the hierarchy, which may fail.
+    /// Inserts a new key-value pair between the key-value pairs to the right and left of
+    /// this edge. This method splits the node if there isn't enough room.
+    ///
+    /// Returns a dormant handle to the inserted node which can be reawakened
+    /// once splitting is complete.
+    ///
+    /// # Panics
+    /// - Panics if the split branch is taken but there are no new nodes specified in `new_node`.
+    fn insert<A: AllocatorTryClone>(
+        self,
+        key: K,
+        val: V,
+        new_node: Option<Box<LeafNode<K, V>, A>>,
+    ) -> (
+        Option<SplitResult<'a, K, V, marker::Leaf>>,
+        Handle<NodeRef<marker::DormantMut, K, V, marker::Leaf>, marker::KV>,
+    ) {
+        if self.node.len() < CAPACITY {
+            // SAFETY: There is enough space in the node for insertion.
+            let handle = unsafe { self.insert_fit(key, val) };
+            (None, handle.dormant())
+        } else {
+            let (middle_kv_idx, insertion) = splitpoint(self.idx);
+            let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
+            let mut result =
+                middle.split(new_node.expect("a newly allocated leaf node should exist"));
+            let insertion_edge = match insertion {
+                LeftOrRight::Left(insert_idx) => unsafe {
+                    Handle::new_edge(result.left.reborrow_mut(), insert_idx)
+                },
+                LeftOrRight::Right(insert_idx) => unsafe {
+                    Handle::new_edge(result.right.borrow_mut(), insert_idx)
+                },
+            };
+            // SAFETY: We just split the node, so there is enough space for
+            // insertion.
+            let handle = unsafe { insertion_edge.insert_fit(key, val).dormant() };
+            (Some(result), handle)
+        }
+    }
 }
 
 impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
@@ -1153,7 +1223,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// Inserts a new key-value pair and an edge that will go to the right of that new pair
     /// between this edge and the key-value pair to the right of this edge. This method assumes
     /// that there is enough space in the node for the new pair to fit.
-    fn insert_fit(&mut self, key: K, val: V, edge: Root<K, V>) {
+    pub(super) fn insert_fit(&mut self, key: K, val: V, edge: Root<K, V>) {
         debug_assert!(self.node.len() < CAPACITY);
         #[allow(clippy::arithmetic_side_effects, reason = "invariant: internal node")]
         {
@@ -1183,11 +1253,99 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         }
     }
 
-    // FIXME: The old insert algorithm is deliberately removed - it leaves stranded values.
+    // Inserts a new key-value pair and an edge that will go to the right of that new pair
+    /// between this edge and the key-value pair to the right of this edge. This method splits
+    /// the node if there isn't enough room.
+    fn insert<A: AllocatorTryClone>(
+        mut self,
+        key: K,
+        val: V,
+        edge: Root<K, V>,
+        new_node: Option<Box<InternalNode<K, V>, A>>,
+    ) -> Option<SplitResult<'a, K, V, marker::Internal>> {
+        assert!(edge.height == self.node.height - 1);
+
+        if self.node.len() < CAPACITY {
+            self.insert_fit(key, val, edge);
+            None
+        } else {
+            let (middle_kv_idx, insertion) = splitpoint(self.idx);
+            let middle = unsafe { Handle::new_kv(self.node, middle_kv_idx) };
+            let mut result =
+                middle.split(new_node.expect(
+                    "reserve architecture should grant enough internal nodes for insertion",
+                ));
+            let mut insertion_edge = match insertion {
+                LeftOrRight::Left(insert_idx) => unsafe {
+                    Handle::new_edge(result.left.reborrow_mut(), insert_idx)
+                },
+                LeftOrRight::Right(insert_idx) => unsafe {
+                    Handle::new_edge(result.right.borrow_mut(), insert_idx)
+                },
+            };
+            insertion_edge.insert_fit(key, val, edge);
+            Some(result)
+        }
+    }
 }
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge> {
-    // FIXME: The old insert_recursing algorithm is deliberately removed
+    /// Inserts a new key-value pair between the key-value pairs to the right and left of
+    /// this edge. This method splits the node if there isn't enough room, and tries to
+    /// insert the split off portion into the parent node recursively, until the root is reached.
+    ///
+    /// If the returned result is some `SplitResult`, the `left` field will be the root node.
+    /// The returned pointer points to the inserted value, which in the case of `SplitResult`
+    /// is in the `left` or `right` tree.
+    ///
+    /// Unlike the std algorithm, this algorithm works on pre-reserved leaf and internal nodes,
+    /// and will panic if there are not enough corresponding nodes.
+    pub fn insert_recursing<A: AllocatorTryClone>(
+        self,
+        key: K,
+        value: V,
+        mut nodes: Nodes<'a, K, V, A>,
+        split_root: impl FnOnce(
+            SplitResult<'a, K, V, marker::LeafOrInternal>,
+            Box<InternalNode<K, V>, A>,
+        ),
+    ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV> {
+        let (mut split, handle) = match self.insert(key, value, nodes.leaf.take()) {
+            // SAFETY: we have finished splitting and can now re-awaken the
+            // handle to the inserted element.
+            (None, handle) => return unsafe { handle.awaken() },
+            (Some(split), handle) => (split.forget_node_type(), handle),
+        };
+
+        loop {
+            split = match split.left.ascend() {
+                Ok(parent) => {
+                    match parent.insert(split.kv.0, split.kv.1, split.right, nodes.internals.pop())
+                    {
+                        // SAFETY: we have finished splitting and can now re-awaken the
+                        // handle to the inserted element.
+                        None => return unsafe { handle.awaken() },
+                        Some(split) => split.forget_node_type(),
+                    }
+                }
+                Err(root) => {
+                    split_root(
+                        SplitResult {
+                            left: root,
+                            ..split
+                        },
+                        nodes
+                            .internals
+                            .pop()
+                            .expect("reserve algorithm should reserve enough nodes for insertion"),
+                    );
+                    // SAFETY: we have finished splitting and can now re-awaken the
+                    // handle to the inserted element.
+                    return unsafe { handle.awaken() };
+                }
+            };
+        }
+    }
 }
 
 impl<BorrowType: marker::BorrowType, K, V>
@@ -1333,7 +1491,7 @@ impl<K, V, NodeType> Handle<NodeRef<marker::Dying, K, V, NodeType>, marker::KV> 
 impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
     /// Helps implementations of `split` for a particular `NodeType`,
     /// by taking care of leaf data.
-    fn split_leaf_data(&mut self, new_node: &mut LeafNode<K, V>) -> (K, V) {
+    pub(super) fn split_leaf_data(&mut self, new_node: &mut LeafNode<K, V>) -> (K, V) {
         debug_assert!(self.idx < self.node.len());
         let old_len = self.node.len();
         // Do not include the split element in move_to_slice
@@ -1367,7 +1525,25 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
 }
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV> {
-    // FIXME: The old split algorithm is not viable.
+    /// Splits the underlying node into three parts:
+    ///
+    /// - The node is truncated to only contain the key-value pairs to the left of
+    ///   this handle.
+    /// - The key and value pointed to by this handle are extracted.
+    /// - All the key-value pairs to the right of this handle are put into the newly
+    ///   preallocated node specified by `new_node`.
+    pub fn split<A: AllocatorTryClone>(
+        mut self,
+        mut new_node: Box<LeafNode<K, V>, A>,
+    ) -> SplitResult<'a, K, V, marker::Leaf> {
+        let kv = self.split_leaf_data(&mut new_node);
+        let right = NodeRef::from_new_leaf(new_node);
+        SplitResult {
+            left: self.node,
+            kv,
+            right,
+        }
+    }
 
     /// Removes the key-value pair pointed to by this handle and returns it, along with the edge
     /// that the key-value pair collapsed into.
@@ -1396,7 +1572,39 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
 }
 
 impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::KV> {
-    // FIXME: Old split() implementation is removed, not viable due to stranding values on failure.
+    /// Splits the underlying node into three parts:
+    ///
+    /// - The node is truncated to only contain the edges and key-value pairs to the
+    ///   left of this handle.
+    /// - The key and value pointed to by this handle are extracted.
+    /// - All the edges and key-value pairs to the right of this handle are put into
+    ///   a newly allocated node.
+    pub fn split<A: AllocatorTryClone>(
+        mut self,
+        mut new_node: Box<InternalNode<K, V>, A>,
+    ) -> SplitResult<'a, K, V, marker::Internal> {
+        let old_len = self.node.len();
+        unsafe {
+            let kv = self.split_leaf_data(&mut new_node.data);
+            let new_len = usize::from(new_node.data.len);
+            move_to_slice(
+                self.node.edge_area_mut(self.idx + 1..old_len + 1),
+                &mut new_node.edges[..new_len + 1],
+            );
+
+            let height = self.node.height;
+            let right = NodeRef::from_new_internal(
+                new_node,
+                NonZero::new(height).expect("internal node should have positive height"),
+            );
+
+            SplitResult {
+                left: self.node,
+                kv,
+                right,
+            }
+        }
+    }
 }
 
 impl<'a, K, V, Type> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, Type> {
@@ -1889,6 +2097,30 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     }
 }
 
+impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge> {
+    pub(super) fn forget_node_type(
+        self,
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::Edge> {
+        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge> {
+    pub(super) fn forget_node_type(
+        self,
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::Edge> {
+        unsafe { Handle::new_edge(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::KV> {
+    pub(super) fn forget_node_type(
+        self,
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {
+        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
+    }
+}
+
 pub(super) enum ForceResult<Leaf, Internal> {
     Leaf(Leaf),
     Internal(Internal),
@@ -2042,7 +2274,7 @@ unsafe fn slice_shr<T>(slice: &mut [MaybeUninit<T>], distance: usize) {
 /// Moves all values from a slice of initialized elements to a slice
 /// of uninitialized elements, leaving behind `src` as all uninitialized.
 /// Works like `dst.copy_from_slice(src)` but does not require `T` to be `Copy`.
-fn move_to_slice<T>(src: &mut [MaybeUninit<T>], dst: &mut [MaybeUninit<T>]) {
+pub(super) fn move_to_slice<T>(src: &mut [MaybeUninit<T>], dst: &mut [MaybeUninit<T>]) {
     assert!(src.len() == dst.len());
     unsafe {
         ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
