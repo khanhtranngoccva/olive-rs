@@ -463,6 +463,30 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
                 as *const [K])
         }
     }
+
+    /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
+    pub(super) unsafe fn cast_to_internal_unchecked(
+        self,
+    ) -> NodeRef<marker::Immut<'a>, K, V, marker::Internal> {
+        debug_assert!(self.height > 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns a reference to the key-value pair at the given index.
+    ///
+    /// # Safety
+    /// `idx` must be less than the node's length.
+    pub(super) unsafe fn into_key_val_at(self, idx: usize) -> (&'a K, &'a V) {
+        debug_assert!(idx < self.len());
+        let leaf = self.into_leaf();
+        let k = unsafe { leaf.keys.get_unchecked(idx).assume_init_ref() };
+        let v = unsafe { leaf.vals.get_unchecked(idx).assume_init_ref() };
+        (k, v)
+    }
 }
 
 impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
@@ -563,6 +587,74 @@ impl<K, V, Type> NodeRef<marker::Dying, K, V, Type> {
     }
 }
 
+impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
+    /// Recursively drops all nodes in the tree rooted at `self`, deallocating
+    /// each node and dropping all key-value pairs along the way.
+    // FIXME: This is a temporary - into_iter was used instead.
+    pub(super) fn drop_tree<A: AllocatorTryClone>(self, alloc: A) {
+        if self.height == 0 {
+            // Leaf node: drop all key-value pairs, then deallocate.
+            let len = self.len();
+            let leaf_ptr = Self::as_leaf_ptr(&self);
+            unsafe {
+                for i in 0..len {
+                    (*leaf_ptr).keys.get_unchecked_mut(i).assume_init_drop();
+                    (*leaf_ptr).vals.get_unchecked_mut(i).assume_init_drop();
+                }
+                alloc.deallocate(self.node.cast(), Layout::new::<LeafNode<K, V>>());
+            }
+        } else {
+            // Internal node: recurse on all children, drop separator keys/values, then deallocate.
+            let len = self.len();
+            let internal_ptr: *mut InternalNode<K, V> =
+                self.node.as_ptr() as *mut InternalNode<K, V>;
+            // Drop separator keys and values (stored in the leaf portion).
+            unsafe {
+                for i in 0..len {
+                    (*internal_ptr)
+                        .data
+                        .keys
+                        .get_unchecked_mut(i)
+                        .assume_init_drop();
+                    (*internal_ptr)
+                        .data
+                        .vals
+                        .get_unchecked_mut(i)
+                        .assume_init_drop();
+                }
+            }
+            // Recurse on each child edge (there are len + 1 edges).
+            unsafe {
+                for i in 0..=(len as u64) {
+                    let child_node = (*internal_ptr)
+                        .edges
+                        .get_unchecked(i as usize)
+                        .assume_init_read();
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "we are dealing with an internal node"
+                    )]
+                    let child = NodeRef {
+                        node: child_node,
+                        height: self.height - 1,
+                        _marker: PhantomData,
+                    };
+                    let cloned_alloc = alloc
+                        .try_clone()
+                        .expect("allocator clone must succeed during drop");
+                    NodeRef::<marker::Dying, K, V, marker::LeafOrInternal>::drop_tree(
+                        child,
+                        cloned_alloc,
+                    );
+                }
+            }
+            unsafe {
+                alloc.deallocate(self.node.cast(), Layout::new::<InternalNode<K, V>>());
+            }
+        }
+    }
+}
+
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Borrows exclusive access to an element of the key storage area.
     ///
@@ -625,6 +717,30 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
 }
 
 impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
+    /// Borrows a view into the keys stored in the node. Keys are never mutated
+    /// through `ValMut`, so this is safe alongside outstanding value references.
+    pub(super) fn keys(&self) -> &[K] {
+        let ptr = Self::as_leaf_ptr(self);
+        // SAFETY: the first `len` elements of `keys` are initialized; `ValMut`
+        // borrows only values mutably, so key access does not alias.
+        unsafe {
+            &*((*ptr).keys.get_unchecked(..usize::from((*ptr).len)) as *const [MaybeUninit<K>]
+                as *const [K])
+        }
+    }
+
+    /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
+    pub(super) unsafe fn cast_to_internal_unchecked(
+        self,
+    ) -> NodeRef<marker::ValMut<'a>, K, V, marker::Internal> {
+        debug_assert!(self.height > 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
     /// # Safety
     /// - The node has more than `idx` initialized elements.
     pub(super) unsafe fn into_key_val_mut_at(mut self, idx: usize) -> (&'a K, &'a mut V) {
@@ -649,6 +765,28 @@ impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
 }
 
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
+    /// Borrows a view into the keys stored in the node.
+    pub(super) fn keys(&self) -> &[K] {
+        let ptr = Self::as_leaf_ptr(self);
+        // SAFETY: we have exclusive access to the node, so no aliasing concerns.
+        unsafe {
+            &*((*ptr).keys.get_unchecked(..usize::from((*ptr).len)) as *const [MaybeUninit<K>]
+                as *const [K])
+        }
+    }
+
+    /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
+    pub(super) unsafe fn cast_to_internal_unchecked(
+        self,
+    ) -> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
+        debug_assert!(self.height > 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
     /// Borrows exclusive access to the length of the node.
     pub(super) fn len_mut(&mut self) -> &mut u16 {
         &mut self.as_leaf_mut().len
@@ -887,6 +1025,7 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
 
 impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
     /// Checks whether a node is an `Internal` node or a `Leaf` node.
+    #[allow(clippy::type_complexity, reason = "std uses this type declaration")]
     pub(super) fn force(
         self,
     ) -> ForceResult<
@@ -915,16 +1054,6 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
         self,
     ) -> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
         debug_assert!(self.height == 0);
-        NodeRef {
-            height: self.height,
-            node: self.node,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
-    unsafe fn cast_to_internal_unchecked(self) -> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
-        debug_assert!(self.height > 0);
         NodeRef {
             height: self.height,
             node: self.node,
@@ -1263,7 +1392,13 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         edge: Root<K, V>,
         new_node: Option<Box<InternalNode<K, V>, A>>,
     ) -> Option<SplitResult<'a, K, V, marker::Internal>> {
-        assert!(edge.height == self.node.height - 1);
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "we are dealing with an internal node"
+        )]
+        {
+            assert!(edge.height == self.node.height - 1);
+        }
 
         if self.node.len() < CAPACITY {
             self.insert_fit(key, val, edge);
@@ -1304,7 +1439,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         self,
         key: K,
         value: V,
-        mut nodes: Nodes<'a, K, V, A>,
+        mut nodes: Nodes<K, V, A>,
         split_root: impl FnOnce(
             SplitResult<'a, K, V, marker::LeafOrInternal>,
             Box<InternalNode<K, V>, A>,
@@ -1320,8 +1455,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         loop {
             split = match split.left.ascend() {
                 Ok(parent) => {
-                    match parent.insert(split.kv.0, split.kv.1, split.right, nodes.internals.pop())
-                    {
+                    match parent.insert(split.kv.0, split.kv.1, split.right, nodes.pop_internal()) {
                         // SAFETY: we have finished splitting and can now re-awaken the
                         // handle to the inserted element.
                         None => return unsafe { handle.awaken() },
@@ -1335,8 +1469,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
                             ..split
                         },
                         nodes
-                            .internals
-                            .pop()
+                            .pop_internal()
                             .expect("reserve algorithm should reserve enough nodes for insertion"),
                     );
                     // SAFETY: we have finished splitting and can now re-awaken the
@@ -1587,6 +1720,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         unsafe {
             let kv = self.split_leaf_data(&mut new_node.data);
             let new_len = usize::from(new_node.data.len);
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "idx < old_len, old_len + 1 <= 2 * B == 256 => B <= 128, similar to new_len"
+            )]
             move_to_slice(
                 self.node.edge_area_mut(self.idx + 1..old_len + 1),
                 &mut new_node.edges[..new_len + 1],

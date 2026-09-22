@@ -21,6 +21,7 @@ pub fn replace<T, R>(v: &mut T, change: impl FnOnce(T) -> (T, R)) -> R {
     impl Drop for PanicGuard {
         fn drop(&mut self) {
             // Aborts by invoking null deref. Should never happen.
+            #[allow(deref_nullptr)]
             unsafe { *(0 as *const u8) };
         }
     }

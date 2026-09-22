@@ -103,10 +103,10 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
                     leaf.push_with_handle(self.key, value)
                 }
             }
-            Some(mut handle) => {
-                // Special case - no need for the three phase routine
+            Some(handle) => {
+                // Special case - no need for the two phase routine
                 if handle.node.len() < CAPACITY {
-                    unsafe { handle.node.push_with_handle(self.key, value) }
+                    unsafe { handle.insert_fit(self.key, value) }
                 } else {
                     do_two_phase(&mut self.dormant_map, handle, &self.alloc, self.key, value)?
                 }
@@ -114,7 +114,13 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
         };
 
         // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
-        unsafe { self.dormant_map.reborrow().length += 1 };
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "to have (usize::MAX + 1) nodes, there must be (4 + size_of_ptr) * (usize::MAX + 1) bytes of memory, triggering OOM long before this happens"
+        )]
+        unsafe {
+            self.dormant_map.reborrow().length += 1
+        };
         Ok(OccupiedEntry {
             handle: handle.forget_node_type(),
             dormant_map: self.dormant_map,
@@ -140,30 +146,41 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
 /// Phase 3 (commit): performs the splits bottom-up using only the reserved
 /// nodes, then splices the resulting subtree back into the map's root. Because
 /// every allocation succeeded, this phase cannot fail.
+#[allow(
+    clippy::type_complexity,
+    reason = "this type declaration is inherently complex"
+)]
 fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
     map: &mut DormantMutRef<'a, BTreeMap<K, V, A>>,
     handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
     alloc: &A,
-    // FIXME: should return KV on error for give back semantics
     key: K,
     value: V,
 ) -> Result<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>, (K, V, AllocError)> {
     let immut_reborrow = handle.reborrow();
-    let reserve_stack = &mut unsafe { map.reborrow() }.reserve_stack;
-    if reserve_stack.is_none() {
-        let cloned = match alloc.try_clone() {
-            Ok(allocator) => allocator,
-            Err(_) => return Err((key, value, AllocError)),
-        };
-        *reserve_stack = Some(Vec::new_in(cloned));
-    }
-    let stack = reserve_stack
-        .as_mut()
-        .expect("reserve stack is just initialized");
-    let nodes = match scratch::reserve_for_insertion(stack, immut_reborrow, alloc) {
-        Ok(nodes) => nodes,
-        Err(e) => return Err((key, value, e)),
+    // SAFETY: we reborrow the map only to access the reserve stack.
+    // The borrow ends before insert_recursing is called, so the
+    // split_root closure can safely reborrow the map again.
+    let nodes = {
+        let map_ref = unsafe { map.reborrow() };
+        if map_ref.reserve_stack.is_none() {
+            let cloned = match alloc.try_clone() {
+                Ok(allocator) => allocator,
+                Err(_) => return Err((key, value, AllocError)),
+            };
+            map_ref.reserve_stack = Some(Vec::new_in(cloned));
+        }
+        let stack = map_ref
+            .reserve_stack
+            .as_mut()
+            .expect("reserve stack is just initialized");
+        match scratch::reserve_for_insertion(stack, immut_reborrow, alloc) {
+            Ok(nodes) => nodes,
+            Err(e) => return Err((key, value, e)),
+        }
     };
+    // At this point, no mutable borrow of the map is alive.
+    // The `nodes` struct owns all its data and does not reference the map.
     let new_handle = handle.insert_recursing(key, value, nodes, |ins, new_node| {
         // SAFETY: Pushing a new root node doesn't invalidate
         // handles to existing nodes.

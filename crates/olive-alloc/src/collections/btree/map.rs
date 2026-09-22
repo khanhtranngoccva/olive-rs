@@ -39,6 +39,16 @@ pub struct BTreeMap<K, V, A: AllocatorTryClone = Global> {
     pub(super) reserve_stack: Option<Vec<Box<InternalNode<K, V>, A>, A>>,
 }
 
+impl<K, V, A: AllocatorTryClone> Drop for BTreeMap<K, V, A> {
+    fn drop(&mut self) {
+        if let Some(root) = self.root.take() {
+            let alloc = self.alloc.try_clone().expect("allocator clone must succeed during drop");
+            root.into_dying().drop_tree(alloc);
+        }
+        // reserve_stack is dropped normally (Vec handles freeing its elements).
+    }
+}
+
 impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// Attempts to create an empty `BTreeMap` with the given allocator.
     pub fn new_in(alloc: A) -> Result<Self, AllocError> {
@@ -83,7 +93,8 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
         }
 
         // Probe the tree for the vacant position, then insert.
-        let vacant = try_probe(self, key).expect("key absence was verified by get_mut above");
+        let vacant = try_probe(self, key)?
+            .expect("key absence was verified by get_mut above");
         vacant.insert(value)?;
         Ok(None)
     }
@@ -177,38 +188,38 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
 /// Walks the tree to locate the vacant leaf edge where `key` would be inserted,
 /// packaging it into a [`VacantEntry`] backed by a dormant borrow of `map`.
 ///
-/// Returns `None` if the key is already present (callers that have verified
-/// absence via `get_mut` should treat this as unreachable).
+/// Returns `Err(AllocError)` if cloning the allocator fails.
 fn try_probe<'a, K: 'a + Ord, V: 'a, A: AllocatorTryClone>(
     map: &'a mut BTreeMap<K, V, A>,
     key: K,
-) -> Option<VacantEntry<'a, K, V, A>> {
-    let root = map.root.as_mut()?;
-    // Capture a unique borrow of the map, then immediately reborrow it so we can
-    // hand out mutable node references tied to `'a` while keeping the original
-    // borrow dormant for the entry's lifetime.
+) -> Result<Option<VacantEntry<'a, K, V, A>>, AllocError> {
     let (map_ref, dormant_map) = DormantMutRef::new(map);
-    let mut node = map_ref.root.as_mut()?.borrow_mut();
+    let root = match map_ref.root.as_mut() {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let mut node = root.borrow_mut();
     loop {
         let leaf_ptr = NodeRef::as_leaf_ptr(&node);
         let edge_idx = find_edge_index_generic(leaf_ptr, &key);
         // If the key matches an existing separator, the slot is occupied.
         if edge_idx < node.len() {
             let keys = node.keys();
-            if keys[edge_idx].borrow() == key {
-                return None;
+            if *keys[edge_idx].borrow() == key {
+                return Ok(None);
             }
         }
         if node.height() == 0 {
             // At the leaf: record the vacant edge position.
-            let handle = unsafe { Handle::new_edge(node, edge_idx) };
-            return Some(VacantEntry {
+            let leaf_node = unsafe { node.cast_to_leaf_unchecked() };
+            let handle = unsafe { Handle::new_edge(leaf_node, edge_idx) };
+            return Ok(Some(VacantEntry {
                 key,
                 handle: Some(handle),
                 dormant_map,
-                alloc: map_ref.alloc.clone(),
+                alloc: map_ref.alloc.try_clone().map_err(try_clone_err_to_alloc_error)?,
                 _marker: PhantomData,
-            });
+            }));
         }
         // Descend to the appropriate child.
         let internal_node = unsafe { node.cast_to_internal_unchecked() };
