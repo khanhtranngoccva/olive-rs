@@ -3,8 +3,10 @@
 mod borrow;
 mod entry;
 mod map;
+mod mem;
 pub(super) mod node;
 mod scratch;
-mod mem;
+mod search;
+mod set_val;
 
 pub use map::BTreeMap;

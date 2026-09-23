@@ -34,7 +34,6 @@
 use super::scratch::Nodes;
 use crate::alloc::{AllocError, Allocator, AllocatorTryClone, Layout};
 use crate::boxed::Box;
-use crate::collections::btree::node::marker::Internal;
 use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::num::NonZero;
@@ -476,6 +475,18 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
         }
     }
 
+    /// Unsafely asserts to the compiler the static information that this node is a `Leaf`.
+    pub(super) unsafe fn cast_to_leaf_unchecked(
+        self,
+    ) -> NodeRef<marker::Immut<'a>, K, V, marker::Leaf> {
+        debug_assert!(self.height == 0);
+        NodeRef {
+            height: self.height,
+            node: self.node,
+            _marker: PhantomData,
+        }
+    }
+
     /// Returns a reference to the key-value pair at the given index.
     ///
     /// # Safety
@@ -538,7 +549,7 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 
     /// Borrows exclusive access to the leaf portion of a leaf or internal node.
-    fn as_leaf_mut(&mut self) -> &mut LeafNode<K, V> {
+    pub(super) fn as_leaf_mut(&mut self) -> &mut LeafNode<K, V> {
         let ptr = Self::as_leaf_ptr(self);
         // SAFETY: we have exclusive access to the entire node.
         unsafe { &mut *ptr }
@@ -1044,6 +1055,30 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
                 node: self.node,
                 _marker: PhantomData,
             })
+        }
+    }
+}
+
+impl<BorrowType, K, V, Type> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, Type> {
+    /// Checks whether the underlying node is an `Internal` node or a `Leaf` node.
+    #[allow(clippy::type_complexity, reason = "std uses this type declaration")]
+    pub(super) fn force(
+        self,
+    ) -> ForceResult<
+        Handle<NodeRef<BorrowType, K, V, marker::Leaf>, Type>,
+        Handle<NodeRef<BorrowType, K, V, marker::Internal>, Type>,
+    > {
+        match self.node.force() {
+            ForceResult::Leaf(node) => ForceResult::Leaf(Handle {
+                node,
+                idx: self.idx,
+                _marker: PhantomData,
+            }),
+            ForceResult::Internal(node) => ForceResult::Internal(Handle {
+                node,
+                idx: self.idx,
+                _marker: PhantomData,
+            }),
         }
     }
 }
@@ -2251,6 +2286,14 @@ impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marke
 }
 
 impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::KV> {
+    pub(super) fn forget_node_type(
+        self,
+    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {
+        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
+    }
+}
+
+impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::KV> {
     pub(super) fn forget_node_type(
         self,
     ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {

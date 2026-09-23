@@ -26,8 +26,7 @@ use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
 use super::map::BTreeMap;
-use super::node::{self, CAPACITY, Handle, NodeRef, Root, marker};
-use super::scratch::reserve_for_insertion;
+use super::node::{CAPACITY, Handle, NodeRef, marker};
 
 /// A view into a single entry in a map, which may either be vacant or occupied.
 ///
@@ -42,10 +41,9 @@ pub enum Entry<'a, K: 'a, V: 'a, A: AllocatorTryClone = Global> {
 /// A vacant entry in a [`BTreeMap`].
 pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
     pub(super) key: K,
-    /// `None` for a (empty) map without root
-    pub(super) handle: Option<
-        Handle<NodeRef<node::marker::Mut<'a>, K, V, node::marker::Leaf>, node::marker::Edge>,
-    >,
+    /// The edge handle in the target leaf where the key belongs, if the map
+    /// is non-empty. `None` when the map is empty and a new root must be created.
+    pub(super) handle: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
     /// The BTreeMap will outlive this IntoIter so we don't care about drop order for `alloc`.
     pub(super) alloc: A,
@@ -55,10 +53,7 @@ pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
 
 /// An occupied entry in a [`BTreeMap`].
 pub struct OccupiedEntry<'a, K, V, A: AllocatorTryClone = Global> {
-    pub(super) handle: Handle<
-        NodeRef<node::marker::Mut<'a>, K, V, node::marker::LeafOrInternal>,
-        node::marker::KV,
-    >,
+    pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
     /// The BTreeMap will outlive this IntoIter so we don't care about drop order for `alloc`.
     pub(super) alloc: A,
@@ -83,7 +78,11 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
         mut self,
         value: V,
     ) -> Result<OccupiedEntry<'a, K, V, A>, (K, V, AllocError)> {
-        let handle = match self.handle {
+        // This guard is in place because overflowing is a possibility on ZSTs
+        if unsafe { self.dormant_map.reborrow() }.length == usize::MAX {
+            return Err((self.key, value, AllocError));
+        }
+        let leaf_kv_handle = match self.handle {
             None => {
                 let alloc = match self.alloc.try_clone() {
                     Ok(a) => a,
@@ -114,15 +113,12 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
         };
 
         // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "to have (usize::MAX + 1) nodes, there must be (4 + size_of_ptr) * (usize::MAX + 1) bytes of memory, triggering OOM long before this happens"
-        )]
+        #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
         unsafe {
             self.dormant_map.reborrow().length += 1
         };
         Ok(OccupiedEntry {
-            handle: handle.forget_node_type(),
+            handle: leaf_kv_handle.forget_node_type(),
             dormant_map: self.dormant_map,
             alloc: self.alloc,
             _marker: PhantomData,
@@ -190,18 +186,4 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
             .push(ins.kv.0, ins.kv.1, ins.right)
     });
     Ok(new_handle)
-}
-
-/// Finds the edge index in a node where the given key should be inserted.
-fn find_edge_index<K: Ord, V, Q: Ord + ?Sized>(
-    leaf_ptr: *mut node::LeafNode<K, V>,
-    key: &Q,
-) -> usize
-where
-    K: core::borrow::Borrow<Q>,
-{
-    let len = unsafe { (*leaf_ptr).len as usize };
-    // SAFETY: the first `len` elements of `keys` are initialized.
-    let keys = unsafe { core::slice::from_raw_parts((*leaf_ptr).keys.as_ptr().cast::<K>(), len) };
-    keys.partition_point(|k| k.borrow() < key)
 }

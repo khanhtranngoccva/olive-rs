@@ -20,9 +20,16 @@ pub fn replace<T, R>(v: &mut T, change: impl FnOnce(T) -> (T, R)) -> R {
     struct PanicGuard;
     impl Drop for PanicGuard {
         fn drop(&mut self) {
-            // Aborts by invoking null deref. Should never happen.
+            // Aborts by invoking null deref.
+            // This code path should NOT be exercised in practice.
+            // FIXME: core::intrinsics::abort() cannot be used on stable, unfortunately.
+            // Find another way.
             #[allow(deref_nullptr)]
-            unsafe { *(0 as *const u8) };
+            #[allow(clippy::zero_ptr)]
+            #[allow(unused_must_use)]
+            unsafe {
+                *(0 as *const u8)
+            };
         }
     }
     let guard = PanicGuard;
