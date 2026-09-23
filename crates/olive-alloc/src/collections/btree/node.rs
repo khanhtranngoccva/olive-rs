@@ -671,7 +671,7 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     ///
     /// # Safety
     /// `index` is in bounds of 0..CAPACITY
-    unsafe fn key_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    pub(super) unsafe fn key_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
     where
         I: SliceIndex<[MaybeUninit<K>], Output = Output>,
     {
@@ -690,7 +690,7 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     ///
     /// # Safety
     /// `index` is in bounds of 0..CAPACITY
-    unsafe fn val_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    pub(super) unsafe fn val_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
     where
         I: SliceIndex<[MaybeUninit<V>], Output = Output>,
     {
@@ -1729,7 +1729,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
             let v = slice_remove(self.node.val_area_mut(..old_len), self.idx);
             #[allow(
                 clippy::arithmetic_side_effects,
-                reason = "asserted old_len > 0, old_len is at max 2 * B - 1, u16 cast is at max 2 * B - 2"
+                reason = "asserted old_len > 0, old_len is at max 2 * B - 1, u16 cast is at max 2 * B - 2 < 256 => 2 * B < 258 => B <= 128"
             )]
             {
                 *self.node.len_mut() = (old_len - 1) as u16;
@@ -1829,6 +1829,7 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// the right, instead of shifting at least N of the sibling's elements to
     /// the left.
     pub(super) fn choose_parent_kv(self) -> Result<LeftOrRight<BalancingContext<'a, K, V>>, Self> {
+        // SAFETY: the handle is a data object.
         match unsafe { ptr::read(&self) }.ascend() {
             Ok(parent_edge) => match parent_edge.left_kv() {
                 Ok(left_parent_kv) => Ok(LeftOrRight::Left(BalancingContext {
