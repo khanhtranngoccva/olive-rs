@@ -1,21 +1,19 @@
 //! Fallible B-tree map entry operations via direct node manipulation.
 //!
-//! The central abstraction is [`VacantEntry`], which mirrors std's
-//! `alloc::collections::btree_map::entry::VacantEntry`. It holds a mutable
-//! leaf handle obtained during a read-only probe, plus a dormant reference
-//! back to the owning map for fallible allocation.
+//! The central abstraction is [`Entry`], which mirrors std's
+//! `alloc::collections::btree_map::entry::Entry`.
 //!
 //! # Reserve-and-Commit Architecture
 //!
-//! Insertion with cascading splits uses a strict three-phase approach:
+//! Insertion with cascading splits uses a strict two-phase approach:
 //!
-//! 1. **Probe phase** — walk the tree bottom-up (reads only) to learn exactly
-//!    which nodes will split and how deep the cascade goes.
-//! 2. **Reserve phase** — allocate every node the commit needs in one batch.
+//! 1. **Reserve phase** — walk the tree bottom-up (reads only) to learn exactly
+//!    which nodes will split and how deep the cascade goes. After that, allocate
+//!    every node the commit needs in one batch.
 //!    If any single allocation fails we drop the already-reserved nodes and
 //!    return `Err`; because no mutation has touched the original tree yet, it
 //!    remains completely intact.
-//! 3. **Commit phase** — with every node already allocated, the actual splits
+//! 2. **Commit phase** — with every node already allocated, the actual splits
 //!    are performed as pure pointer surgery. No allocation occurs here, so
 //!    failure is impossible.
 
@@ -45,8 +43,6 @@ pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
     /// is non-empty. `None` when the map is empty and a new root must be created.
     pub(super) handle: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
-    /// The BTreeMap will outlive this IntoIter so we don't care about drop order for `alloc`.
-    pub(super) alloc: A,
     // Be invariant in `K` and `V`
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
@@ -55,8 +51,6 @@ pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
 pub struct OccupiedEntry<'a, K, V, A: AllocatorTryClone = Global> {
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
-    /// The BTreeMap will outlive this IntoIter so we don't care about drop order for `alloc`.
-    pub(super) alloc: A,
     // Be invariant in `K` and `V`
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
@@ -84,7 +78,9 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
         }
         let leaf_kv_handle = match self.handle {
             None => {
-                let alloc = match self.alloc.try_clone() {
+                // SAFETY: There is no tree yet so no reference to it exists.
+                let map = unsafe { self.dormant_map.reborrow() };
+                let alloc = match map.alloc.try_clone() {
                     Ok(a) => a,
                     Err(_) => return Err((self.key, value, AllocError)),
                 };
@@ -92,8 +88,6 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
                     Ok(a) => a,
                     Err(e) => return Err((self.key, value, e)),
                 };
-                // SAFETY: There is no tree yet so no reference to it exists.
-                let map = unsafe { self.dormant_map.reborrow() };
                 let root = map.root.insert(node_ref.forget_type());
                 // SAFETY: We *just* created the root as a leaf, and we're
                 // stacking the new handle on the original borrow lifetime.
@@ -107,7 +101,7 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
                 if handle.node.len() < CAPACITY {
                     unsafe { handle.insert_fit(self.key, value) }
                 } else {
-                    do_two_phase(&mut self.dormant_map, handle, &self.alloc, self.key, value)?
+                    do_two_phase(&mut self.dormant_map, handle, self.key, value)?
                 }
             }
         };
@@ -120,9 +114,26 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
         Ok(OccupiedEntry {
             handle: leaf_kv_handle.forget_node_type(),
             dormant_map: self.dormant_map,
-            alloc: self.alloc,
             _marker: PhantomData,
         })
+    }
+}
+
+impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
+    /// Gets a reference to the value in the entry.
+    pub(super) fn get(&self) -> &V {
+        self.handle.reborrow().into_kv().1
+    }
+
+    /// Gets a mutable reference to the value in the entry.
+    pub(super) fn get_mut(&mut self) -> &mut V {
+        self.handle.kv_mut().1
+    }
+
+    /// Sets the value of the entry with the `OccupiedEntry`'s key,
+    /// and returns the entry's old value.
+    pub(super) fn insert(&mut self, value: V) -> V {
+        core::mem::replace(self.get_mut(), value)
     }
 }
 
@@ -149,18 +160,17 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
 fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
     map: &mut DormantMutRef<'a, BTreeMap<K, V, A>>,
     handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
-    alloc: &A,
     key: K,
     value: V,
 ) -> Result<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>, (K, V, AllocError)> {
     let immut_reborrow = handle.reborrow();
-    // SAFETY: we reborrow the map only to access the reserve stack.
-    // The borrow ends before insert_recursing is called, so the
-    // split_root closure can safely reborrow the map again.
+    // SAFETY: we reborrow the map only to access the reserve stack and
+    // extract the allocator. The borrow ends before insert_recursing is
+    // called, so the split_root closure can safely reborrow the map again.
     let nodes = {
         let map_ref = unsafe { map.reborrow() };
         if map_ref.reserve_stack.is_none() {
-            let cloned = match alloc.try_clone() {
+            let cloned = match map_ref.alloc.try_clone() {
                 Ok(allocator) => allocator,
                 Err(_) => return Err((key, value, AllocError)),
             };
@@ -170,7 +180,7 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
             .reserve_stack
             .as_mut()
             .expect("reserve stack is just initialized");
-        match scratch::reserve_for_insertion(stack, immut_reborrow, alloc) {
+        match scratch::reserve_for_insertion(stack, immut_reborrow, &map_ref.alloc) {
             Ok(nodes) => nodes,
             Err(e) => return Err((key, value, e)),
         }
