@@ -2,6 +2,8 @@ use core::borrow::Borrow;
 use core::ops::RangeBounds;
 use core::{hint, ptr};
 
+use olive_core::alloc::AllocatorTryClone;
+
 use super::node::ForceResult::*;
 use super::node::{Handle, NodeRef, marker};
 use super::search::SearchBound;
@@ -209,7 +211,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub unsafe fn deallocating_next_unchecked<A: Allocator + Clone>(
+    pub unsafe fn deallocating_next_unchecked<A: AllocatorTryClone>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -219,7 +221,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub unsafe fn deallocating_next_back_unchecked<A: Allocator + Clone>(
+    pub unsafe fn deallocating_next_back_unchecked<A: AllocatorTryClone>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -229,7 +231,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub fn deallocating_end<A: Allocator + Clone>(&mut self, alloc: &A) {
+    pub fn deallocating_end<A: AllocatorTryClone>(&mut self, alloc: &A) {
         if let Some(front) = self.take_front() {
             front.deallocating_end(alloc)
         }
@@ -284,12 +286,9 @@ impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Lea
     /// # Safety
     /// Unless `BorrowType` is `Immut`, do not use the handles to visit the same
     /// KV twice.
-    unsafe fn find_leaf_edges_spanning_range<Q: ?Sized, R>(
-        self,
-        range: R,
-    ) -> LeafRange<BorrowType, K, V>
+    unsafe fn find_leaf_edges_spanning_range<Q, R>(self, range: R) -> LeafRange<BorrowType, K, V>
     where
-        Q: Ord,
+        Q: Ord + ?Sized,
         K: Borrow<Q>,
         R: RangeBounds<Q>,
     {
@@ -415,10 +414,7 @@ impl<BorrowType: marker::BorrowType, K, V>
         loop {
             edge = match edge.right_kv() {
                 Ok(kv) => return Ok(kv),
-                Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.forget_node_type(),
-                    Err(root) => return Err(root),
-                },
+                Err(last_edge) => last_edge.into_node().ascend()?.forget_node_type(),
             }
         }
     }
@@ -436,10 +432,7 @@ impl<BorrowType: marker::BorrowType, K, V>
         loop {
             edge = match edge.left_kv() {
                 Ok(kv) => return Ok(kv),
-                Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge.forget_node_type(),
-                    Err(root) => return Err(root),
-                },
+                Err(last_edge) => last_edge.into_node().ascend()?.forget_node_type(),
             }
         }
     }
@@ -461,10 +454,7 @@ impl<BorrowType: marker::BorrowType, K, V>
         loop {
             edge = match edge.right_kv() {
                 Ok(internal_kv) => return Ok(internal_kv),
-                Err(last_edge) => match last_edge.into_node().ascend() {
-                    Ok(parent_edge) => parent_edge,
-                    Err(root) => return Err(root),
-                },
+                Err(last_edge) => last_edge.into_node().ascend()?,
             }
         }
     }
@@ -484,7 +474,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///   `deallocating_next_back`.
     /// - The returned KV handle is only valid to access the key and value,
     ///   and only valid until the next call to a `deallocating_` method.
-    unsafe fn deallocating_next<A: Allocator + Clone>(
+    unsafe fn deallocating_next<A: AllocatorTryClone>(
         self,
         alloc: &A,
     ) -> Option<(
@@ -518,7 +508,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///   `deallocating_next`.
     /// - The returned KV handle is only valid to access the key and value,
     ///   and only valid until the next call to a `deallocating_` method.
-    unsafe fn deallocating_next_back<A: Allocator + Clone>(
+    unsafe fn deallocating_next_back<A: AllocatorTryClone>(
         self,
         alloc: &A,
     ) -> Option<(
@@ -545,7 +535,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     /// both sides of the tree, and have hit the same edge. As it is intended
     /// only to be called when all keys and values have been returned,
     /// no cleanup is done on any of the keys or values.
-    fn deallocating_end<A: Allocator + Clone>(self, alloc: &A) {
+    fn deallocating_end<A: AllocatorTryClone>(self, alloc: &A) {
         let mut edge = self.forget_node_type();
         while let Some(parent_edge) = unsafe { edge.into_node().deallocate_and_ascend(alloc) } {
             edge = parent_edge.forget_node_type();
@@ -588,6 +578,8 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     unsafe fn next_unchecked(&mut self) -> (&'a K, &'a mut V) {
         let kv = super::mem::replace(self, |leaf_edge| {
             let kv = leaf_edge.next_kv().ok().unwrap();
+            // SAFETY: These handles are trivially copyable, and is only used to derive subsequent edges.
+            // No mutations occurs.
             (unsafe { ptr::read(&kv) }.next_leaf_edge(), kv)
         });
         // Doing this last is faster, according to benchmarks.
@@ -602,6 +594,8 @@ impl<'a, K, V> Handle<NodeRef<marker::ValMut<'a>, K, V, marker::Leaf>, marker::E
     unsafe fn next_back_unchecked(&mut self) -> (&'a K, &'a mut V) {
         let kv = super::mem::replace(self, |leaf_edge| {
             let kv = leaf_edge.next_back_kv().ok().unwrap();
+            // SAFETY: These handles are trivially copyable, and is only used to derive subsequent edges.
+            // No mutations occurs.
             (unsafe { ptr::read(&kv) }.next_back_leaf_edge(), kv)
         });
         // Doing this last is faster, according to benchmarks.
@@ -622,7 +616,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// or call this method or counterpart `deallocating_next_back_unchecked` again.
-    unsafe fn deallocating_next_unchecked<A: Allocator + Clone>(
+    unsafe fn deallocating_next_unchecked<A: AllocatorTryClone>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -643,7 +637,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// or call this method or counterpart `deallocating_next_unchecked` again.
-    unsafe fn deallocating_next_back_unchecked<A: Allocator + Clone>(
+    unsafe fn deallocating_next_back_unchecked<A: AllocatorTryClone>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {

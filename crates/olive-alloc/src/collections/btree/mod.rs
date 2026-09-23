@@ -2,11 +2,14 @@
 
 mod borrow;
 mod entry;
+mod fix;
 mod map;
 mod mem;
-pub(super) mod node;
+mod node;
+mod remove;
 mod scratch;
 mod search;
 mod set_val;
+mod navigate;
 
 pub use map::BTreeMap;

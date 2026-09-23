@@ -10,8 +10,12 @@ use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
 use super::entry::{Entry, OccupiedEntry, VacantEntry};
-use super::node::Root;
+use super::node::{self, Root};
 use super::search::SearchResult;
+
+/// Minimum number of key-value pairs a non-root node must retain after removal.
+/// A node with fewer than this is underfull and needs rebalancing.
+pub(super) const MIN_LEN: usize = node::MIN_LEN_AFTER_SPLIT;
 
 /// Converts a `TryCloneError` to an `AllocError`.
 pub(super) fn try_clone_err_to_alloc_error(
@@ -114,6 +118,28 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
             },
         }
     }
+
+    /// Like [`entry`](Self::entry) but accepts a borrowed key via `Borrow`.
+    /// Only useful for lookups that don't need to insert (e.g. `remove`).
+    fn entry_ref<Q>(&mut self, key: &Q) -> Result<Entry<'_, K, V, A>, ()>
+    where
+        Q: Ord + ?Sized,
+        K: Ord + Borrow<Q>,
+    {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        match map.root {
+            None => Err(()), // empty map, nothing to remove
+            Some(ref mut root) => match root.borrow_mut().search_tree(key) {
+                SearchResult::Found(handle) => Ok(Entry::Occupied(OccupiedEntry {
+                    handle,
+                    dormant_map,
+                    _marker: PhantomData,
+                })),
+                SearchResult::GoDown(_) => Err(()), // not found
+            },
+        }
+    }
+
     /// Gets the mutable reference to the value corresponding to the key.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
@@ -141,13 +167,15 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     }
 
     /// Removes a key from the map, returning the value if present.
-    pub fn remove<Q>(&mut self, _key: &Q) -> Option<V>
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Ord + Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        // TODO: Implement removal logic
-        unimplemented!("remove")
+        match self.entry_ref(key) {
+            Ok(Entry::Occupied(occupied)) => Some(occupied.remove_entry().1),
+            _ => None,
+        }
     }
 }
 
@@ -267,6 +295,148 @@ mod tests {
         assert_eq!(map.len(), 100);
         for i in 0..100 {
             assert_eq!(map.get(&i), Some(&i));
+        }
+    }
+
+    // ── Deletion tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn remove_single_element() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        map.try_insert(1, 10).unwrap();
+        assert_eq!(map.remove(&1), Some(10));
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+        assert_eq!(map.remove(&1), None);
+    }
+
+    #[test]
+    fn remove_nonexistent_key() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        map.try_insert(1, 10).unwrap();
+        assert_eq!(map.remove(&999), None);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn remove_from_leaf_no_rebalance() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        // Fill a leaf to capacity (11 keys) then remove one — still ≥ MIN_LEN.
+        for i in 0..11 {
+            map.try_insert(i, i * 10).unwrap();
+        }
+        assert_eq!(map.remove(&5), Some(50));
+        assert_eq!(map.len(), 10);
+        for i in 0..11 {
+            if i != 5 {
+                assert_eq!(map.get(&i), Some(&(i * 10)), "missing key {}", i);
+            } else {
+                assert_eq!(map.get(&i), None);
+            }
+        }
+    }
+
+    #[test]
+    fn remove_triggers_steal() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        // Build a tree with multiple leaves, then remove enough from one leaf
+        // to force a steal from a sibling.
+        for i in 0..30u32 {
+            map.try_insert(i, i).unwrap();
+        }
+        // Remove the middle key of the leftmost leaf region to trigger rebalance.
+        assert_eq!(map.remove(&2), Some(2));
+        assert_eq!(map.len(), 29);
+        for i in 0..30u32 {
+            if i != 2 {
+                assert_eq!(map.get(&i), Some(&i), "missing key {}", i);
+            }
+        }
+    }
+
+    #[test]
+    fn remove_triggers_merge_and_root_shrink() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        // Build a multi-level tree, then drain it down to empty.
+        for i in 0..80u32 {
+            map.try_insert(i, i).unwrap();
+        }
+        let initial_height = map.root.as_ref().map_or(0, |r| r.height());
+        assert!(initial_height >= 1, "expected multi-level tree");
+
+        // Remove all elements one by one.
+        for i in 0..80u32 {
+            assert_eq!(map.remove(&i), Some(i), "failed to remove key {}", i);
+        }
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn remove_all_keys_random_order() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        const N: u32 = 200;
+        for i in 0..N {
+            map.try_insert(i, i * 7).unwrap();
+        }
+        // Remove in descending order (worst-case for B-tree: always hits rightmost leaf).
+        for i in (0..N).rev() {
+            assert_eq!(map.remove(&i), Some(i * 7), "failed to remove key {}", i);
+            assert_eq!(
+                map.len(),
+                i as usize,
+                "length mismatch after removing key {}",
+                i
+            );
+        }
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn remove_interleaved_with_insert() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        // Interleave inserts and removes to stress the rebalancing logic.
+        for round in 0..5u32 {
+            for i in 0..20 {
+                map.try_insert(round * 100 + i, i).unwrap();
+            }
+            for i in (0..20).step_by(2) {
+                map.remove(&(round * 100 + i));
+            }
+        }
+        // Verify remaining keys are correct.
+        for round in 0..5u32 {
+            for i in 0..20 {
+                if i % 2 == 1 {
+                    assert_eq!(map.get(&(round * 100 + i)), Some(&i));
+                } else {
+                    assert_eq!(map.get(&(round * 100 + i)), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remove_preserves_sorted_invariant() {
+        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        for i in 0..50u32 {
+            map.try_insert(i, i).unwrap();
+        }
+        // Remove every third key.
+        for i in (0..50).step_by(3) {
+            map.remove(&i);
+        }
+        // Walk the map via get and verify sorted order is maintained.
+        let mut prev = None;
+        for i in 0..50u32 {
+            if i % 3 != 0 {
+                assert_eq!(map.get(&i), Some(&i));
+                if let Some(p) = prev {
+                    assert!(p < i, "sorted invariant violated: {} !< {}", p, i);
+                }
+                prev = Some(i);
+            }
         }
     }
 }
