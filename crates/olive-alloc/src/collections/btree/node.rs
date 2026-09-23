@@ -540,7 +540,7 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     // FIXME(@gereeter) consider adding yet another type parameter to `NodeRef`
     // that restricts the use of navigation methods on reborrowed pointers,
     // preventing this unsafety.
-    unsafe fn reborrow_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, Type> {
+    pub(super) unsafe fn reborrow_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, Type> {
         NodeRef {
             height: self.height,
             node: self.node,
@@ -711,7 +711,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     ///
     /// # Safety
     /// `index` is in bounds of 0..CAPACITY + 1
-    unsafe fn edge_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
+    pub(super) unsafe fn edge_area_mut<I, Output: ?Sized>(&mut self, index: I) -> &mut Output
     where
         I: SliceIndex<[MaybeUninit<BoxedNode<K, V>>], Output = Output>,
     {
@@ -1371,7 +1371,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     }
 }
 
-impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
+impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, marker::Edge> {
     /// Fixes the parent pointer and index in the child node that this edge
     /// links to. This is useful when the ordering of edges has been changed,
     fn correct_parent_link(self) {
@@ -2378,7 +2378,7 @@ pub(super) mod marker {
 ///
 /// # Safety
 /// The slice has more than `idx` elements.
-unsafe fn slice_insert<T>(slice: &mut [MaybeUninit<T>], idx: usize, val: T) {
+pub(super) unsafe fn slice_insert<T>(slice: &mut [MaybeUninit<T>], idx: usize, val: T) {
     unsafe {
         let len = slice.len();
         debug_assert!(idx < len);

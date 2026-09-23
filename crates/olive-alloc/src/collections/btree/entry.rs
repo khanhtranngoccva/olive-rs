@@ -24,7 +24,39 @@ use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
 use super::map::BTreeMap;
-use super::node::{CAPACITY, Handle, LeftOrRight, NodeRef, marker};
+use super::node::{CAPACITY, Handle, NodeRef, marker};
+use super::search::SearchResult;
+
+impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+    /// Gets an [`Entry`] to a single entry in the map, which may either be
+    /// occupied or vacant.
+    ///
+    /// This is the standard entry API, mirroring `std::collections::BTreeMap::entry`.
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, A> {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        match map.root {
+            None => Entry::Vacant(VacantEntry {
+                key,
+                handle: None,
+                dormant_map,
+                _marker: PhantomData,
+            }),
+            Some(ref mut root) => match root.borrow_mut().search_tree(&key) {
+                SearchResult::Found(handle) => Entry::Occupied(OccupiedEntry {
+                    handle,
+                    dormant_map,
+                    _marker: PhantomData,
+                }),
+                SearchResult::GoDown(handle) => Entry::Vacant(VacantEntry {
+                    key,
+                    handle: Some(handle),
+                    dormant_map,
+                    _marker: PhantomData,
+                }),
+            },
+        }
+    }
+}
 
 /// A view into a single entry in a map, which may either be vacant or occupied.
 ///
@@ -59,63 +91,6 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
     /// Returns a reference to the key that was probed.
     pub(super) fn key(&self) -> &K {
         &self.key
-    }
-
-    /// Inserts the value into the vacant slot, performing the full
-    /// reserve-and-commit insertion if a split cascade is needed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if memory allocation fails during the reserve
-    /// phase. The tree is left unmodified on failure.
-    pub(super) fn try_insert_entry(
-        mut self,
-        value: V,
-    ) -> Result<OccupiedEntry<'a, K, V, A>, (K, V, AllocError)> {
-        // This guard is in place because overflowing is a possibility on ZSTs
-        if unsafe { self.dormant_map.reborrow() }.length == usize::MAX {
-            return Err((self.key, value, AllocError));
-        }
-        let leaf_kv_handle = match self.handle {
-            None => {
-                // SAFETY: There is no tree yet so no reference to it exists.
-                let map = unsafe { self.dormant_map.reborrow() };
-                let alloc = match map.alloc.try_clone() {
-                    Ok(a) => a,
-                    Err(_) => return Err((self.key, value, AllocError)),
-                };
-                let node_ref = match NodeRef::new_leaf(alloc) {
-                    Ok(a) => a,
-                    Err(e) => return Err((self.key, value, e)),
-                };
-                let root = map.root.insert(node_ref.forget_type());
-                // SAFETY: We *just* created the root as a leaf, and we're
-                // stacking the new handle on the original borrow lifetime.
-                unsafe {
-                    let mut leaf = root.borrow_mut().cast_to_leaf_unchecked();
-                    leaf.push_with_handle(self.key, value)
-                }
-            }
-            Some(handle) => {
-                // Special case - no need for the two phase routine
-                if handle.node.len() < CAPACITY {
-                    unsafe { handle.insert_fit(self.key, value) }
-                } else {
-                    do_two_phase(&mut self.dormant_map, handle, self.key, value)?
-                }
-            }
-        };
-
-        // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
-        #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
-        unsafe {
-            self.dormant_map.reborrow().length += 1
-        };
-        Ok(OccupiedEntry {
-            handle: leaf_kv_handle.forget_node_type(),
-            dormant_map: self.dormant_map,
-            _marker: PhantomData,
-        })
     }
 }
 
@@ -172,16 +147,12 @@ impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
 
 /// Performs a reserve-and-commit insertion at a full leaf.
 ///
-/// Phase 1 (probe): re-walks the tree immutably from the root to determine
-/// exactly which ancestors are full and thus must split. This produces an
-/// immutable edge handle onto the target leaf.
-///
-/// Phase 2 (reserve): allocates a fresh leaf plus one internal node per full
+/// Phase 1 (probe + reserve): allocates a fresh leaf plus one internal node per full
 /// ancestor (plus one more if the root itself splits). On any allocation
 /// failure the reserved nodes are dropped and the untouched tree is returned
 /// unchanged.
 ///
-/// Phase 3 (commit): performs the splits bottom-up using only the reserved
+/// Phase 2 (commit): performs the splits bottom-up using only the reserved
 /// nodes, then splices the resulting subtree back into the map's root. Because
 /// every allocation succeeded, this phase cannot fail.
 #[allow(
@@ -227,4 +198,63 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
             .push(ins.kv.0, ins.kv.1, ins.right)
     });
     Ok(new_handle)
+}
+
+impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
+    /// Inserts the value into the vacant slot, performing the full
+    /// reserve-and-commit insertion if a split cascade is needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if memory allocation fails during the reserve
+    /// phase. The tree is left unmodified on failure.
+    pub(super) fn try_insert_entry(
+        mut self,
+        value: V,
+    ) -> Result<OccupiedEntry<'a, K, V, A>, (K, V, AllocError)> {
+        // This guard is in place because overflowing is a possibility on ZSTs
+        if unsafe { self.dormant_map.reborrow() }.length == usize::MAX {
+            return Err((self.key, value, AllocError));
+        }
+        let leaf_kv_handle = match self.handle {
+            None => {
+                // SAFETY: There is no tree yet so no reference to it exists.
+                let map = unsafe { self.dormant_map.reborrow() };
+                let alloc = match map.alloc.try_clone() {
+                    Ok(a) => a,
+                    Err(_) => return Err((self.key, value, AllocError)),
+                };
+                let node_ref = match NodeRef::new_leaf(alloc) {
+                    Ok(a) => a,
+                    Err(e) => return Err((self.key, value, e)),
+                };
+                let root = map.root.insert(node_ref.forget_type());
+                // SAFETY: We *just* created the root as a leaf, and we're
+                // stacking the new handle on the original borrow lifetime.
+                unsafe {
+                    let mut leaf = root.borrow_mut().cast_to_leaf_unchecked();
+                    leaf.push_with_handle(self.key, value)
+                }
+            }
+            Some(handle) => {
+                // Special case - no need for the two phase routine
+                if handle.node.len() < CAPACITY {
+                    unsafe { handle.insert_fit(self.key, value) }
+                } else {
+                    do_two_phase(&mut self.dormant_map, handle, self.key, value)?
+                }
+            }
+        };
+
+        // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
+        #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
+        unsafe {
+            self.dormant_map.reborrow().length += 1
+        };
+        Ok(OccupiedEntry {
+            handle: leaf_kv_handle.forget_node_type(),
+            dormant_map: self.dormant_map,
+            _marker: PhantomData,
+        })
+    }
 }

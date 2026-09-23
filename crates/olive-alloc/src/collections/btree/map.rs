@@ -9,7 +9,7 @@ use crate::vec::Vec;
 use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
-use super::entry::{Entry, OccupiedEntry, VacantEntry};
+use super::entry::{Entry, OccupiedEntry};
 use super::node::{self, Root};
 use super::search::SearchResult;
 
@@ -70,53 +70,6 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// Returns the number of elements in the map.
     pub fn len(&self) -> usize {
         self.length
-    }
-
-    /// Inserts a key-value pair into the map, attempting allocation as needed.
-    ///
-    /// If the key already existed, the old value is returned.
-    /// Otherwise, `None` is returned.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AllocError`] if memory allocation fails.
-    pub fn try_insert(&mut self, key: K, value: V) -> Result<Option<V>, AllocError> {
-        match self.entry(key) {
-            Entry::Occupied(mut occ) => Ok(Some(occ.insert(value))),
-            Entry::Vacant(vac) => vac
-                .try_insert_entry(value)
-                .map(|_| None)
-                .map_err(|(_, _, e)| e),
-        }
-    }
-
-    /// Gets an [`Entry`] to a single entry in the map, which may either be
-    /// occupied or vacant.
-    ///
-    /// This is the standard entry API, mirroring `std::collections::BTreeMap::entry`.
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, A> {
-        let (map, dormant_map) = DormantMutRef::new(self);
-        match map.root {
-            None => Entry::Vacant(VacantEntry {
-                key,
-                handle: None,
-                dormant_map,
-                _marker: PhantomData,
-            }),
-            Some(ref mut root) => match root.borrow_mut().search_tree(&key) {
-                SearchResult::Found(handle) => Entry::Occupied(OccupiedEntry {
-                    handle,
-                    dormant_map,
-                    _marker: PhantomData,
-                }),
-                SearchResult::GoDown(handle) => Entry::Vacant(VacantEntry {
-                    key,
-                    handle: Some(handle),
-                    dormant_map,
-                    _marker: PhantomData,
-                }),
-            },
-        }
     }
 
     /// Like [`entry`](Self::entry) but accepts a borrowed key via `Borrow`.
@@ -187,7 +140,7 @@ mod tests {
 
     #[test]
     fn insert_and_get_single() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         assert!(map.is_empty());
 
         map.try_insert(1, "one").unwrap();
@@ -198,7 +151,7 @@ mod tests {
 
     #[test]
     fn insert_multiple_no_split() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // CAPACITY is 11, so 11 inserts fit in one leaf without splitting.
         for i in 0..11 {
             map.try_insert(i, i * 10).unwrap();
@@ -211,7 +164,7 @@ mod tests {
 
     #[test]
     fn insert_triggers_leaf_split() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // 12th insert should trigger a leaf split.
         for i in 0..12 {
             map.try_insert(i, i).unwrap();
@@ -237,7 +190,7 @@ mod tests {
 
     #[test]
     fn insert_triggers_root_growth() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // With CAPACITY=11, the root (internal) splits after ~12 leaf splits.
         // Each leaf holds ~6 keys on average, so ~72 inserts fills the root.
         // Insert 80 to guarantee root growth.
@@ -252,7 +205,7 @@ mod tests {
 
     #[test]
     fn insert_many_triggers_multi_level_splits() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // Enough inserts to force multiple levels of splits.
         for i in 0..120u32 {
             map.try_insert(i, i * 2).unwrap();
@@ -265,7 +218,7 @@ mod tests {
 
     #[test]
     fn insert_overwrite_existing_key() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         map.try_insert(1, "first").unwrap();
         let old = map.try_insert(1, "second").unwrap();
         assert_eq!(old, Some("first"));
@@ -275,7 +228,7 @@ mod tests {
 
     #[test]
     fn get_mut_returns_correct_value() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         map.try_insert(5, 50).unwrap();
         map.try_insert(10, 100).unwrap();
 
@@ -288,7 +241,7 @@ mod tests {
 
     #[test]
     fn reverse_order_insertion() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         for i in (0..100).rev() {
             map.try_insert(i, i).unwrap();
         }
@@ -302,7 +255,7 @@ mod tests {
 
     #[test]
     fn remove_single_element() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         map.try_insert(1, 10).unwrap();
         assert_eq!(map.remove(&1), Some(10));
         assert_eq!(map.len(), 0);
@@ -312,7 +265,7 @@ mod tests {
 
     #[test]
     fn remove_nonexistent_key() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         map.try_insert(1, 10).unwrap();
         assert_eq!(map.remove(&999), None);
         assert_eq!(map.len(), 1);
@@ -321,7 +274,7 @@ mod tests {
 
     #[test]
     fn remove_from_leaf_no_rebalance() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // Fill a leaf to capacity (11 keys) then remove one — still ≥ MIN_LEN.
         for i in 0..11 {
             map.try_insert(i, i * 10).unwrap();
@@ -339,7 +292,7 @@ mod tests {
 
     #[test]
     fn remove_triggers_steal() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // Build a tree with multiple leaves, then remove enough from one leaf
         // to force a steal from a sibling.
         for i in 0..30u32 {
@@ -357,7 +310,7 @@ mod tests {
 
     #[test]
     fn remove_triggers_merge_and_root_shrink() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // Build a multi-level tree, then drain it down to empty.
         for i in 0..80u32 {
             map.try_insert(i, i).unwrap();
@@ -375,7 +328,7 @@ mod tests {
 
     #[test]
     fn remove_all_keys_random_order() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         const N: u32 = 200;
         for i in 0..N {
             map.try_insert(i, i * 7).unwrap();
@@ -395,7 +348,7 @@ mod tests {
 
     #[test]
     fn remove_interleaved_with_insert() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         // Interleave inserts and removes to stress the rebalancing logic.
         for round in 0..5u32 {
             for i in 0..20 {
@@ -419,7 +372,7 @@ mod tests {
 
     #[test]
     fn remove_preserves_sorted_invariant() {
-        let mut map = BTreeMap::new_in(crate::alloc::Global).unwrap();
+        let mut map = BTreeMap::new_in(Global).unwrap();
         for i in 0..50u32 {
             map.try_insert(i, i).unwrap();
         }

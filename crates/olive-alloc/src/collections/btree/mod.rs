@@ -3,6 +3,7 @@
 mod borrow;
 mod entry;
 mod fix;
+mod insertion;
 mod map;
 mod mem;
 mod node;
