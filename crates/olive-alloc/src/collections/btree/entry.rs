@@ -24,7 +24,7 @@ use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
 use super::map::BTreeMap;
-use super::node::{CAPACITY, Handle, NodeRef, marker};
+use super::node::{CAPACITY, Handle, LeftOrRight, NodeRef, marker};
 
 /// A view into a single entry in a map, which may either be vacant or occupied.
 ///
@@ -134,6 +134,37 @@ impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
     /// and returns the entry's old value.
     pub(super) fn insert(&mut self, value: V) -> V {
         core::mem::replace(self.get_mut(), value)
+    }
+
+    /// Removes the key-value pair from the map, returning it as a tuple.
+    ///
+    /// The removed pair is taken out of the tree; if its removal leaves an
+    /// underfull node, the tree is rebalanced (via merging or stealing) so that
+    /// all invariants hold again.
+    ///
+    /// The general invariant is that if a node has siblings, it must not have fewer
+    /// than MIN_LEN elements.
+    pub(super) fn remove_entry(mut self) -> (K, V) {
+        let mut emptied_internal_root = false;
+        let map = unsafe { self.dormant_map.reborrow() };
+        // Use references here to avoid cloning.
+        let (old_kv, _) = self
+            .handle
+            .remove_kv_tracking(|| emptied_internal_root = true, &map.alloc);
+        // SAFETY: we consumed the intermediate root borrow held by `self.handle`.
+        let map = unsafe { self.dormant_map.awaken() };
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "we just removed an existing element"
+        )]
+        {
+            map.length -= 1;
+        }
+        if emptied_internal_root {
+            let root = map.root.as_mut().unwrap();
+            root.pop_internal_level(&map.alloc);
+        }
+        old_kv
     }
 }
 
