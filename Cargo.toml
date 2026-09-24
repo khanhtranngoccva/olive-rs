@@ -41,6 +41,7 @@ olive-core = { path = "crates/olive-core" }
 olive-alloc = { path = "crates/olive-alloc" }
 olive-std = { path = "crates/olive-std" }
 cfg-if = "1.0.4"
+allocator-api2 = { version = "0.4", default-features = false, features = ["fresh-rust", "alloc"] }
 
 # Procedural-macro toolchain. Pinned once so olive-macros (and any future macro
 # crate) share identical versions; these are host-side only and never linked

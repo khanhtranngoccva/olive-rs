@@ -5,14 +5,14 @@
 //! expressed as returning a [`Result`] rather than panicking, so out-of-memory
 //! conditions become recoverable instead of fatal.
 //!
-//! This crate has **no dependencies** and never touches `std`. It mirrors the
+//! This crate is strictly `no_std` and never touches `std`. It mirrors the
 //! entire stable surface of `core` (glob-re-exported below) and layers on the
 //! pieces everything else in the stack builds on:
 //!
-//! * [`alloc`] — the ported allocator API: [`Layout`], [`AllocError`], the
-//!   [`Allocator`] trait, the default [`Global`] allocator, and the free-standing
-//!   raw-pointer functions. The canonical seam every Olive collection allocates
-//!   through.
+//! * [`alloc`] - The allocator API, based on top of [`allocator_api2`].
+//!   Olive adds [`StaticAllocator`](alloc::StaticAllocator),
+//!   [`AllocatorTryClone`](alloc::AllocatorTryClone), and other helpful
+//!   traits on top.
 //! * [`alloc_errors`] — [`TryReserveError`](alloc_errors::TryReserveError), the
 //!   collection-level capacity-reservation error (and a re-export of
 //!   [`AllocError`](alloc::AllocError)).
@@ -78,12 +78,13 @@
 // by `olive-macros`), where the crate would otherwise only be reachable as `crate`.
 extern crate self as olive_core;
 
-/// The ported allocator API: [`Layout`], [`AllocError`], [`Allocator`],
-/// [`Global`], and the free-standing raw-pointer functions.
-///
-/// [`Layout`]:
+/// The canonical allocator API: [`Allocator`](alloc::Allocator),
+/// [`AllocError`](alloc::AllocError), re-exported from `allocator-api2`,
+/// plus Olive's [`StaticAllocator`](alloc::StaticAllocator),
+/// [`AllocatorTryClone`](alloc::AllocatorTryClone), and [`LayoutExt`](alloc::LayoutExt).
 pub mod alloc;
-/// Allocation errors: [`AllocError`] and [`TryReserveError`].
+/// Allocation errors: [`AllocError`](alloc_errors::AllocError) and
+/// the high level [`TryReserveError`](alloc_errors::TryReserveError).
 pub mod alloc_errors;
 /// Foundational-trait impls for [`core::cell::Cell`] and [`core::cell::RefCell`].
 pub mod cell;

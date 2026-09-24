@@ -1,12 +1,14 @@
 //! Collection-level allocation errors.
 //!
-//! The low-level [`AllocError`] is defined here.
-//! This module also defines the higher-level [`TryReserveError`], which a
+//! The low-level [`AllocError`](crate::alloc::AllocError) is re-exported here
+//! from [`crate::alloc`] so it can sit alongside the higher-level
+//! [`TryReserveError`](crate::alloc_errors::TryReserveError), which a
 //! *collection* returns when reserving capacity fails:
 //!
-//! * [`TryReserveError`] — a capacity *reservation* on a collection failed. It
-//!   distinguishes between an arithmetic overflow while computing the new
-//!   capacity and an actual out-of-memory from the allocator.
+//! * [`TryReserveError`](crate::alloc_errors::TryReserveError) — a capacity
+//!   *reservation* on a collection failed. It distinguishes between an
+//!   arithmetic overflow while computing the new capacity and an actual
+//!   out-of-memory from the allocator.
 //!
 //! Together these let downstream code reason about failure the same way it does
 //! with `std`, except that the value is returned to the caller instead of
@@ -16,22 +18,10 @@ use core::alloc::Layout;
 use core::error::Error;
 use core::fmt;
 
-/// Indicates an allocation failure that may be due to resource exhaustion or to
-/// something wrong when combining the given input arguments with this allocator.
-///
-/// A unit struct, matching the shape of the (unstable) standard library's
-/// `core::alloc::AllocError`. It carries no payload because the allocator
-/// reports OOM without additional context.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct AllocError;
-
-impl Error for AllocError {}
-
-impl fmt::Display for AllocError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("memory allocation failed")
-    }
-}
+// The canonical low-level allocation error comes from `allocator-api2` via
+// `crate::alloc`; re-export it here so callers can grab both error levels from
+// one path.
+pub use crate::alloc::AllocError;
 
 /// The kind of failure behind a [`TryReserveError`].
 ///

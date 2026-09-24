@@ -9,10 +9,9 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Inherited from [workspace.dependencies]. The only runtime dependency is the
-# foundation crate; everything else is built from scratch (we deliberately do NOT
-# depend on the standard library's `alloc` crate — we control our own code).
+# Inherited from [workspace.dependencies].
 olive-core = { workspace = true }
+allocator-api2 = { workspace = true }
 
 [build-dependencies]
 olive-build = { workspace = true }

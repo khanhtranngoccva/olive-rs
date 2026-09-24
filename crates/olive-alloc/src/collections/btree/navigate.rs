@@ -7,7 +7,6 @@ use olive_core::alloc::AllocatorTryClone;
 use super::node::ForceResult::*;
 use super::node::{Handle, NodeRef, marker};
 use super::search::SearchBound;
-use crate::alloc::Allocator;
 
 // `front` and `back` are always both `None` or both `Some`.
 pub struct LeafRange<BorrowType, K, V> {

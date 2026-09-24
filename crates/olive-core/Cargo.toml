@@ -8,17 +8,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# olive-core is the foundation of the stack: it must be dependency-free and
-# strictly no_std so it can sit at the bottom of any build graph (including
-# no_std, no-alloc embedded targets). It never references `std`.
-#
-# The one exception is `olive-macros`, a host-side proc-macro crate used solely
-# to generate tuple `TryClone` impls at compile time. A proc-macro dependency is
-# not linked into the resulting rlib — it runs in rustc's process and emits
-# tokens — so it does not add any runtime dependency or violate the no_std /
-# dependency-free guarantee for downstream consumers.
 [dependencies]
 olive-macros = { workspace = true }
+allocator-api2 = { workspace = true }
 
 [build-dependencies]
 olive-build = { workspace = true }
