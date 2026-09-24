@@ -12,6 +12,7 @@ mod remove;
 mod scratch;
 mod search;
 mod set_val;
+mod traits;
 mod navigate;
 
 pub use map::BTreeMap;

@@ -245,6 +245,16 @@ unsafe impl Allocator for FailAlloc {
     unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
 }
 
+impl TryClone for FailAlloc {
+    #[inline]
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self)
+    }
+}
+
+// SAFETY: all operations are trivially safe; cloning is infallible.
+unsafe impl AllocatorTryClone for FailAlloc {}
+
 impl TryDefault for FailAlloc {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
@@ -295,6 +305,21 @@ unsafe impl Allocator for BudgetedAlloc {
         unsafe { crate::alloc::Global.deallocate(ptr, layout) };
     }
 }
+
+impl TryClone for BudgetedAlloc {
+    #[inline]
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        // Cloning the budget handle is infallible (Arc clone); the remaining
+        // counter is shared, so the clone observes the same budget.
+        Ok(Self {
+            remaining: self.remaining.clone(),
+        })
+    }
+}
+
+// SAFETY: delegates all memory ops to `Global`; cloning shares the same
+// budget counter via Arc, so a cloned handle is equivalent.
+unsafe impl AllocatorTryClone for BudgetedAlloc {}
 
 impl TryDefault for BudgetedAlloc {
     #[inline]

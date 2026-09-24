@@ -44,6 +44,26 @@ impl<C: TryClone> TryClone for TrackedItem<C> {
     }
 }
 
+impl<C: TryClone + PartialEq> PartialEq for TrackedItem<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<C: TryClone + Eq> Eq for TrackedItem<C> {}
+
+impl<C: TryClone + PartialOrd> PartialOrd for TrackedItem<C> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        self.inner.partial_cmp(&other.inner)
+    }
+}
+
+impl<C: TryClone + Ord> Ord for TrackedItem<C> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.inner.cmp(&other.inner)
+    }
+}
+
 /// The flaky variant used throughout existing tests: a tracked item whose clone
 /// policy is a shared [`CloneBudget`] (internally `Rc`-backed, so every handle
 /// observes the same remaining budget). A test can therefore place a

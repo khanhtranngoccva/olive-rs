@@ -537,7 +537,7 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     /// Because mutable pointers can roam anywhere around the tree, the returned
     /// pointer can easily be used to make the original pointer dangling, out of
     /// bounds, or invalid under stacked borrow rules.
-    // FIXME(@gereeter) consider adding yet another type parameter to `NodeRef`
+    // WONTFIX(@gereeter) consider adding yet another type parameter to `NodeRef`
     // that restricts the use of navigation methods on reborrowed pointers,
     // preventing this unsafety.
     pub(super) unsafe fn reborrow_mut(&mut self) -> NodeRef<marker::Mut<'_>, K, V, Type> {

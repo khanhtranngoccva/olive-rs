@@ -2658,7 +2658,7 @@ fn try_from_borrowed_slice_fails_when_element_clone_fails() {
 // Comparison trait impls: PartialEq, Eq, PartialOrd, Ord, Hash
 // ---------------------------------------------------------------------------
 
-// FIXME: should use PartialEq and Eq to avoid issues
+// FIXME: should use PartialEq and Eq to avoid conflicts
 #[test]
 fn vec_partial_eq_same_len_equal() {
     let a = mk_vec(&[1, 2, 3]);

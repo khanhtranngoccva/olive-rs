@@ -341,8 +341,11 @@ impl<K, V, A: AllocatorTryClone> IntoIterator for BTreeMap<K, V, A> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use crate::alloc::Global;
+    use crate::test_helpers::{Ledger, TrackedItem};
+    use std::sync::Arc;
 
     /// A simple comparable wrapper around a fixed-size array, used in place of
     /// `String` (which is fallible in this crate) to exercise non-Copy keys.
@@ -622,42 +625,74 @@ mod tests {
         assert_eq!(it.next(), None);
     }
 
+    /// Helper to insert a tracked key + tracked value pair into the map.
+    fn insert_tracked_pair(
+        map: &mut BTreeMap<TrackedItem<u32>, TrackedItem<u32>>,
+        key_val: u32,
+        val_val: u32,
+        ledger: &Arc<Ledger>,
+    ) {
+        let kid = ledger.allocate();
+        ledger.register(kid);
+        let vid = ledger.allocate();
+        ledger.register(vid);
+        map.try_insert(
+            TrackedItem {
+                id: kid,
+                ledger: ledger.clone(),
+                inner: key_val,
+            },
+            TrackedItem {
+                id: vid,
+                ledger: ledger.clone(),
+                inner: val_val,
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
-    // FIXME: replace this with ledger tests to ensure all values are dropped.
     fn into_iter_partial_then_drop() {
         // Take a few elements, then drop the iterator — Drop should clean up
         // remaining KVs and nodes without leaking or double-freeing.
-        let mut map = BTreeMap::new_in(Global);
+        let ledger = Arc::new(Ledger::new());
+        let mut map: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
         for i in 0..50u32 {
-            map.try_insert(i, i).unwrap();
+            insert_tracked_pair(&mut map, i, i * 10, &ledger);
         }
         let mut it = map.into_iter();
-        assert_eq!(it.next(), Some((0, 0)));
-        assert_eq!(it.next(), Some((1, 1)));
-        assert_eq!(it.next(), Some((2, 2)));
-        // Drop the iterator here — remaining 47 KVs should be cleaned up.
+        assert_eq!(it.next().map(|(k, v)| (k.inner, v.inner)), Some((0, 0)));
+        assert_eq!(it.next().map(|(k, v)| (k.inner, v.inner)), Some((1, 10)));
+        assert_eq!(it.next().map(|(k, v)| (k.inner, v.inner)), Some((2, 20)));
+        // Drop the iterator here — remaining 47 KV pairs should be cleaned up.
         drop(it);
+        // All 100 items (50 keys + 50 values) must have been dropped exactly once.
+        assert!(ledger.leaked_ids().is_empty(), "leaked ids: {:?}", ledger.leaked_ids());
+        assert!(ledger.double_dropped().is_empty(), "double-dropped: {:?}", ledger.double_dropped());
+        assert_eq!(ledger.total_allocated(), 100);
     }
 
     #[test]
-    // FIXME: replace this with ledger tests to ensure all values are dropped.
     fn into_iter_partial_rev_then_drop() {
         // Same but advancing from the back.
-        let mut map = BTreeMap::new_in(Global);
+        let ledger = Arc::new(Ledger::new());
+        let mut map: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
         for i in 0..50u32 {
-            map.try_insert(i, i).unwrap();
+            insert_tracked_pair(&mut map, i, i * 10, &ledger);
         }
         let mut it = map.into_iter();
-        assert_eq!(it.next_back(), Some((49, 49)));
-        assert_eq!(it.next_back(), Some((48, 48)));
+        assert_eq!(it.next_back().map(|(k, v)| (k.inner, v.inner)), Some((49, 490)));
+        assert_eq!(it.next_back().map(|(k, v)| (k.inner, v.inner)), Some((48, 480)));
         drop(it);
+        assert!(ledger.leaked_ids().is_empty(), "leaked ids: {:?}", ledger.leaked_ids());
+        assert!(ledger.double_dropped().is_empty(), "double-dropped: {:?}", ledger.double_dropped());
+        assert_eq!(ledger.total_allocated(), 100);
     }
 
     #[test]
-    // FIXME: replace this with ledger tests to ensure all values are dropped.
     fn into_iter_non_copy_keys() {
         // Exercise non-Copy key types to catch any assumption about Copy.
-        let mut map = BTreeMap::new_in(Global);
+        let mut map: BTreeMap<Key, u32> = BTreeMap::new_in(Global);
         map.try_insert(Key::from("banana"), 1).unwrap();
         map.try_insert(Key::from("apple"), 2).unwrap();
         map.try_insert(Key::from("cherry"), 3).unwrap();
