@@ -51,9 +51,140 @@
 //! or `std::alloc` directly. That keeps a single seam for swapping in custom
 //! allocators and for simulating OOM in tests.
 //!
+//! # Implementing Olive's extended traits on a foreign allocator
+//!
+//! If you have an allocator that implements [`Allocator`] but not Olive's
+//! extended traits, you can wire it into Olive collections by implementing the
+//! additional marker traits on your newtype. Below is a guide to the notable ones.
+//!
+//! ## When do you need them?
+//!
+//! Most Olive collections only require `A: Allocator`. However, several features
+//! demand stronger guarantees:
+//!
+//! | Feature | Required bound | Why |
+//! |---|---|---|
+//! | `Box<T, A>::try_pin_in`, `Rc<T, A>::try_pin_in` | `A: StaticAllocator` | Pinning requires that memory is never reused without explicit deallocation calls, even if the allocator is dropped. |
+//! | Cloning any container (`Vec`, `Rc`, `Arc`, `BTreeMap`, …) via `TryClone` | `A: AllocatorTryClone` | The clone must land on the *same* backing store; the allocator handle must be safely duplicable. |
+//! | Constructing a container with no explicit allocator argument | `A: AllocatorTryDefault` | Repeated `try_default()` calls must yield equivalent handles to the *same* backing store. This ensures that multiple default constructions do not land in different allocators. |
+//!
+//! If your use case doesn't involve pinning, fallible cloning, or defaulting of containers,
+//! you likely don't need to implement anything beyond `Allocator`.
+//!
+//! ## `StaticAllocator`
+//!
+//! ```ignore
+//! unsafe impl StaticAllocator for MyAlloc {}
+//! ```
+//!
+//! This is an empty marker. You assert that:
+//! - dropping the allocator does not invalidate any outstanding allocations;
+//! - the allocator exposes no safe API that can free memory outside of
+//!   [`Allocator::deallocate`];
+//! - lifetime expiry does not reclaim memory.
+//!
+//! Global/system-wide allocators (like `Global`, MiMalloc's global instance,
+//! jemalloc) trivially satisfy this. Arena or bump allocators typically do *not*,
+//! because freeing the arena reclaims all blocks at once.
+//!
+//! ## `AllocatorTryClone`
+//!
+//! ```ignore
+//! impl TryClone for MyAlloc {
+//!     fn try_clone(&self) -> Result<Self, TryCloneError> { /* duplicate the handle */ }
+//! }
+//! unsafe impl AllocatorTryClone for MyAlloc {}
+//! ```
+//!
+//! First implement [`TryClone`](crate::try_traits::TryClone) so that calling
+//! `try_clone()` yields a second handle to the *same* backing store. Then mark it
+//! with `unsafe impl AllocatorTryClone`. The key invariant: memory allocated
+//! through one handle must be deallocatable through the other, and moving/dropping
+//! either handle must not invalidate live allocations while the other still exists.
+//!
+//! For stateless ZST allocators (most global allocators), `try_clone` simply
+//! returns `Ok(*self)` and the safety proof is trivial. For stateful allocators
+//! (arenas with pooled blocks, reference-counted pools), ensure the clone shares
+//! ownership of the underlying pool rather than minting an independent one.
+//!
+//! ## `AllocatorTryDefault`
+//!
+//! ```ignore
+//! impl TryDefault for MyAlloc {
+//!     fn try_default() -> Result<Self, TryDefaultError> { Ok(Self::default_handle()) }
+//! }
+//! unsafe impl AllocatorTryDefault for MyAlloc {}
+//! ```
+//!
+//! First implement [`TryDefault`](crate::try_traits::TryDefault) so a default
+//! handle can be constructed, then mark it with `unsafe impl AllocatorTryDefault`.
+//! The contract is a single sentence, scoped to `try_default()` outputs:
+//!
+//! > **Memory allocated through one `try_default()` value must be shareable with,
+//! > and manipulable by, any other `try_default()` value.**
+//!
+//! Concretely, if `a = A::try_default()?` and `b = A::try_default()?`, then anything
+//! allocated via `a` stays fully usable through `b` — readable, writable, and
+//! deallocatable — and symmetrically for `b`.
+//!
+//! A corollary: **memory may only be reclaimed via [`Allocator::deallocate`].** No
+//! other mechanism — drop, reset, flush, lifetime expiry — may free shared memory,
+//! because doing so would leave `b` unable to deallocate a block it still references.
+//!
+//! Note the guarantee applies *only among `try_default()` results*. Handles built
+//! through any other constructor (`new`, `from_pool`, a clone, …) are unconstrained
+//! by this trait and may be entirely independent allocators.
+//!
+//! ## Putting it together: adapting MiMalloc
+//!
+//! Suppose you want to use [mimalloc](https://github.com/microsoft/mimalloc)
+//! with Olive. MiMalloc's Rust binding gives you a type that implements
+//! `Allocator` (via `allocator-api2`). To unlock pinning and
+//! fallible cloning:
+//!
+//! ```ignore
+//! use olive_core::alloc::{Allocator, StaticAllocator, AllocatorTryClone, AllocatorTryDefault};
+//! use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+//! use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+//!
+//! // Assume `MiMallocHandle` is the newtype provided by mimalloc that
+//! // implements `Allocator`.
+//!
+//! impl TryClone for MiMallocHandle {
+//!     fn try_clone(&self) -> Result<Self, TryCloneError> {
+//!         Ok(self.clone()) // MiMalloc handles are cheaply duplicable.
+//!     }
+//! }
+//!
+//! impl TryDefault for MiMallocHandle {
+//!     fn try_default() -> Result<Self, TryDefaultError> {
+//!         Ok(MiMallocHandle::new()) // Cheap, infallible in practice. Must return the same allocator
+//!     }
+//! }
+//!
+//! // SAFETY: MiMalloc is a process-wide global allocator. Dropping a handle
+//! // does not free any memory; all deallocation goes through `deallocate`.
+//! unsafe impl StaticAllocator for MiMallocHandle {}
+//!
+//! // SAFETY: Cloning a MiMalloc handle yields another view over the same
+//! // heap. Memory allocated through one is freely deallocatable through the
+//! // other. Moving or dropping a clone invalidates nothing until all references
+//! // are dropped.
+//! unsafe impl AllocatorTryClone for MiMallocHandle {}
+//!
+//! // SAFETY: Every `try_default()` result is a handle to the same process-wide
+//! // MiMalloc heap, so two independently constructed handles are equivalent.
+//! unsafe impl AllocatorTryDefault for MiMallocHandle {}
+//! ```
+//!
+//! After these impls, `Box<T, MiMallocHandle>`, `Rc<T, MiMallocHandle>`,
+//! `Vec<T, MiMallocHandle>`, etc. gain access to pinning, fallible cloning, and
+//! default-allocator construction exactly as they would with `Global`.
+//!
 //! [`hashbrown`]: https://docs.rs/hashbrown
 
 use crate::try_traits::try_clone::TryClone;
+use crate::try_traits::try_default::TryDefault;
 use core::ptr::NonNull;
 
 // The canonical allocator surface comes from `allocator-api2`. Re-export it
@@ -134,6 +265,62 @@ unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
 pub unsafe trait AllocatorTryClone: Allocator + TryClone {}
 
 unsafe impl<A: Allocator + ?Sized> AllocatorTryClone for &A {}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AllocatorTryDefault
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Marks a type's [`TryDefault`] implementation as sound with regard to
+/// [`Allocator`] equivalence.
+///
+/// While [`TryDefault`] only guarantees that default construction can fail, this
+/// marker narrows *which values are related*. Its entire contract is one sentence:
+///
+/// > **Memory allocated through one `try_default()` value must be shareable with,
+/// > and manipulable by, any other `try_default()` value.**
+///
+/// That is, if `a = A::try_default()?` and `b = A::try_default()?`, then anything
+/// allocated via `a` remains fully usable through `b` — readable, writable, and
+/// deallocatable — and symmetrically for `b`. Repeatedly calling `try_default()`
+/// therefore yields handles that all behave as views over a single logical
+/// allocator, not as independent backing stores. This "default-singleton" property
+/// is what lets a container constructor that falls back to a default allocator
+/// (e.g. when none is supplied) treat the result as interchangeable with a second
+/// call's result.
+///
+/// Because `a` and `b` are equivalent views over the same backing store, any block
+/// allocated through `a` is simultaneously live in `b`'s address space. The contract
+/// above requires that `b` remain able to [`Allocator::deallocate`] such a block. So
+/// if `a` were to invalidate that block by any means *other than* `deallocate` —
+/// dropping itself, a per-handle reset or flush, lifetime expiry — then `b` could no
+/// longer legally call `deallocate` on it, directly violating the "manipulable by
+/// `b`" half of the contract (and, from the memory model's view, leaving `b` holding
+/// a dangling pointer). 
+/// 
+/// The sole sanctioned way to reclaim shared memory is therefore
+/// an explicit [`Allocator::deallocate`] call; every other path is off-limits. For a
+/// stateless ZST allocator this holds trivially (there is nothing to drop); for a
+/// stateful one, the `Drop` impl must release only bookkeeping that does not affect
+/// backing-store lifetime.
+///
+/// The guarantee is scoped strictly to the outputs of `try_default()`. It places
+/// **no constraint whatsoever on handles obtained through any other constructor**
+/// (`new`, `from_pool`, a clone, etc.). Those may be entirely independent allocators;
+/// this trait neither requires nor forbids that. In particular, a value from
+/// `try_default()` need not be equivalent to a value from some other path — only
+/// to another value from `try_default()`.
+///
+/// # Safety
+///
+/// Implementors must uphold the contract above for their
+/// [`TryDefault::try_default`] implementation specifically: any two values both
+/// obtained via `try_default()` must allow each other to freely share and
+/// manipulate the memory either has allocated.
+/// These allocators also may not free allocations using any methods that are not
+/// [`Allocator::deallocate`].
+///
+/// No obligation extends to values produced elsewhere.
+pub unsafe trait AllocatorTryDefault: Allocator + TryDefault {}
 
 /// Extension methods for [`Layout`] to provide compatibility.
 ///

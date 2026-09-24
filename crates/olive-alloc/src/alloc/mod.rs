@@ -1,15 +1,20 @@
 //! The global allocator, built on [`allocator-api2`](https://docs.rs/allocator-api2).
 //!
 //! Rather than handrolling the default allocator's memory-management logic, Olive
-//! delegates it to [`allocator_api2::alloc::Global`] and exposes its own [`Global`] 
+//! delegates it to [`allocator_api2::alloc::Global`] and exposes its own [`Global`]
 //! allocator.
 //!
-//! The API uses a newtype to enable usage of our own traits in [`olive_core`].
+//! Because Rust's orphan rule forbids implementing Olive's own traits
+//! ([`StaticAllocator`], [`AllocatorTryClone`], [`AllocatorTryDefault`]) on a foreign
+//! type, [`Global`] is a thin local ZST that forwards every `Allocator` method straight
+//! to [`allocator_api2::alloc::Global`] while carrying the Olive-specific trait impls.
+//! Downstream code sees exactly one `Global`, as before.
 pub use core::alloc::{Layout, LayoutError};
 pub use core::ptr::NonNull;
 pub use olive_core::alloc::AllocError;
 pub use olive_core::alloc::Allocator;
 pub use olive_core::alloc::AllocatorTryClone;
+pub use olive_core::alloc::AllocatorTryDefault;
 pub use olive_core::alloc::StaticAllocator;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
@@ -106,6 +111,12 @@ impl TryDefault for Global {
         Ok(Global)
     }
 }
+
+// SAFETY: `Global` is a stateless ZST over the process-wide global allocator. Every
+// value produced by `try_default()` is the identical unit value, hence two independently
+// constructed handles are trivially equivalent — memory allocated through one is
+// deallocatable through the other, and dropping one invalidates nothing. Singleton-equivalence holds.
+unsafe impl AllocatorTryDefault for Global {}
 
 #[cfg(test)]
 mod test_allocators;
