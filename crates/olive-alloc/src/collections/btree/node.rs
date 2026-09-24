@@ -2297,9 +2297,9 @@ pub(super) mod marker {
         const TRAVERSAL_PERMIT: bool = false;
     }
     impl BorrowType for Dying {}
-    impl<'a> BorrowType for Immut<'a> {}
-    impl<'a> BorrowType for Mut<'a> {}
-    impl<'a> BorrowType for ValMut<'a> {}
+    impl BorrowType for Immut<'_> {}
+    impl BorrowType for Mut<'_> {}
+    impl BorrowType for ValMut<'_> {}
     impl BorrowType for DormantMut {}
 
     pub(crate) enum KV {}
