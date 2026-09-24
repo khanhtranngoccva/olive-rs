@@ -4,6 +4,7 @@ mod borrow;
 mod entry;
 mod fix;
 mod insertion;
+mod iter;
 mod map;
 mod mem;
 mod node;
@@ -14,3 +15,4 @@ mod set_val;
 mod navigate;
 
 pub use map::BTreeMap;
+pub use iter::{IntoIter, Iter, IterMut};

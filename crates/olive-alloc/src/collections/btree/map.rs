@@ -1,17 +1,19 @@
 //! A fallible port of `alloc::collections::BTreeMap`.
 //!
 //! This implementation uses a reserve-and-commit architecture for insertion.
-use crate::alloc::{AllocError, AllocatorTryClone, Global};
-use crate::borrow::Borrow;
-use crate::boxed::Box;
-use crate::collections::btree::node::InternalNode;
-use crate::vec::Vec;
-use core::marker::PhantomData;
+use olive_core::marker::PhantomData;
+use olive_core::mem::ManuallyDrop;
+use olive_core::ptr;
 
 use super::borrow::DormantMutRef;
 use super::entry::{Entry, OccupiedEntry};
 use super::node::{self, Root};
 use super::search::SearchResult;
+use crate::alloc::{AllocError, AllocatorTryClone, Global};
+use crate::borrow::Borrow;
+use crate::boxed::Box;
+use crate::collections::btree::node::InternalNode;
+use crate::vec::Vec;
 
 /// Minimum number of key-value pairs a non-root node must retain after removal.
 /// A node with fewer than this is underfull and needs rebalancing.
@@ -28,38 +30,35 @@ pub(super) fn try_clone_err_to_alloc_error(
 pub struct BTreeMap<K, V, A: AllocatorTryClone = Global> {
     pub(super) root: Option<Root<K, V>>,
     pub(super) length: usize,
-    pub(super) alloc: A,
+    pub(super) alloc: ManuallyDrop<A>,
     /// Stack of reserved internal nodes awaiting commitment.
     /// During the reserve phase, newly allocated internal nodes are pushed here.
     /// The commit phase pops them as it climbs the tree.
     #[allow(clippy::type_complexity)]
-    pub(super) reserve_stack: Option<Vec<Box<InternalNode<K, V>, A>, A>>,
+    pub(super) reserve_stack: ManuallyDrop<Option<Vec<Box<InternalNode<K, V>, A>, A>>>,
 }
 
 impl<K, V, A: AllocatorTryClone> Drop for BTreeMap<K, V, A> {
     fn drop(&mut self) {
-        if let Some(root) = self.root.take() {
-            let alloc = self
-                .alloc
-                .try_clone()
-                .expect("allocator clone must succeed during drop");
-            root.into_dying().drop_tree(alloc);
-        }
-        // reserve_stack is dropped normally (Vec handles freeing its elements).
+        // SAFETY: Mirrors std.
+        // All fields are either trivially copyable or are stored in ManuallyDrop.
+        drop(unsafe { ptr::read(self) }.into_iter())
     }
 }
 
 impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// Attempts to create an empty `BTreeMap` with the given allocator.
-    pub fn new_in(alloc: A) -> Result<Self, AllocError> {
+    pub fn new_in(alloc: A) -> Self {
         let alloc_clone = alloc.try_clone().map_err(try_clone_err_to_alloc_error).ok();
-        Ok(Self {
+        Self {
             root: None,
             length: 0,
-            alloc,
+            alloc: ManuallyDrop::new(alloc),
             // Lazily clones the alloc for one more chance.
-            reserve_stack: alloc_clone.map(|alloc_clone| Vec::new_in(alloc_clone)),
-        })
+            reserve_stack: ManuallyDrop::new(
+                alloc_clone.map(|alloc_clone| Vec::new_in(alloc_clone)),
+            ),
+        }
     }
 
     /// Returns true if the map contains no elements.
@@ -140,7 +139,7 @@ mod tests {
 
     #[test]
     fn insert_and_get_single() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         assert!(map.is_empty());
 
         map.try_insert(1, "one").unwrap();
@@ -151,7 +150,7 @@ mod tests {
 
     #[test]
     fn insert_multiple_no_split() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // CAPACITY is 11, so 11 inserts fit in one leaf without splitting.
         for i in 0..11 {
             map.try_insert(i, i * 10).unwrap();
@@ -164,7 +163,7 @@ mod tests {
 
     #[test]
     fn insert_triggers_leaf_split() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // 12th insert should trigger a leaf split.
         for i in 0..12 {
             map.try_insert(i, i).unwrap();
@@ -190,7 +189,7 @@ mod tests {
 
     #[test]
     fn insert_triggers_root_growth() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // With CAPACITY=11, the root (internal) splits after ~12 leaf splits.
         // Each leaf holds ~6 keys on average, so ~72 inserts fills the root.
         // Insert 80 to guarantee root growth.
@@ -205,7 +204,7 @@ mod tests {
 
     #[test]
     fn insert_many_triggers_multi_level_splits() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // Enough inserts to force multiple levels of splits.
         for i in 0..120u32 {
             map.try_insert(i, i * 2).unwrap();
@@ -218,7 +217,7 @@ mod tests {
 
     #[test]
     fn insert_overwrite_existing_key() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         map.try_insert(1, "first").unwrap();
         let old = map.try_insert(1, "second").unwrap();
         assert_eq!(old, Some("first"));
@@ -228,7 +227,7 @@ mod tests {
 
     #[test]
     fn get_mut_returns_correct_value() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         map.try_insert(5, 50).unwrap();
         map.try_insert(10, 100).unwrap();
 
@@ -241,7 +240,7 @@ mod tests {
 
     #[test]
     fn reverse_order_insertion() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         for i in (0..100).rev() {
             map.try_insert(i, i).unwrap();
         }
@@ -255,7 +254,7 @@ mod tests {
 
     #[test]
     fn remove_single_element() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         map.try_insert(1, 10).unwrap();
         assert_eq!(map.remove(&1), Some(10));
         assert_eq!(map.len(), 0);
@@ -265,7 +264,7 @@ mod tests {
 
     #[test]
     fn remove_nonexistent_key() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         map.try_insert(1, 10).unwrap();
         assert_eq!(map.remove(&999), None);
         assert_eq!(map.len(), 1);
@@ -274,7 +273,7 @@ mod tests {
 
     #[test]
     fn remove_from_leaf_no_rebalance() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // Fill a leaf to capacity (11 keys) then remove one — still ≥ MIN_LEN.
         for i in 0..11 {
             map.try_insert(i, i * 10).unwrap();
@@ -292,7 +291,7 @@ mod tests {
 
     #[test]
     fn remove_triggers_steal() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // Build a tree with multiple leaves, then remove enough from one leaf
         // to force a steal from a sibling.
         for i in 0..30u32 {
@@ -310,7 +309,7 @@ mod tests {
 
     #[test]
     fn remove_triggers_merge_and_root_shrink() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // Build a multi-level tree, then drain it down to empty.
         for i in 0..80u32 {
             map.try_insert(i, i).unwrap();
@@ -328,7 +327,7 @@ mod tests {
 
     #[test]
     fn remove_all_keys_random_order() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
         for i in 0..N {
             map.try_insert(i, i * 7).unwrap();
@@ -348,7 +347,7 @@ mod tests {
 
     #[test]
     fn remove_interleaved_with_insert() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         // Interleave inserts and removes to stress the rebalancing logic.
         for round in 0..5u32 {
             for i in 0..20 {
@@ -372,7 +371,7 @@ mod tests {
 
     #[test]
     fn remove_preserves_sorted_invariant() {
-        let mut map = BTreeMap::new_in(Global).unwrap();
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..50u32 {
             map.try_insert(i, i).unwrap();
         }

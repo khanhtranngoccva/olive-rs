@@ -87,7 +87,7 @@ pub struct OccupiedEntry<'a, K, V, A: AllocatorTryClone = Global> {
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
 
-impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
+impl<K, V, A: AllocatorTryClone> VacantEntry<'_, K, V, A> {
     /// Returns a reference to the key that was probed.
     pub(super) fn key(&self) -> &K {
         &self.key
@@ -125,7 +125,7 @@ impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
         // Use references here to avoid cloning.
         let (old_kv, _) = self
             .handle
-            .remove_kv_tracking(|| emptied_internal_root = true, &map.alloc);
+            .remove_kv_tracking(|| emptied_internal_root = true, &*map.alloc);
         // SAFETY: we consumed the intermediate root borrow held by `self.handle`.
         let map = unsafe { self.dormant_map.awaken() };
         #[allow(
@@ -137,7 +137,7 @@ impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
         }
         if emptied_internal_root {
             let root = map.root.as_mut().unwrap();
-            root.pop_internal_level(&map.alloc);
+            root.pop_internal_level(&*map.alloc);
         }
         old_kv
     }
@@ -176,7 +176,7 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
                 Ok(allocator) => allocator,
                 Err(_) => return Err((key, value, AllocError)),
             };
-            map_ref.reserve_stack = Some(Vec::new_in(cloned));
+            *map_ref.reserve_stack = Some(Vec::new_in(cloned));
         }
         let stack = map_ref
             .reserve_stack
