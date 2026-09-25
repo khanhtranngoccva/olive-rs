@@ -61,20 +61,38 @@ impl TestRng {
 
     // ── Private helpers ────────────────────────────────────────────────────
 
-    /// Returns a uniformly distributed `u32` in `[0, limit)`. Panics if
-    /// `limit == 0`. Modulo bias is at most 1/(2^32) for any practical limit,
-    /// which is irrelevant for test ordering purposes.
+    /// Returns a uniformly distributed `u64` in `[0, limit)` with zero
+    /// modulo bias.
     #[inline]
-    fn below(&mut self, limit: u32) -> u32 {
+    fn below(&mut self, limit: u64) -> u64 {
         assert!(limit > 0, "TestRng::below called with limit == 0");
-        (self.next_u64() % u64::from(limit)) as u32
+        // Powers of two divide 2^64 evenly, so masking is already unbiased.
+        if limit.is_power_of_two() {
+            return self.next_u64() & (limit - 1);
+        }
+        // Size of the uneven tail: m = 2^64 % limit.
+        // Since 2^64 overflows u64, compute via (u64::MAX % limit) + 1.
+        let rem = u64::MAX % limit + 1;
+        debug_assert_ne!(rem, limit, "power-of-two limit should have hit fast path");
+        loop {
+            let r = self.next_u64();
+            // Reject the top `rem` values.
+            // r < 2 ^ 64 - rem, !r = 2 ^ 64 - 1 - r
+            // => 2 ^ 64 - 1 - r < rem
+            // => r > 2 ^ 64 - 1 - rem
+            // => r >= 2 ^ 64 - rem
+            if !r < rem {
+                continue;
+            }
+            return r % limit;
+        }
     }
 
     /// In-place Fisher-Yates shuffle using this RNG's state.
     fn shuffle_in_place<T>(&mut self, slice: &mut [T]) {
         let len = slice.len();
         for i in (1..len).rev() {
-            let j = self.below((i + 1) as u32) as usize;
+            let j = self.below((i + 1) as u64) as usize;
             slice.swap(i, j);
         }
     }
