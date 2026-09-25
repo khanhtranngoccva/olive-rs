@@ -1,16 +1,11 @@
 //! A fallible port of `alloc::collections::BTreeMap`.
 //!
 //! This implementation uses a reserve-and-commit architecture for insertion.
-use olive_core::marker::PhantomData;
 use olive_core::mem::ManuallyDrop;
 use olive_core::ptr;
 
-use super::borrow::DormantMutRef;
-use super::entry::{Entry, OccupiedEntry};
 use super::node::{self, Root};
-use super::search::SearchResult;
 use crate::alloc::{AllocError, AllocatorTryClone, Global};
-use crate::borrow::Borrow;
 use crate::boxed::Box;
 use crate::collections::btree::node::InternalNode;
 use crate::vec::Vec;
@@ -43,91 +38,6 @@ impl<K, V, A: AllocatorTryClone> Drop for BTreeMap<K, V, A> {
         // SAFETY: Mirrors std.
         // All fields are either trivially copyable or are stored in ManuallyDrop.
         drop(unsafe { ptr::read(self) }.into_iter())
-    }
-}
-
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
-    /// Attempts to create an empty `BTreeMap` with the given allocator.
-    pub fn new_in(alloc: A) -> Self {
-        let alloc_clone = alloc.try_clone().map_err(try_clone_err_to_alloc_error).ok();
-        Self {
-            root: None,
-            length: 0,
-            alloc: ManuallyDrop::new(alloc),
-            // Lazily clones the alloc for one more chance.
-            reserve_stack: ManuallyDrop::new(
-                alloc_clone.map(|alloc_clone| Vec::new_in(alloc_clone)),
-            ),
-        }
-    }
-
-    /// Returns true if the map contains no elements.
-    pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    /// Returns the number of elements in the map.
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    /// Like [`entry`](Self::entry) but accepts a borrowed key via `Borrow`.
-    /// Only useful for lookups that don't need to insert (e.g. `remove`).
-    fn entry_ref<Q>(&mut self, key: &Q) -> Result<Entry<'_, K, V, A>, ()>
-    where
-        Q: Ord + ?Sized,
-        K: Ord + Borrow<Q>,
-    {
-        let (map, dormant_map) = DormantMutRef::new(self);
-        match map.root {
-            None => Err(()), // empty map, nothing to remove
-            Some(ref mut root) => match root.borrow_mut().search_tree(key) {
-                SearchResult::Found(handle) => Ok(Entry::Occupied(OccupiedEntry {
-                    handle,
-                    dormant_map,
-                    _marker: PhantomData,
-                })),
-                SearchResult::GoDown(_) => Err(()), // not found
-            },
-        }
-    }
-
-    /// Gets the mutable reference to the value corresponding to the key.
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
-    where
-        K: Ord + Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        let node = self.root.as_mut()?.borrow_valmut();
-        match node.search_tree(key) {
-            SearchResult::Found(kv) => Some(kv.into_kv_valmut().1),
-            SearchResult::GoDown(_) => None,
-        }
-    }
-
-    /// Gets the immutable reference to the value corresponding to the key.
-    pub fn get<Q>(&self, key: &Q) -> Option<&V>
-    where
-        K: Ord + Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        let node = self.root.as_ref()?.reborrow();
-        match node.search_tree(key) {
-            SearchResult::Found(kv) => Some(kv.into_kv().1),
-            SearchResult::GoDown(_) => None,
-        }
-    }
-
-    /// Removes a key from the map, returning the value if present.
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
-    where
-        K: Ord + Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        match self.entry_ref(key) {
-            Ok(Entry::Occupied(occupied)) => Some(occupied.remove_entry().1),
-            _ => None,
-        }
     }
 }
 

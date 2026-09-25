@@ -20,6 +20,7 @@
 use crate::alloc::{AllocError, AllocatorTryClone, Global};
 use crate::collections::btree::scratch;
 use crate::vec::Vec;
+use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use super::borrow::DormantMutRef;
@@ -54,6 +55,55 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
                     _marker: PhantomData,
                 }),
             },
+        }
+    }
+
+    /// Like [`entry`](Self::entry) but accepts a borrowed key via `Borrow`.
+    /// Only useful for lookups that don't need to insert (e.g. `remove`).
+    pub(super) fn entry_ref<Q>(&mut self, key: &Q) -> Option<Entry<'_, K, V, A>>
+    where
+        Q: Ord + ?Sized,
+        K: Ord + Borrow<Q>,
+    {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        let root = map.root.as_mut()?;
+        match root.borrow_mut().search_tree(key) {
+            SearchResult::Found(handle) => Some(Entry::Occupied(OccupiedEntry {
+                handle,
+                dormant_map,
+                _marker: PhantomData,
+            })),
+            SearchResult::GoDown(_) => None, // not found
+        }
+    }
+
+    /// Gets an [`Entry`] to the first (lowest-keyed) entry in the map, or
+    /// returns `None` if the map is empty.
+    pub fn first_entry(&mut self) -> Option<Entry<'_, K, V, A>> {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        let root = map.root.as_mut()?;
+        match root.borrow_mut().first_leaf_edge().right_kv() {
+            Ok(handle) => Some(Entry::Occupied(OccupiedEntry {
+                handle: handle.forget_node_type(),
+                dormant_map,
+                _marker: PhantomData,
+            })),
+            Err(_) => None,
+        }
+    }
+
+    /// Gets an [`Entry`] to the last (highest-keyed) entry in the map, or
+    /// returns `None` if the map is empty.
+    pub fn last_entry(&mut self) -> Option<Entry<'_, K, V, A>> {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        let root = map.root.as_mut()?;
+        match root.borrow_mut().last_leaf_edge().left_kv() {
+            Ok(handle) => Some(Entry::Occupied(OccupiedEntry {
+                handle: handle.forget_node_type(),
+                dormant_map,
+                _marker: PhantomData,
+            })),
+            Err(_) => None,
         }
     }
 }

@@ -44,6 +44,17 @@ impl<C: TryClone> TryClone for TrackedItem<C> {
     }
 }
 
+impl<C: TryClone + core::fmt::Debug> core::fmt::Debug for TrackedItem<C> {
+    /// Prints only the fields that carry meaning in a test failure — the ledger
+    /// id and the inner payload.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TrackedItem")
+            .field("id", &self.id)
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 impl<C: TryClone + PartialEq> PartialEq for TrackedItem<C> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
