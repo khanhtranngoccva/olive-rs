@@ -74,12 +74,13 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use super::super::invariant::{check_ascending_keys, check_tree_invariant};
     use std::sync::Arc;
 
     use super::*;
     use crate::alloc::Global;
     use crate::borrow::Borrow;
-    use crate::test_helpers::{Ledger, TrackedItem};
+    use crate::test_helpers::{Ledger, TestRng, TrackedItem};
 
     /// Lets a tracked key be looked up by its inner `u32` value, so tests can
     /// probe with cheap raw values instead of minting throwaway payloads that
@@ -525,16 +526,8 @@ mod tests {
         for i in 0..40u32 {
             map.try_insert(i, i * 3).unwrap();
         }
-        // A fixed pseudo-random-looking permutation of 0..40 (stride 17 is
-        // coprime to 40, so this visits every key exactly once).
-        let order: std::vec::Vec<u32> = (0..40u32).map(|n| (n * 17 + 5) % 40).collect();
-        // Sanity: it's a genuine permutation.
-        let mut seen = [false; 40];
-        for &k in &order {
-            assert!(!seen[k as usize], "duplicate in removal order");
-            seen[k as usize] = true;
-        }
-        for &k in &order {
+        let rng = TestRng::new(0xBEEF_0040);
+        for k in rng.permuted(0..40) {
             assert_eq!(
                 map.remove_entry(&k),
                 Some((k, k * 3)),
@@ -661,8 +654,8 @@ mod tests {
             insert_tracked_pair(&mut map, i, i * 2, &ledger);
         }
         // Scrambled removal order over all inners; probe with raw u32 keys.
-        let order: std::vec::Vec<u32> = (0..60u32).map(|n| (n * 23 + 7) % 60).collect();
-        for &inner in &order {
+        let rng = TestRng::new(0xBEEF_0060);
+        for inner in rng.permuted(0..60) {
             let (k, v) = map.remove_entry(&inner).expect("key should exist");
             assert_eq!((k.inner, v.inner), (inner, inner * 2));
             // The key is gone immediately: a second remove misses.
@@ -693,5 +686,227 @@ mod tests {
             ledger.double_dropped()
         );
         assert!(ledger.all_dropped_once(0..120));
+    }
+
+    // ── Structural invariant tests ─────────────────────────────────────────────
+    //
+    // The deletion invariant: after every remove completes, every non-root node
+    // has at least MIN_LEN keys. If a steal or merge were skipped, the resulting
+    // underfull node would violate this invariant and `assert_min_len` panics.
+    // No internal counters needed — the structural check implicitly proves
+    // rebalancing occurred when required.
+
+    /// Drains a multi-level tree in ascending order, checking the structural
+    /// invariant after every single removal. Verifies correct values are
+    /// returned and the tree collapses to empty.
+    #[test]
+    fn remove_ascending_preserves_invariant() {
+        let mut map = BTreeMap::new_in(Global);
+        const N: u32 = 200;
+        for i in 0..N {
+            map.try_insert(i, i * 2).unwrap();
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        let initial_height = map.root.as_ref().map_or(0, |r| r.height());
+        assert!(initial_height >= 1, "expected multi-level tree");
+
+        for i in 0..N {
+            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {}", i);
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+    }
+
+    /// Drains a multi-level tree in descending order (worst-case: always hits
+    /// rightmost leaf), checking the invariant after every removal.
+    #[test]
+    fn remove_descending_preserves_invariant() {
+        let mut map = BTreeMap::new_in(Global);
+        const N: u32 = 200;
+        for i in 0..N {
+            map.try_insert(i, i * 2).unwrap();
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert!(
+            map.root.as_ref().is_some_and(|r| r.height() >= 1),
+            "expected multi-level tree"
+        );
+
+        for i in (0..N).rev() {
+            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {}", i);
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+    }
+
+    /// Removes keys in scrambled (deterministic PRNG) order, checking the
+    /// invariant after every removal. Exercises interleaved left/right border
+    /// paths and interior deletions simultaneously.
+    #[test]
+    fn remove_scrambled_preserves_invariant() {
+        let mut map = BTreeMap::new_in(Global);
+        const N: u32 = 300;
+        for i in 0..N {
+            map.try_insert(i, i).unwrap();
+        }
+        let rng = TestRng::new(0xDEAD_BEEF_CA_FE_F00D);
+        for (idx, key) in rng.permuted(0..N).enumerate() {
+            assert_eq!(map.remove(&key), Some(key), "wrong value for key {}", key);
+            check_tree_invariant(&map);
+            if idx % 20 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+    }
+
+    /// Partial removal: removes half the keys from a multi-level tree and
+    /// verifies the invariant plus functional correctness of survivors.
+    #[test]
+    fn remove_half_preserves_invariant_and_values() {
+        let mut map = BTreeMap::new_in(Global);
+        const N: u32 = 100;
+        for i in 0..N {
+            map.try_insert(i, i * 10).unwrap();
+        }
+        assert!(
+            map.root.as_ref().is_some_and(|r| r.height() >= 1),
+            "expected multi-level tree"
+        );
+
+        // Remove every other key.
+        for i in (0..N).step_by(2) {
+            assert_eq!(map.remove(&i), Some(i * 10));
+        }
+        check_tree_invariant(&map);
+        check_ascending_keys(&map);
+        assert_eq!(map.len(), (N / 2) as usize);
+
+        // Survivors intact.
+        for i in (0..N).filter(|&i| i % 2 == 1) {
+            assert_eq!(map.get(&i), Some(&(i * 10)));
+        }
+    }
+
+    #[test]
+    fn remove_single_element() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        assert_eq!(map.remove(&1), Some(10));
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+        assert_eq!(map.remove(&1), None);
+    }
+
+    #[test]
+    fn remove_nonexistent_key() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        assert_eq!(map.remove(&999), None);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn remove_triggers_root_shrink() {
+        let mut map = BTreeMap::new_in(Global);
+        // Build a multi-level tree, then drain it down to empty.
+        for i in 0..80u32 {
+            map.try_insert(i, i).unwrap();
+        }
+        let initial_height = map.root.as_ref().map_or(0, |r| r.height());
+        assert!(initial_height >= 1, "expected multi-level tree");
+
+        // Remove all elements one by one, checking invariant each step.
+        for i in 0..80u32 {
+            assert_eq!(map.remove(&i), Some(i), "failed to remove key {}", i);
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert_eq!(map.len(), 0);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn remove_all_keys_reverse_order() {
+        let mut map = BTreeMap::new_in(Global);
+        const N: u32 = 200;
+        for i in 0..N {
+            map.try_insert(i, i * 7).unwrap();
+        }
+        // Remove in descending order (worst-case for B-tree: always hits rightmost leaf).
+        for i in (0..N).rev() {
+            assert_eq!(map.remove(&i), Some(i * 7), "failed to remove key {}", i);
+            assert_eq!(
+                map.len(),
+                i as usize,
+                "length mismatch after removing key {}",
+                i
+            );
+            check_tree_invariant(&map);
+            if i % 10 == 0 {
+                check_ascending_keys(&map);
+            }
+        }
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn remove_interleaved_with_insert() {
+        let mut map = BTreeMap::new_in(Global);
+        // Interleave inserts and removes to stress the rebalancing logic.
+        for round in 0..5u32 {
+            for i in 0..20 {
+                map.try_insert(round * 100 + i, i).unwrap();
+            }
+            for i in (0..20).step_by(2) {
+                map.remove(&(round * 100 + i));
+            }
+            check_tree_invariant(&map);
+            check_ascending_keys(&map);
+        }
+        // Verify remaining keys are correct.
+        for round in 0..5u32 {
+            for i in 0..20 {
+                if i % 2 == 1 {
+                    assert_eq!(map.get(&(round * 100 + i)), Some(&i));
+                } else {
+                    assert_eq!(map.get(&(round * 100 + i)), None);
+                }
+            }
+            check_tree_invariant(&map);
+            check_ascending_keys(&map);
+        }
+    }
+
+    #[test]
+    fn remove_preserves_sorted_invariant() {
+        let mut map = BTreeMap::new_in(Global);
+        for i in 0..50u32 {
+            map.try_insert(i, i).unwrap();
+        }
+        // Remove every third key.
+        for i in (0..50).step_by(3) {
+            map.remove(&i);
+        }
+        check_tree_invariant(&map);
+        check_ascending_keys(&map);
     }
 }

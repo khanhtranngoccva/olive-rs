@@ -8,6 +8,7 @@
 pub mod allocators;
 pub mod counters;
 pub mod ledger;
+pub mod rng;
 // `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
 // exported so future tests can instantiate it with other clone policies (e.g.
 // an infallible one) without touching the tracking machinery. Not referenced by
@@ -16,6 +17,7 @@ pub mod ledger;
 pub use counters::CloneCounter;
 #[allow(unused_imports)]
 pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
+pub use rng::TestRng;
 
 extern crate std;
 

@@ -729,6 +729,43 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
         });
         result
     }
+
+    /// Recursively asserts that this node has at least `min_len` keys, and that
+    /// every descendant has at least `MIN_LEN` keys. The `min_len` parameter
+    /// applies only to this node (the root gets a relaxed bound of 1 or 0);
+    /// all children are checked against the strict `MIN_LEN` constant.
+    /// Panics on the first violation.
+    #[cfg(test)]
+    pub(crate) fn assert_min_len(self, min_len: usize) {
+        use super::map::MIN_LEN;
+
+        match self.force() {
+            Leaf(leaf) => {
+                assert!(
+                    leaf.len() >= min_len,
+                    "node has {} keys, expected >= {}",
+                    leaf.len(),
+                    min_len
+                );
+            }
+            Internal(internal) => {
+                assert!(
+                    internal.len() >= min_len,
+                    "internal node has {} keys, expected >= {}",
+                    internal.len(),
+                    min_len
+                );
+                // Recurse into every child edge (indices 0..=len).
+                // Children are never roots, so they all require MIN_LEN.
+                let len = internal.len();
+                for idx in 0..=len {
+                    // SAFETY: idx is in range [0, len], which is a valid edge index.
+                    let edge = unsafe { Handle::new_edge(internal, idx) };
+                    edge.descend().assert_min_len(MIN_LEN);
+                }
+            }
+        }
+    }
 }
 
 impl<BorrowType: marker::BorrowType, K, V>

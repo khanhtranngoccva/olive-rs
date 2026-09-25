@@ -5,10 +5,13 @@ mod construction;
 mod entry;
 mod fix;
 mod insertion;
+#[cfg(test)]
+mod invariant;
 mod iter;
 mod map;
 mod mem;
 mod mutation;
+mod navigate;
 mod node;
 mod query;
 mod remove;
@@ -16,7 +19,6 @@ mod scratch;
 mod search;
 mod set_val;
 mod traits;
-mod navigate;
 
-pub use map::BTreeMap;
 pub use iter::{IntoIter, Iter, IterMut};
+pub use map::BTreeMap;
