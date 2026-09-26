@@ -21,5 +21,6 @@ mod set_val;
 mod traits;
 mod extract_if;
 
+pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, Iter, IterMut};
 pub use map::BTreeMap;

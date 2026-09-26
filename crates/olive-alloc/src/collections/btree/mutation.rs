@@ -3,8 +3,11 @@
 use core::borrow::Borrow;
 use core::mem::ManuallyDrop;
 
+use super::borrow::DormantMutRef;
 use super::entry::Entry;
+use super::extract_if::{ExtractIf, ExtractIfInner};
 use super::map::BTreeMap;
+
 use crate::alloc::AllocatorTryClone;
 use crate::vec::Vec;
 
@@ -65,6 +68,98 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
         match self.entry_ref(key)? {
             Entry::Occupied(occupied) => Some(occupied.remove_entry()),
             _ => None,
+        }
+    }
+
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// This means that all elements where `keep(k, v)` is `false` gets removed.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use olive_alloc::collections::btree::BTreeMap;
+    ///
+    /// let mut map = BTreeMap::new();
+    /// map.try_insert(1, "a").unwrap();
+    /// map.try_insert(2, "b").unwrap();
+    /// map.try_insert(3, "c").unwrap();
+    ///
+    /// map.retain(|&k, _| k % 2 == 0);
+    /// assert_eq!(map.len(), 1);
+    /// assert_eq!(map.get(&2), Some(&"b"));
+    /// ```
+    pub fn retain<P>(&mut self, mut keep: P)
+    where
+        P: FnMut(&K, &mut V) -> bool,
+    {
+        self.extract_if(|k, v| !keep(k, v)).for_each(drop);
+    }
+
+    /// Creates an iterator that extracts all elements matching the given predicate
+    /// from this map.
+    ///
+    /// The returned iterator can be used to iterate over the extracted entries.
+    /// Each call to `next` returns the next entry `(key, value)` for which the
+    /// predicate returned true, or `None` if there are no more such entries.
+    ///
+    /// The entries are removed from the map as they are yielded.
+    ///
+    /// # Panics
+    ///
+    /// On panic, this iterator stops functioning and yields no more entries.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use olive_alloc::collections::btree::BTreeMap;
+    /// use olive_alloc::vec::Vec;
+    ///
+    /// let mut map = BTreeMap::new();
+    /// map.try_insert(1, "a").unwrap();
+    /// map.try_insert(2, "b").unwrap();
+    /// map.try_insert(3, "c").unwrap();
+    ///
+    /// let extracted: Vec<_> = map.extract_if(|&k, _| k % 2 == 0).try_collect().unwrap();
+    /// assert_eq!(extracted, try_vec![(2, "b")].unwrap());
+    /// assert_eq!(map.len(), 2);
+    /// ```
+    pub fn extract_if<F>(&mut self, pred: F) -> ExtractIf<'_, K, V, F, A>
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        // If the map is empty there is no root to anchor iteration on; return an
+        // iterator that immediately yields nothing.
+        if self.root.is_none() {
+            let inner = ExtractIfInner {
+                length: &mut self.length,
+                dormant_root: None,
+                cur_leaf_edge: None,
+            };
+            return ExtractIf {
+                pred,
+                inner,
+                alloc: &self.alloc,
+            };
+        }
+
+        debug_assert!(
+            self.length > 0,
+            "BTree* should have entries if root is not null"
+        );
+
+        let (root, dormant_root) = DormantMutRef::new(self.root.as_mut().unwrap());
+        let root = root.borrow_mut();
+        let cur_leaf_edge = Some(root.first_leaf_edge());
+        let inner = ExtractIfInner {
+            length: &mut self.length,
+            dormant_root: Some(dormant_root),
+            cur_leaf_edge,
+        };
+        ExtractIf {
+            pred,
+            inner,
+            alloc: &self.alloc,
         }
     }
 }
