@@ -19,6 +19,7 @@ mod scratch;
 mod search;
 mod set_val;
 mod traits;
+mod extract_if;
 
 pub use iter::{IntoIter, Iter, IterMut};
 pub use map::BTreeMap;
