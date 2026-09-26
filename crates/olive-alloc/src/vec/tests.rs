@@ -2658,7 +2658,6 @@ fn try_from_borrowed_slice_fails_when_element_clone_fails() {
 // Comparison trait impls: PartialEq, Eq, PartialOrd, Ord, Hash
 // ---------------------------------------------------------------------------
 
-// FIXME: should use PartialEq and Eq to avoid conflicts
 #[test]
 fn vec_partial_eq_same_len_equal() {
     let a = mk_vec(&[1, 2, 3]);
@@ -2699,19 +2698,40 @@ fn vec_partial_eq_cross_type_vs_array() {
 }
 
 #[test]
-fn vec_ord_less_than_by_prefix_then_length() {
+fn vec_partial_ord_less_than_by_prefix_then_length() {
+    use core::cmp::{Ordering, PartialOrd};
     let a = mk_vec(&[1, 2]);
     let b = mk_vec(&[1, 2, 3]);
-    assert!(a < b);
-    assert!(b > a);
+    // Explicit `PartialOrd` dispatch — operators would route through `Ord`.
+    assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+    assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
+}
+
+#[test]
+fn vec_ord_less_than_by_prefix_then_length() {
+    use core::cmp::{Ordering, Ord};
+    let a = mk_vec(&[1, 2]);
+    let b = mk_vec(&[1, 2, 3]);
+    assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
+    assert_eq!(Ord::cmp(&b, &a), Ordering::Greater);
+}
+
+#[test]
+fn vec_partial_ord_lexicographic() {
+    use core::cmp::{Ordering, PartialOrd};
+    let a = mk_vec(&[1, 2, 3]);
+    let b = mk_vec(&[1, 3, 2]);
+    assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+    assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
 }
 
 #[test]
 fn vec_ord_lexicographic() {
+    use core::cmp::{Ordering, Ord};
     let a = mk_vec(&[1, 2, 3]);
     let b = mk_vec(&[1, 3, 2]);
-    assert!(a < b);
-    assert!(b > a);
+    assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
+    assert_eq!(Ord::cmp(&b, &a), Ordering::Greater);
 }
 
 #[test]

@@ -380,9 +380,6 @@ mod tests {
 
     #[test]
     fn try_clone_fails_midway_on_allocation_error() {
-        use core::alloc::Layout;
-        use olive_core::alloc::Allocator;
-
         use crate::test_helpers::BudgetedAlloc;
 
         // Strategy: build a multi-entry map under a BudgetedAlloc with enough
@@ -405,11 +402,7 @@ mod tests {
             "need multiple entries to exercise the clone path"
         );
 
-        // Drain any remaining budget so the clone's re-inserts will OOM when
-        // they need new nodes. The clone creates a brand-new map (fresh leaf
-        // allocation) and re-inserts all entries, which requires node
-        // allocations from the same shared budget.
-        while alloc.allocate(Layout::new::<u8>()).is_ok() {}
+        alloc.drain();
 
         let result = map.try_clone();
         assert!(

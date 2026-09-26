@@ -283,6 +283,24 @@ impl BudgetedAlloc {
             remaining: Arc::new(AtomicUsize::new(budget)),
         }
     }
+
+    /// Sets the remaining allocation budget to exactly `budget`, letting a
+    /// test tighten or loosen the limit on the fly — e.g. allow just enough
+    /// allocations for the next operation and no more. The change is visible
+    /// to every handle sharing the same budget (clones share the counter via
+    /// [`Arc`]).
+    pub fn set_budget(&self, budget: usize) {
+        self.remaining.store(budget, Ordering::SeqCst);
+    }
+
+    /// Removes all remaining allocation budget, so every subsequent
+    /// [`Allocator::allocate`] call fails. Tests use this to force a
+    /// deterministic OOM on the next growth without leaking any memory (the
+    /// old pattern of looping `allocate` until failure leaked one block per
+    /// iteration).
+    pub fn drain(&self) {
+        self.set_budget(0);
+    }
 }
 
 // SAFETY: while budget remains, delegates all operations to `Global`; once
