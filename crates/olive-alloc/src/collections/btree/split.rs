@@ -60,7 +60,7 @@ impl<K, V> Root<K, V> {
     /// May panic if the user's `Ord::cmp` implementation panics (e.g. due to
     /// arithmetic overflow). In that case `self` is left completely unmodified,
     /// because the comparison phase is read-only and no mutations have occurred yet.
-    pub(super) fn split_off<Q: ?Sized + Ord, A: AllocatorTryClone>(
+    pub(super) fn try_split_off<Q: ?Sized + Ord, A: AllocatorTryClone>(
         &mut self,
         key: &Q,
         alloc: &A,
@@ -216,7 +216,7 @@ impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
 
         let total_num = self.len();
         let left_root = self.root.as_mut().unwrap(); // unwrap succeeds because not empty
-        let right_root = left_root.split_off(key, &alloc)?;
+        let right_root = left_root.try_split_off(key, &alloc)?;
 
         let (new_left_len, right_len) = Root::calc_split_length(total_num, left_root, &right_root);
         self.length = new_left_len;
