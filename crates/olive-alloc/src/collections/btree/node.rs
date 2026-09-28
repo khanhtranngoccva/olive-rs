@@ -1269,6 +1269,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     ///
     /// # Panics
     /// - Panics if the split branch is taken but there are no new nodes specified in `new_node`.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is likely the best type declaration, std uses it"
+    )]
     fn insert<A: AllocatorTryClone>(
         self,
         key: K,

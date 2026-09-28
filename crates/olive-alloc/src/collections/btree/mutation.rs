@@ -173,18 +173,7 @@ mod tests {
 
     use super::*;
     use crate::alloc::Global;
-    use crate::borrow::Borrow;
     use crate::test_helpers::{Ledger, TestRng, TrackedItem};
-
-    /// Lets a tracked key be looked up by its inner `u32` value, so tests can
-    /// probe with cheap raw values instead of minting throwaway payloads that
-    /// would themselves register/unregister ledger ids. Matches on `inner`,
-    /// which is precisely the ordering the map uses.
-    impl Borrow<u32> for TrackedItem<u32> {
-        fn borrow(&self) -> &u32 {
-            &self.inner
-        }
-    }
 
     /// Inserts a tracked key + tracked value pair into the map, registering both
     /// ids with the ledger up front so drops are observable.

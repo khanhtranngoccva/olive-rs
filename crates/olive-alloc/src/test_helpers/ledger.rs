@@ -18,13 +18,13 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 /// item unregisters it — so a test observes every transient instance
 /// individually, catching leaks, double-frees, and wrong totals rather than mere
 /// aggregate counts.
-pub struct TrackedItem<C: TryClone> {
+pub struct TrackedItem<C> {
     pub id: u32,
     pub ledger: Arc<Ledger>,
     pub inner: C,
 }
 
-impl<C: TryClone> Drop for TrackedItem<C> {
+impl<C> Drop for TrackedItem<C> {
     fn drop(&mut self) {
         self.ledger.unregister(self.id);
     }
@@ -44,7 +44,7 @@ impl<C: TryClone> TryClone for TrackedItem<C> {
     }
 }
 
-impl<C: TryClone + core::fmt::Debug> core::fmt::Debug for TrackedItem<C> {
+impl<C: core::fmt::Debug> core::fmt::Debug for TrackedItem<C> {
     /// Prints only the fields that carry meaning in a test failure — the ledger
     /// id and the inner payload.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -55,21 +55,44 @@ impl<C: TryClone + core::fmt::Debug> core::fmt::Debug for TrackedItem<C> {
     }
 }
 
-impl<C: TryClone + PartialEq> PartialEq for TrackedItem<C> {
+impl<C> core::ops::Deref for TrackedItem<C> {
+    type Target = C;
+
+    #[inline]
+    fn deref(&self) -> &C {
+        &self.inner
+    }
+}
+
+impl<C> core::ops::DerefMut for TrackedItem<C> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut C {
+        &mut self.inner
+    }
+}
+
+impl<C> core::borrow::Borrow<C> for TrackedItem<C> {
+    #[inline]
+    fn borrow(&self) -> &C {
+        &self.inner
+    }
+}
+
+impl<C: PartialEq> PartialEq for TrackedItem<C> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
 
-impl<C: TryClone + Eq> Eq for TrackedItem<C> {}
+impl<C: Eq> Eq for TrackedItem<C> {}
 
-impl<C: TryClone + PartialOrd> PartialOrd for TrackedItem<C> {
+impl<C: PartialOrd> PartialOrd for TrackedItem<C> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.inner.partial_cmp(&other.inner)
     }
 }
 
-impl<C: TryClone + Ord> Ord for TrackedItem<C> {
+impl<C: Ord> Ord for TrackedItem<C> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.inner.cmp(&other.inner)
     }

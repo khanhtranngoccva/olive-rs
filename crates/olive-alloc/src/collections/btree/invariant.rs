@@ -10,15 +10,30 @@ use core::fmt::Debug;
 use super::map::BTreeMap;
 use crate::alloc::AllocatorTryClone;
 
-/// Asserts the min-length invariant on the entire tree rooted at `map`.
+/// Asserts structural invariants on the entire tree rooted at `map`:
+/// - Min-length: the root is checked against a relaxed bound (1 if internal,
+///   0 if leaf); all non-root nodes are checked against `MIN_LEN`.
+/// - Length consistency: the cached `map.length` field matches the actual
+///   number of key-value pairs counted by walking every node.
 ///
-/// The root is checked against a relaxed bound (1 if internal, 0 if leaf);
-/// all non-root nodes are checked against `MIN_LEN`. Panics on the first
-/// violation with a descriptive message.
+/// Panics on the first violation with a descriptive message.
 pub(crate) fn check_tree_invariant<K, V, A: AllocatorTryClone>(map: &BTreeMap<K, V, A>) {
     if let Some(root) = map.root.as_ref() {
         let min_len = if root.height() > 0 { 1 } else { 0 };
         root.reborrow().assert_min_len(min_len);
+
+        let actual = root.reborrow().calc_length();
+        assert_eq!(
+            actual, map.length,
+            "length field ({}) does not match actual entry count ({})",
+            map.length, actual
+        );
+    } else {
+        assert_eq!(
+            map.length, 0,
+            "empty map must have length 0, found {}",
+            map.length
+        );
     }
 }
 
@@ -42,3 +57,4 @@ where
         last_key = Some(key);
     }
 }
+
