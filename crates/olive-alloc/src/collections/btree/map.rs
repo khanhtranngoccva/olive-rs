@@ -26,9 +26,10 @@ pub struct BTreeMap<K, V, A: AllocatorTryClone = Global> {
     pub(super) root: Option<Root<K, V>>,
     pub(super) length: usize,
     pub(super) alloc: ManuallyDrop<A>,
-    /// Stack of reserved internal nodes awaiting commitment.
+    /// Stack of reserved *internal* nodes awaiting commitment.
     /// During the reserve phase, newly allocated internal nodes are pushed here.
     /// The commit phase pops them as it climbs the tree.
+    /// It does not deal with leaf nodes.
     #[allow(clippy::type_complexity)]
     pub(super) reserve_stack: ManuallyDrop<Option<Vec<Box<InternalNode<K, V>, A>, A>>>,
 }

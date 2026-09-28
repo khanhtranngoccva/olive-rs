@@ -12,6 +12,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
     /// Rebalancing is performed bottom-up: first the immediate underfull child of
     /// the removed pair's parent is fixed, then any ancestors left underfull by a
     /// merge are fixed recursively.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the best type representation"
+    )]
     pub(super) fn remove_kv_tracking<F: FnOnce(), A: AllocatorTryClone>(
         self,
         handle_emptied_internal_root: F,
@@ -33,6 +37,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// Removes a key-value pair from a leaf node and rebalances the tree if the
     /// resulting leaf is underfull. Returns the removed pair and the leaf edge
     /// the pair collapsed into.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the best type representation"
+    )]
     fn remove_leaf_kv<F: FnOnce(), A: AllocatorTryClone>(
         self,
         handle_emptied_internal_root: F,
@@ -104,6 +112,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// Removes a key-value pair from an internal node. It swaps in an adjacent
     /// KV from a descendant leaf (preferring the left one) in place of the
     /// removed pair, then removes that leaf KV, which triggers the rebalancing.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the best type representation"
+    )]
     fn remove_internal_kv<F: FnOnce(), A: AllocatorTryClone>(
         self,
         handle_emptied_internal_root: F,

@@ -5,9 +5,6 @@ use crate::vec::Vec;
 use olive_core::alloc::{AllocError, AllocatorTryClone};
 
 /// Pre-reserved nodes for a split-and-insert operation.
-///
-/// Owns all allocated nodes outright (no borrow back into the map),
-/// so it can safely outlive any reborrow of the map during the commit phase.
 pub(super) struct Nodes<K, V, A: AllocatorTryClone> {
     /// The leaf node to be reserved.
     pub(super) leaf: Option<Box<LeafNode<K, V>, A>>,

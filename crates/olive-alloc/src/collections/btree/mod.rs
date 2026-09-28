@@ -20,6 +20,7 @@ mod search;
 mod set_val;
 mod traits;
 mod extract_if;
+mod split;
 
 pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};

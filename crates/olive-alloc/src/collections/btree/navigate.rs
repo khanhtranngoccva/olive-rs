@@ -238,6 +238,10 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
 }
 
 impl<BorrowType: marker::BorrowType, K, V> LazyLeafRange<BorrowType, K, V> {
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     fn init_front(
         &mut self,
     ) -> Option<&mut Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>> {
@@ -254,6 +258,10 @@ impl<BorrowType: marker::BorrowType, K, V> LazyLeafRange<BorrowType, K, V> {
         }
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     fn init_back(
         &mut self,
     ) -> Option<&mut Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>> {
@@ -403,6 +411,10 @@ impl<BorrowType: marker::BorrowType, K, V>
     /// Given a leaf edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
     /// on the right side, which is either in the same leaf node or in an ancestor node.
     /// If the leaf edge is the last one in the tree, returns [`Result::Err`] with the root node.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     pub fn next_kv(
         self,
     ) -> Result<
@@ -421,6 +433,10 @@ impl<BorrowType: marker::BorrowType, K, V>
     /// Given a leaf edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
     /// on the left side, which is either in the same leaf node or in an ancestor node.
     /// If the leaf edge is the first one in the tree, returns [`Result::Err`] with the root node.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     pub fn next_back_kv(
         self,
     ) -> Result<
@@ -443,6 +459,10 @@ impl<BorrowType: marker::BorrowType, K, V>
     /// Given an internal edge handle, returns [`Result::Ok`] with a handle to the neighboring KV
     /// on the right side, which is either in the same internal node or in an ancestor node.
     /// If the internal edge is the last one in the tree, returns [`Result::Err`] with the root node.
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     fn next_kv(
         self,
     ) -> Result<
