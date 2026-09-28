@@ -3,7 +3,7 @@ use core::mem::ManuallyDrop;
 
 use super::map::BTreeMap;
 use super::node::ForceResult::*;
-use super::node::{InternalNode, Root};
+use super::node::{Handle, InternalNode, Root};
 use super::search::SearchResult::*;
 use crate::vec::Vec;
 use olive_core::alloc::AllocError;
@@ -54,6 +54,12 @@ impl<K, V> Root<K, V> {
     ///
     /// Returns [`AllocError`] if allocating the right tree's pillar of internal
     /// nodes fails. In that case `self` is left completely unmodified.
+    ///
+    /// # Panics
+    ///
+    /// May panic if the user's `Ord::cmp` implementation panics (e.g. due to
+    /// arithmetic overflow). In that case `self` is left completely unmodified,
+    /// because the comparison phase is read-only and no mutations have occurred yet.
     pub(super) fn split_off<Q: ?Sized + Ord, A: AllocatorTryClone>(
         &mut self,
         key: &Q,
@@ -62,31 +68,76 @@ impl<K, V> Root<K, V> {
     where
         K: Borrow<Q>,
     {
-        let left_root = self;
-        let mut right_root = Root::new_pillar(left_root.height(), &alloc)?;
-        let mut left_node = left_root.borrow_mut();
+        // Maximum tree height for B=6: even 2^64 entries give height ≤ 17.
+        // 32 is a generous upper bound that fits comfortably on the stack.
+        const MAX_DEPTH: usize = 32;
+        let mut path: [usize; MAX_DEPTH] = [0; MAX_DEPTH];
+        let mut depth: usize = 0;
+
+        // ── Phase 1: read-only descent ──────────────────────────────────────
+        // Walk down the left tree recording the edge index at each level.
+        // No mutations occur here, so a panic in `Ord::cmp` leaves `self` intact.
+        {
+            let mut node = self.reborrow();
+            loop {
+                let edge_idx = match node.search_node(key) {
+                    Found(kv) => kv.idx(),
+                    GoDown(edge) => edge.idx(),
+                };
+                debug_assert!(depth < MAX_DEPTH);
+                path[depth] = edge_idx;
+                #[allow(clippy::arithmetic_side_effects, reason = "depth + 1 <= MAX_DEPTH")]
+                {
+                    depth += 1;
+                }
+
+                if node.height() == 0 {
+                    break;
+                }
+                // Descend to the child at the recorded edge index.
+                let internal = unsafe { node.cast_to_internal_unchecked() };
+                node = unsafe { Handle::new_edge(internal, edge_idx) }.descend();
+            }
+        }
+
+        // ── Phase 2: allocate + mutate ──────────────────────────────────────
+        // All comparisons are done; this phase performs only pointer chases,
+        // mem-moves, and length writes, so it cannot panic.
+        let mut right_root = Root::new_pillar(self.height(), &alloc)?;
+        let mut left_node = self.borrow_mut();
         let mut right_node = right_root.borrow_mut();
 
-        loop {
-            let mut split_edge = match left_node.search_node(key) {
-                // key is going to the right tree
-                Found(kv) => kv.left_edge(),
-                GoDown(edge) => edge,
-            };
-
+        // Process all levels except the last (leaf) level.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "depth is nonzero - a leaf analysis already increments depth"
+        )]
+        for &idx in &path[..depth - 1] {
+            let mut split_edge = unsafe { Handle::new_edge(left_node, idx) };
             split_edge.move_suffix(&mut right_node);
 
             match (split_edge.force(), right_node.force()) {
-                (Internal(edge), Internal(node)) => {
+                (Internal(edge), Internal(rnode)) => {
                     left_node = edge.descend();
-                    right_node = node.first_edge().descend();
+                    right_node = rnode.first_edge().descend();
                 }
-                (Leaf(_), Leaf(_)) => break,
                 _ => unreachable!(),
             }
         }
 
-        left_root.fix_right_border(&alloc);
+        // Final (leaf) level.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "depth is nonzero - a leaf analysis already increments depth"
+        )]
+        {
+            let idx = path[depth - 1];
+            let mut split_edge = unsafe { Handle::new_edge(left_node, idx) };
+            split_edge.move_suffix(&mut right_node);
+        }
+
+        // Deallocation may not panic.
+        self.fix_right_border(&alloc);
         right_root.fix_left_border(&alloc);
         Ok(right_root)
     }
@@ -144,6 +195,16 @@ impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// assert_eq!(b[&17], "d");
     /// assert_eq!(b[&41], "e");
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if allocating the right tree's internal nodes fails.
+    /// In that case `self` is left completely unmodified.
+    ///
+    /// # Panics
+    ///
+    /// May panic if the user's `Ord::cmp` implementation panics (e.g. due to
+    /// bugs in a custom key type). In that case `self` is left completely unmodified.
     pub fn split_off<Q: ?Sized + Ord>(&mut self, key: &Q) -> Result<Self, AllocError>
     where
         K: Borrow<Q> + Ord,

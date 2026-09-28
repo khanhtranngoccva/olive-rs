@@ -58,8 +58,18 @@ impl From<AllocError> for TryCloneError {
 /// Unlike [`Clone`], which panics on allocation failure, [`TryClone`] returns a
 /// [`Result`] so callers can handle out-of-memory gracefully.
 ///
-/// Implementors must ensure that `try_clone` never panics — inner values should
-/// also be cloned via [`TryClone`] rather than [`Clone`].
+/// # Panic policy
+///
+/// Transient or domain-level failures (allocation exhaustion, capacity overflow,
+/// invalid access, etc.) **must** surface as `Err(TryCloneError)`, never as a panic.
+///
+/// A panic from `try_clone` is only permissible when it signals an unrecoverable
+/// programming error — e.g. a broken internal invariant that should be impossible
+/// under correct usage. In that case the bug lies upstream and unwinding to the
+/// nearest handler is appropriate.
+///
+/// Inner values should also be cloned via [`TryClone`] rather than [`Clone`],
+/// so that their transient errors propagate through the `Result` channel.
 ///
 /// # Laziness
 ///
@@ -73,6 +83,8 @@ pub trait TryClone: Sized {
     /// # Errors
     ///
     /// Returns [`TryCloneError`] if a capacity reservation or allocation fails.
+    /// See the [trait-level panic policy](#panic-policy) for when panics are
+    /// permissible versus when errors must be returned.
     fn try_clone(&self) -> Result<Self, TryCloneError>;
 
     /// Fallibly overwrite `self` with a copy of `source`, mirroring
@@ -88,7 +100,7 @@ pub trait TryClone: Sized {
     /// # Errors
     ///
     /// Returns [`TryCloneError`] if cloning `source` fails; on that path `self` is
-    /// guaranteed to be unchanged.
+    /// guaranteed to be unchanged. See the [trait-level panic policy](#panic-policy).
     fn try_clone_from(&mut self, source: &Self) -> Result<(), TryCloneError> {
         let new_value = source.try_clone()?;
         // Swap in the fresh value, dropping the old one. On the error path above

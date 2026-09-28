@@ -239,9 +239,8 @@ unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
 /// This is Olive's fallible analogue of std's unstable
 /// [`AllocatorClone`](https://doc.rust-lang.org/beta/std/alloc/trait.AllocatorClone.html),
 /// which is a marker over `Clone`. Because Olive routes every fallible op through
-/// [`TryClone`], the marker here sits on `TryClone` instead: cloning an allocator
-/// may itself allocate (e.g. an arena that pools blocks on the heap), so the
-/// operation is fallible rather than infallible.
+/// [`TryClone`], the marker here sits on [`TryClone`] instead: cloning an allocator
+/// may itself fail.
 ///
 /// Implementors must ensure that, upon calling [`TryClone::try_clone`], the two
 /// resulting handles are *equivalent*: memory allocated through one may be freed
@@ -251,9 +250,6 @@ unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
 /// Further, mutable accesses such as moving or dropping the allocator must not
 /// invalidate its currently allocated blocks at least so long as clones exist.
 ///
-/// Additionally, the bound that allocators do not unwind when (de)allocating
-/// applies here too: cloning an allocator must not unwind either.
-///
 /// It must also be the case that types which are `AllocatorTryClone` are either
 /// explicitly not copyable (such as by containing a `!Copy` field) or that
 /// copying them also respects allocator equivalence as if it had been a clone.
@@ -261,7 +257,7 @@ unsafe impl<A: StaticAllocator + ?Sized> StaticAllocator for &A {}
 /// # Safety
 ///
 /// Implementors must uphold the equivalence and non-invalidation guarantees
-/// described above for their [`TryClone::try_clone`] implementation.
+/// described above for their [`TryClone::try_clone`] implementation.       
 pub unsafe trait AllocatorTryClone: Allocator + TryClone {}
 
 unsafe impl<A: Allocator + ?Sized> AllocatorTryClone for &A {}
@@ -295,8 +291,8 @@ unsafe impl<A: Allocator + ?Sized> AllocatorTryClone for &A {}
 /// dropping itself, a per-handle reset or flush, lifetime expiry — then `b` could no
 /// longer legally call `deallocate` on it, directly violating the "manipulable by
 /// `b`" half of the contract (and, from the memory model's view, leaving `b` holding
-/// a dangling pointer). 
-/// 
+/// a dangling pointer).
+///
 /// The sole sanctioned way to reclaim shared memory is therefore
 /// an explicit [`Allocator::deallocate`] call; every other path is off-limits. For a
 /// stateless ZST allocator this holds trivially (there is nothing to drop); for a
