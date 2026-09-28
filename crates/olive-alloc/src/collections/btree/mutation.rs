@@ -128,9 +128,9 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     where
         F: FnMut(&K, &mut V) -> bool,
     {
-        // If the map is empty there is no root to anchor iteration on; return an
-        // iterator that immediately yields nothing.
-        if self.root.is_none() {
+        // If the map is empty, return an iterator that immediately yields nothing.
+        // This works regardless of whether root exists or not.
+        if self.length == 0 {
             let inner = ExtractIfInner {
                 length: &mut self.length,
                 dormant_root: None,
@@ -143,12 +143,11 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
             };
         }
 
-        debug_assert!(
-            self.length > 0,
-            "BTree* should have entries if root is not null"
+        let (root, dormant_root) = DormantMutRef::new(
+            self.root
+                .as_mut()
+                .expect("length > 0 implies root exists on BTree*"),
         );
-
-        let (root, dormant_root) = DormantMutRef::new(self.root.as_mut().unwrap());
         let root = root.borrow_mut();
         let cur_leaf_edge = Some(root.first_leaf_edge());
         let inner = ExtractIfInner {

@@ -1093,24 +1093,30 @@ impl<T, A: Allocator> VecDeque<T, A> {
 /// operations (`try_resize`, `try_resize_with`, and future `*_with_rollback`
 /// extend variants) so that a mid-loop failure leaves no partially-appended
 /// elements behind. Defuse with [`core::mem::forget`] on success.
-///
-/// # Safety contract
-///
-/// The caller must ensure the deque outlives the guard (i.e., the guard is a
-/// local variable in the same function that holds `&mut self`). This is
-/// guaranteed by construction when using [`VecDeque::truncate_back_guard`].
-pub(super) struct TruncateBackGuard<T, A: Allocator> {
-    ptr: *mut VecDeque<T, A>,
+pub(super) struct TruncateBackGuard<'a, T, A: Allocator> {
+    dq: &'a mut VecDeque<T, A>,
     len: usize,
 }
 
-impl<T, A: Allocator> Drop for TruncateBackGuard<T, A> {
+impl<T, A: Allocator> core::ops::Deref for TruncateBackGuard<'_, T, A> {
+    type Target = VecDeque<T, A>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.dq
+    }
+}
+
+impl<T, A: Allocator> core::ops::DerefMut for TruncateBackGuard<'_, T, A> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dq
+    }
+}
+
+impl<T, A: Allocator> Drop for TruncateBackGuard<'_, T, A> {
     fn drop(&mut self) {
-        // SAFETY: the pointer was obtained from a valid `&mut VecDeque` at guard
-        // construction time; the deque is alive for the entire scope (the guard
-        // is a local that drops before the enclosing function returns).
-        let dq_ref = unsafe { &mut *self.ptr };
-        dq_ref.truncate(self.len);
+        self.dq.truncate(self.len);
     }
 }
 
@@ -1123,26 +1129,33 @@ impl<T, A: Allocator> Drop for TruncateBackGuard<T, A> {
 /// `len` elements, discarding whatever was pushed to the front after the guard
 /// was created. Defuse with [`core::mem::forget`] on success.
 ///
-/// # Safety contract
-///
-/// The caller must ensure the deque outlives the guard (i.e., the guard is a
-/// local variable in the same function that holds `&mut self`). This is
-/// guaranteed by construction when using [`VecDeque::truncate_front_guard`].
 // Retained as reusable rollback scaffolding for future fallible
 // front-mutating operations; no committed consumer yet.
 #[allow(dead_code)]
-pub(super) struct TruncateFrontGuard<T, A: Allocator> {
-    ptr: *mut VecDeque<T, A>,
+pub(super) struct TruncateFrontGuard<'a, T, A: Allocator> {
+    dq: &'a mut VecDeque<T, A>,
     len: usize,
 }
 
-impl<T, A: Allocator> Drop for TruncateFrontGuard<T, A> {
+impl<T, A: Allocator> core::ops::Deref for TruncateFrontGuard<'_, T, A> {
+    type Target = VecDeque<T, A>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.dq
+    }
+}
+
+impl<T, A: Allocator> core::ops::DerefMut for TruncateFrontGuard<'_, T, A> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dq
+    }
+}
+
+impl<T, A: Allocator> Drop for TruncateFrontGuard<'_, T, A> {
     fn drop(&mut self) {
-        // SAFETY: the pointer was obtained from a valid `&mut VecDeque` at guard
-        // construction time; the deque is alive for the entire scope (the guard
-        // is a local that drops before the enclosing function returns).
-        let dq_ref = unsafe { &mut *self.ptr };
-        dq_ref.retain_back(self.len);
+        self.dq.retain_back(self.len);
     }
 }
 
@@ -1436,16 +1449,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// length, undoing any elements appended after the guard was created.
     /// This provides atomic all-or-nothing semantics for fallible bulk-append
     /// operations (resize, extend-with-rollback, etc.).
-    ///
-    /// # Safety
-    /// The caller must ensure the deque outlives the guard
-    /// (guaranteed when the guard is a local in the same function).
     #[inline]
-    pub(super) unsafe fn truncate_back_guard(&mut self) -> TruncateBackGuard<T, A> {
-        TruncateBackGuard {
-            ptr: &raw mut *self,
-            len: self.len,
-        }
+    pub(super) fn truncate_back_guard(&mut self) -> TruncateBackGuard<'_, T, A> {
+        let len = self.len;
+        TruncateBackGuard { dq: self, len }
     }
 
     /// Creates a [`TruncateFrontGuard`] pinned at the deque's current length.
@@ -1455,19 +1462,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// recorded length (via [`Self::retain_back`]), undoing any elements
     /// prepended after the guard was created. This provides atomic all-or-nothing
     /// semantics for fallible bulk-prepend operations.
-    ///
-    /// # Safety
-    /// The caller must ensure the deque outlives the guard
-    /// (guaranteed when the guard is a local in the same function).
     // Retained as reusable rollback scaffolding for future fallible
     // front-mutating operations; no committed caller yet.
     #[allow(unused)]
     #[inline]
-    pub(super) unsafe fn truncate_front_guard(&mut self) -> TruncateFrontGuard<T, A> {
-        TruncateFrontGuard {
-            ptr: &raw mut *self,
-            len: self.len,
-        }
+    pub(super) fn truncate_front_guard(&mut self) -> TruncateFrontGuard<'_, T, A> {
+        let len = self.len;
+        TruncateFrontGuard { dq: self, len }
     }
 
     /// Shortens the deque, keeping only the first `new_len` elements and

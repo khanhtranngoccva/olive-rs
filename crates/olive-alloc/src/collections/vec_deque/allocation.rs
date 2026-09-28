@@ -816,20 +816,20 @@ impl<T, A: Allocator> VecDeque<T, A> {
         #[allow(clippy::arithmetic_side_effects, reason = "asserted new_len > current")]
         let extra = new_len - current;
         self.try_reserve_adaptive(extra)?;
-        // SAFETY: the guard is a local that drops before this function returns,
-        // so `self` outlives it.
-        let guard = unsafe { self.truncate_back_guard() };
+        let mut guard = self.truncate_back_guard();
         for _ in 0..extra {
             match value.try_clone() {
                 Ok(cloned) => {
                     // SAFETY: capacity was reserved above for all `extra`.
-                    unsafe { self.push_back_within_cap(cloned) };
+                    unsafe { guard.push_back_within_cap(cloned) };
                 }
                 Err(e) => {
+                    // Guard drops here and truncates back to `current`.
                     return Err(TryVecDequeWithCloneError::Clone(e));
                 }
             }
         }
+        // Success: defuse the guard so it doesn't truncate the new elements.
         core::mem::forget(guard);
         Ok(())
     }
@@ -862,14 +862,12 @@ impl<T, A: Allocator> VecDeque<T, A> {
         let extra = new_len - current;
         self.try_reserve_adaptive(extra)
             .map_err(TryVecDequeWithClosureError::Reserve)?;
-        // SAFETY: the guard is a local that drops before this function returns,
-        // so `self` outlives it.
-        let guard = unsafe { self.truncate_back_guard() };
+        let mut guard = self.truncate_back_guard();
         for _ in 0..extra {
             match f() {
                 Ok(item) => {
                     // SAFETY: capacity was reserved above for all `extra`.
-                    unsafe { self.push_back_within_cap(item) };
+                    unsafe { guard.push_back_within_cap(item) };
                 }
                 Err(e) => {
                     // Guard drops here and truncates back to `current`.
