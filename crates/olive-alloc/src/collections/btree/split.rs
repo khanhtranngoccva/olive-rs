@@ -6,8 +6,7 @@ use super::node::ForceResult::*;
 use super::node::{Handle, InternalNode, Root};
 use super::search::SearchResult::*;
 use crate::vec::Vec;
-use olive_core::alloc::AllocError;
-use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 
 impl<K, V> Root<K, V> {
     /// Calculates the length of both trees that result from splitting up
@@ -60,7 +59,7 @@ impl<K, V> Root<K, V> {
     /// May panic if the user's `Ord::cmp` implementation panics (e.g. due to
     /// arithmetic overflow). In that case `self` is left completely unmodified,
     /// because the comparison phase is read-only and no mutations have occurred yet.
-    pub(super) fn try_split_off<Q: ?Sized + Ord, A: AllocatorTryClone>(
+    pub(super) fn try_split_off<Q: ?Sized + Ord, A: Allocator>(
         &mut self,
         key: &Q,
         alloc: &A,
@@ -143,7 +142,7 @@ impl<K, V> Root<K, V> {
     }
 
     /// Creates a tree consisting of empty nodes.
-    fn new_pillar<A: AllocatorTryClone>(height: usize, alloc: &A) -> Result<Self, AllocError> {
+    fn new_pillar<A: Allocator>(height: usize, alloc: &A) -> Result<Self, AllocError> {
         let mut root = Root::new(alloc)?;
         let new_count = height;
         let mut ephemeral_stack =

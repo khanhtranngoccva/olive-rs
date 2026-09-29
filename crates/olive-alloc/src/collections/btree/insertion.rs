@@ -4,12 +4,12 @@
 //! insertion logic lives in [`entry`](super::entry) and
 //! [`node`](super::node).
 
-use crate::alloc::{AllocError, AllocatorTryClone};
+use crate::alloc::{AllocError, Allocator};
 
 use super::entry::Entry;
 use super::map::BTreeMap;
 
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Inserts a key-value pair into the map, attempting allocation as needed.
     ///
     /// If the key already existed, the old value is replaced and returned.

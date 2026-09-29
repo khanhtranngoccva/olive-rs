@@ -12,13 +12,13 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 use super::map::BTreeMap;
-use crate::alloc::{AllocatorTryClone, Global};
+use crate::alloc::{Allocator, AllocatorTryClone, Global};
 
 // ---------------------------------------------------------------------------
 // Debug
 // ---------------------------------------------------------------------------
 
-impl<K: fmt::Debug, V: fmt::Debug, A: AllocatorTryClone> fmt::Debug for BTreeMap<K, V, A> {
+impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for BTreeMap<K, V, A> {
     /// Formats the map as `{ key: value, ... }` in ascending key order.
     /// An empty map renders as `{}`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -34,7 +34,7 @@ impl<K: fmt::Debug, V: fmt::Debug, A: AllocatorTryClone> fmt::Debug for BTreeMap
 // PartialEq / Eq
 // ---------------------------------------------------------------------------
 
-impl<K: Ord + PartialEq, V: PartialEq, A: AllocatorTryClone> PartialEq for BTreeMap<K, V, A> {
+impl<K: Ord + PartialEq, V: PartialEq, A: Allocator> PartialEq for BTreeMap<K, V, A> {
     fn eq(&self, other: &Self) -> bool {
         if self.len() != other.len() {
             return false;
@@ -47,20 +47,20 @@ impl<K: Ord + PartialEq, V: PartialEq, A: AllocatorTryClone> PartialEq for BTree
     }
 }
 
-impl<K: Ord + Eq, V: Eq, A: AllocatorTryClone> Eq for BTreeMap<K, V, A> {}
+impl<K: Ord + Eq, V: Eq, A: Allocator> Eq for BTreeMap<K, V, A> {}
 
 // ---------------------------------------------------------------------------
 // PartialOrd / Ord
 // ---------------------------------------------------------------------------
 
-impl<K: Ord + PartialOrd, V: PartialOrd, A: AllocatorTryClone> PartialOrd for BTreeMap<K, V, A> {
+impl<K: Ord + PartialOrd, V: PartialOrd, A: Allocator> PartialOrd for BTreeMap<K, V, A> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // Lexicographic comparison of (key, value) pairs in ascending key order.
         self.iter().partial_cmp(other.iter())
     }
 }
 
-impl<K: Ord, V: Ord, A: AllocatorTryClone> Ord for BTreeMap<K, V, A> {
+impl<K: Ord, V: Ord, A: Allocator> Ord for BTreeMap<K, V, A> {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
@@ -71,7 +71,7 @@ impl<K: Ord, V: Ord, A: AllocatorTryClone> Ord for BTreeMap<K, V, A> {
 // Hash
 // ---------------------------------------------------------------------------
 
-impl<K: Ord + Hash, V: Hash, A: AllocatorTryClone> Hash for BTreeMap<K, V, A> {
+impl<K: Ord + Hash, V: Hash, A: Allocator> Hash for BTreeMap<K, V, A> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash the length first so that a map which is a strict prefix of
         // another cannot collide with it.
@@ -360,17 +360,12 @@ mod tests {
         use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
 
-        // Give the allocator enough budget to build a small map (an insert into
-        // an empty tree clones the alloc once for the leaf node). Then exhaust
-        // the remaining budget so the final `try_clone` call fails.
-        let budget = Arc::new(CloneBudget::new(2));
+        let budget = Arc::new(CloneBudget::new(0));
         let alloc = FlakyCloneAlloc::new(budget.clone());
         let mut map: BTreeMap<i32, i32, FlakyCloneAlloc> = BTreeMap::new_in(alloc);
-        // First insert into an empty tree clones the alloc once for the leaf,
-        // leaving 1 unit of budget. The try_clone below needs one more and fails.
         map.try_insert(1, 10).unwrap();
 
-        // Budget is now exhausted; cloning the allocator must fail.
+        // Cloning the allocator must fail with zero budget.
         let result = map.try_clone();
         assert!(
             result.is_err(),

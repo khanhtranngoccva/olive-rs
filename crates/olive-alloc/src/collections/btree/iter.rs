@@ -6,7 +6,7 @@ use super::map::BTreeMap;
 use super::navigate::LazyLeafRange;
 use super::node::marker;
 use super::node::{Handle, NodeRef};
-use crate::alloc::{AllocatorTryClone, Global};
+use crate::alloc::{Allocator, Global};
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::mem::ManuallyDrop;
 
@@ -350,13 +350,13 @@ impl<K, V> FusedIterator for ValuesMut<'_, K, V> {}
 /// Returned by iterating over a `BTreeMap` directly ([`IntoIterator`]) or calling
 /// [`IntoIterator::into_iter`].
 /// Nodes are deallocated as they are visited.
-pub struct IntoIter<K, V, A: AllocatorTryClone = Global> {
+pub struct IntoIter<K, V, A: Allocator = Global> {
     range: LazyLeafRange<marker::Dying, K, V>,
     length: usize,
     alloc: A,
 }
 
-impl<K, V, A: AllocatorTryClone> Iterator for IntoIter<K, V, A> {
+impl<K, V, A: Allocator> Iterator for IntoIter<K, V, A> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -373,20 +373,20 @@ impl<K, V, A: AllocatorTryClone> Iterator for IntoIter<K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> DoubleEndedIterator for IntoIter<K, V, A> {
+impl<K, V, A: Allocator> DoubleEndedIterator for IntoIter<K, V, A> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.dying_next_back()
             .map(|kv_handle| unsafe { kv_handle.into_key_val() })
     }
 }
 
-impl<K, V, A: AllocatorTryClone> ExactSizeIterator for IntoIter<K, V, A> {
+impl<K, V, A: Allocator> ExactSizeIterator for IntoIter<K, V, A> {
     fn len(&self) -> usize {
         self.length
     }
 }
 
-impl<K, V, A: AllocatorTryClone> Drop for IntoIter<K, V, A> {
+impl<K, V, A: Allocator> Drop for IntoIter<K, V, A> {
     fn drop(&mut self) {
         // Exhaust the remaining entries, dropping each key/value in place and deallocating
         // every node as we climb back up to the root. The walk is panic-free — `dying_next`
@@ -400,9 +400,9 @@ impl<K, V, A: AllocatorTryClone> Drop for IntoIter<K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> FusedIterator for IntoIter<K, V, A> {}
+impl<K, V, A: Allocator> FusedIterator for IntoIter<K, V, A> {}
 
-impl<K, V, A: AllocatorTryClone> IntoIter<K, V, A> {
+impl<K, V, A: Allocator> IntoIter<K, V, A> {
     /// Core of a `next` method returning a dying KV handle,
     /// invalidated by further calls to this function and some others.
     fn dying_next(
@@ -449,11 +449,11 @@ impl<K, V, A: AllocatorTryClone> IntoIter<K, V, A> {
 /// An owning iterator over the keys of a `BTreeMap`, consuming the map.
 ///
 /// Returned by [`BTreeMap::into_keys`].
-pub struct IntoKeys<K, V, A: AllocatorTryClone = Global> {
+pub struct IntoKeys<K, V, A: Allocator = Global> {
     iter: IntoIter<K, V, A>,
 }
 
-impl<K, V, A: AllocatorTryClone> Iterator for IntoKeys<K, V, A> {
+impl<K, V, A: Allocator> Iterator for IntoKeys<K, V, A> {
     type Item = K;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -469,30 +469,30 @@ impl<K, V, A: AllocatorTryClone> Iterator for IntoKeys<K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> DoubleEndedIterator for IntoKeys<K, V, A> {
+impl<K, V, A: Allocator> DoubleEndedIterator for IntoKeys<K, V, A> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(k, _)| k)
     }
 }
 
-impl<K, V, A: AllocatorTryClone> ExactSizeIterator for IntoKeys<K, V, A> {
+impl<K, V, A: Allocator> ExactSizeIterator for IntoKeys<K, V, A> {
     fn len(&self) -> usize {
         self.iter.len()
     }
 }
 
-impl<K, V, A: AllocatorTryClone> FusedIterator for IntoKeys<K, V, A> {}
+impl<K, V, A: Allocator> FusedIterator for IntoKeys<K, V, A> {}
 
 // ── IntoValues ───────────────────────────────────────────────────────────────
 
 /// An owning iterator over the values of a `BTreeMap`, consuming the map.
 ///
 /// Returned by [`BTreeMap::into_values`].
-pub struct IntoValues<K, V, A: AllocatorTryClone = Global> {
+pub struct IntoValues<K, V, A: Allocator = Global> {
     iter: IntoIter<K, V, A>,
 }
 
-impl<K, V, A: AllocatorTryClone> Iterator for IntoValues<K, V, A> {
+impl<K, V, A: Allocator> Iterator for IntoValues<K, V, A> {
     type Item = V;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -508,23 +508,23 @@ impl<K, V, A: AllocatorTryClone> Iterator for IntoValues<K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> DoubleEndedIterator for IntoValues<K, V, A> {
+impl<K, V, A: Allocator> DoubleEndedIterator for IntoValues<K, V, A> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, v)| v)
     }
 }
 
-impl<K, V, A: AllocatorTryClone> ExactSizeIterator for IntoValues<K, V, A> {
+impl<K, V, A: Allocator> ExactSizeIterator for IntoValues<K, V, A> {
     fn len(&self) -> usize {
         self.iter.len()
     }
 }
 
-impl<K, V, A: AllocatorTryClone> FusedIterator for IntoValues<K, V, A> {}
+impl<K, V, A: Allocator> FusedIterator for IntoValues<K, V, A> {}
 
 // ── BTreeMap methods ─────────────────────────────────────────────────────────
 
-impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K, V, A: Allocator> BTreeMap<K, V, A> {
     /// Returns an iterator over the key-value pairs in ascending key order.
     pub fn iter(&self) -> Iter<'_, K, V> {
         let range = match &self.root {
@@ -581,7 +581,7 @@ impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> IntoIterator for BTreeMap<K, V, A> {
+impl<K, V, A: Allocator> IntoIterator for BTreeMap<K, V, A> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V, A>;
 

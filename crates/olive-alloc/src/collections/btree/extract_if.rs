@@ -4,11 +4,11 @@ use super::node::{NodeRef, Root};
 use crate::{alloc::Global, collections::btree::node::Handle};
 use core::fmt;
 use core::iter::FusedIterator;
-use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::Allocator;
 
 /// An iterator produced by calling `extract_if` on BTreeMap.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct ExtractIf<'a, K, V, F, A: AllocatorTryClone = Global>
+pub struct ExtractIf<'a, K, V, F, A: Allocator = Global>
 where
     F: 'a + FnMut(&K, &mut V) -> bool,
 {
@@ -45,7 +45,7 @@ where
     }
 }
 
-impl<K, V, F, A: AllocatorTryClone> Iterator for ExtractIf<'_, K, V, F, A>
+impl<K, V, F, A: Allocator> Iterator for ExtractIf<'_, K, V, F, A>
 where
     F: FnMut(&K, &mut V) -> bool,
 {
@@ -68,7 +68,7 @@ impl<K, V> ExtractIfInner<'_, K, V> {
     }
 
     /// Implementation of a typical `ExtractIf::next` method, given the predicate.
-    pub(super) fn next<F, A: AllocatorTryClone>(
+    pub(super) fn next<F, A: Allocator>(
         &mut self,
         pred: &mut F,
         alloc: &A,

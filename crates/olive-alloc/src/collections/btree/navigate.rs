@@ -2,7 +2,7 @@ use core::borrow::Borrow;
 use core::ops::RangeBounds;
 use core::{hint, ptr};
 
-use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::Allocator;
 
 use super::node::ForceResult::*;
 use super::node::{Handle, NodeRef, marker};
@@ -210,7 +210,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub unsafe fn deallocating_next_unchecked<A: AllocatorTryClone>(
+    pub unsafe fn deallocating_next_unchecked<A: Allocator>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -220,7 +220,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub unsafe fn deallocating_next_back_unchecked<A: AllocatorTryClone>(
+    pub unsafe fn deallocating_next_back_unchecked<A: Allocator>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -230,7 +230,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     }
 
     #[inline]
-    pub fn deallocating_end<A: AllocatorTryClone>(&mut self, alloc: &A) {
+    pub fn deallocating_end<A: Allocator>(&mut self, alloc: &A) {
         if let Some(front) = self.take_front() {
             front.deallocating_end(alloc)
         }
@@ -493,7 +493,11 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///   `deallocating_next_back`.
     /// - The returned KV handle is only valid to access the key and value,
     ///   and only valid until the next call to a `deallocating_` method.
-    unsafe fn deallocating_next<A: AllocatorTryClone>(
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
+    unsafe fn deallocating_next<A: Allocator>(
         self,
         alloc: &A,
     ) -> Option<(
@@ -527,7 +531,11 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///   `deallocating_next`.
     /// - The returned KV handle is only valid to access the key and value,
     ///   and only valid until the next call to a `deallocating_` method.
-    unsafe fn deallocating_next_back<A: AllocatorTryClone>(
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
+    unsafe fn deallocating_next_back<A: Allocator>(
         self,
         alloc: &A,
     ) -> Option<(
@@ -554,7 +562,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     /// both sides of the tree, and have hit the same edge. As it is intended
     /// only to be called when all keys and values have been returned,
     /// no cleanup is done on any of the keys or values.
-    fn deallocating_end<A: AllocatorTryClone>(self, alloc: &A) {
+    fn deallocating_end<A: Allocator>(self, alloc: &A) {
         let mut edge = self.forget_node_type();
         while let Some(parent_edge) = unsafe { edge.into_node().deallocate_and_ascend(alloc) } {
             edge = parent_edge.forget_node_type();
@@ -635,7 +643,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// or call this method or counterpart `deallocating_next_back_unchecked` again.
-    unsafe fn deallocating_next_unchecked<A: AllocatorTryClone>(
+    unsafe fn deallocating_next_unchecked<A: Allocator>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -656,7 +664,7 @@ impl<K, V> Handle<NodeRef<marker::Dying, K, V, marker::Leaf>, marker::Edge> {
     ///
     /// The only safe way to proceed with the updated handle is to compare it, drop it,
     /// or call this method or counterpart `deallocating_next_unchecked` again.
-    unsafe fn deallocating_next_back_unchecked<A: AllocatorTryClone>(
+    unsafe fn deallocating_next_back_unchecked<A: Allocator>(
         &mut self,
         alloc: &A,
     ) -> Handle<NodeRef<marker::Dying, K, V, marker::LeafOrInternal>, marker::KV> {
@@ -819,12 +827,12 @@ impl<BorrowType: marker::BorrowType, K, V>
 impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {
     /// Returns the leaf edge corresponding to the first point at which the
     /// given bound is true.
-    pub fn lower_bound<Q: ?Sized>(
+    pub fn lower_bound<Q>(
         self,
         mut bound: SearchBound<&Q>,
     ) -> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>
     where
-        Q: Ord,
+        Q: Ord + ?Sized,
         K: Borrow<Q>,
     {
         let mut node = self;
@@ -842,12 +850,12 @@ impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Lea
 
     /// Returns the leaf edge corresponding to the last point at which the
     /// given bound is true.
-    pub fn upper_bound<Q: ?Sized>(
+    pub fn upper_bound<Q>(
         self,
         mut bound: SearchBound<&Q>,
     ) -> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>
     where
-        Q: Ord,
+        Q: Ord + ?Sized,
         K: Borrow<Q>,
     {
         let mut node = self;

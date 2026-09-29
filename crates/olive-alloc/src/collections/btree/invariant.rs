@@ -8,7 +8,7 @@
 use core::fmt::Debug;
 
 use super::map::BTreeMap;
-use crate::alloc::AllocatorTryClone;
+use crate::alloc::Allocator;
 
 /// Asserts structural invariants on the entire tree rooted at `map`:
 /// - Min-length: the root is checked against a relaxed bound (1 if internal,
@@ -17,7 +17,7 @@ use crate::alloc::AllocatorTryClone;
 ///   number of key-value pairs counted by walking every node.
 ///
 /// Panics on the first violation with a descriptive message.
-pub(crate) fn check_tree_invariant<K, V, A: AllocatorTryClone>(map: &BTreeMap<K, V, A>) {
+pub(crate) fn check_tree_invariant<K, V, A: Allocator>(map: &BTreeMap<K, V, A>) {
     if let Some(root) = map.root.as_ref() {
         let min_len = if root.height() > 0 { 1 } else { 0 };
         root.reborrow().assert_min_len(min_len);
@@ -39,7 +39,7 @@ pub(crate) fn check_tree_invariant<K, V, A: AllocatorTryClone>(map: &BTreeMap<K,
 
 /// Asserts that all keys in the tree appear in strictly ascending order by
 /// walking the public iterator. Panics on the first out-of-order pair.
-pub(crate) fn check_ascending_keys<K, V, A: AllocatorTryClone>(map: &BTreeMap<K, V, A>)
+pub(crate) fn check_ascending_keys<K, V, A: Allocator>(map: &BTreeMap<K, V, A>)
 where
     K: Ord + Debug,
 {

@@ -1,6 +1,6 @@
 use super::map::MIN_LEN;
 use super::node::{ForceResult, Handle, LeftOrRight, NodeRef, marker};
-use crate::alloc::AllocatorTryClone;
+use crate::alloc::Allocator;
 
 // ── Deletion (remove + rebalance) ───────────────────────────────────────────
 
@@ -16,7 +16,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInter
         clippy::type_complexity,
         reason = "this is the best type representation"
     )]
-    pub(super) fn remove_kv_tracking<F: FnOnce(), A: AllocatorTryClone>(
+    pub(super) fn remove_kv_tracking<F: FnOnce(), A: Allocator>(
         self,
         handle_emptied_internal_root: F,
         alloc: &A,
@@ -41,7 +41,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         clippy::type_complexity,
         reason = "this is the best type representation"
     )]
-    fn remove_leaf_kv<F: FnOnce(), A: AllocatorTryClone>(
+    fn remove_leaf_kv<F: FnOnce(), A: Allocator>(
         self,
         handle_emptied_internal_root: F,
         // Difference from std: allocator references are used, cloning failures are not acceptable here.
@@ -116,7 +116,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         clippy::type_complexity,
         reason = "this is the best type representation"
     )]
-    fn remove_internal_kv<F: FnOnce(), A: AllocatorTryClone>(
+    fn remove_internal_kv<F: FnOnce(), A: Allocator>(
         self,
         handle_emptied_internal_root: F,
         alloc: &A,

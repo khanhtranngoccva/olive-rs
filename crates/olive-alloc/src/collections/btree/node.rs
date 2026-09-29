@@ -32,7 +32,7 @@
 //   an edge both identifies a position and contains a pointer to a child node.
 
 use super::scratch::Nodes;
-use crate::alloc::{AllocError, Allocator, AllocatorTryClone, Layout};
+use crate::alloc::{AllocError, Allocator, Layout};
 use crate::boxed::Box;
 use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
@@ -93,7 +93,7 @@ impl<K, V> LeafNode<K, V> {
     }
 
     /// Creates a new boxed `LeafNode`.
-    pub(super) fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
+    pub(super) fn new<A: Allocator>(alloc: &A) -> Result<Box<Self, &A>, AllocError> {
         let mut leaf = Box::try_new_uninit_in(alloc)?;
         unsafe {
             // SAFETY: `leaf` points to allocated memory for a `LeafNode`, which
@@ -127,7 +127,7 @@ impl<K, V> InternalNode<K, V> {
     /// An invariant of internal nodes is that they have at least one
     /// initialized and valid edge. This function does not set up
     /// such an edge.
-    pub(super) unsafe fn new<A: AllocatorTryClone>(alloc: A) -> Result<Box<Self, A>, AllocError> {
+    pub(super) unsafe fn new<A: Allocator>(alloc: &A) -> Result<Box<Self, &A>, AllocError> {
         let mut node = Box::<Self, _>::try_new_uninit_in(alloc)?;
         unsafe {
             // SAFETY: `node` points to allocated memory for an `InternalNode`;
@@ -233,11 +233,11 @@ unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Owned, K, V, Type> 
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Dying, K, V, Type> {}
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
-    pub(super) fn new_leaf<A: AllocatorTryClone>(alloc: A) -> Result<Self, AllocError> {
+    pub(super) fn new_leaf<'a, A: Allocator>(alloc: &'a A) -> Result<Self, AllocError> {
         Ok(Self::from_new_leaf(LeafNode::new(alloc)?))
     }
 
-    fn from_new_leaf<A: AllocatorTryClone>(leaf: Box<LeafNode<K, V>, A>) -> Self {
+    fn from_new_leaf<A: Allocator>(leaf: Box<LeafNode<K, V>, A>) -> Self {
         // The allocator must be dropped, not leaked.  See also `BTreeMap::alloc`.
         let (node, _alloc) = Box::into_non_null_with_allocator(leaf);
         NodeRef {
@@ -250,7 +250,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
     /// Creates a new internal (height > 0) `NodeRef` from a partially initialized allocation created by InternalNode::new.
-    fn from_uninitialized_internal<A: AllocatorTryClone>(
+    fn from_uninitialized_internal<A: Allocator>(
         mut boxed: Box<InternalNode<K, V>, A>,
         child: Root<K, V>,
     ) -> Self {
@@ -274,7 +274,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
     ///
     /// The first edge of `internal.edges` must already be initialized and valid; the remaining edges may be uninitialized. This is satisfied when the
     /// caller has moved the left child's edge into slot 0 before calling.
-    unsafe fn from_new_internal<A: AllocatorTryClone>(
+    unsafe fn from_new_internal<A: Allocator>(
         internal: Box<InternalNode<K, V>, A>,
         height: NonZero<usize>,
     ) -> Self {
@@ -506,9 +506,9 @@ impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
     ///
     /// # Safety
     /// The current node will still be accessible despite being deallocated.
-    pub(super) unsafe fn deallocate_and_ascend<A: AllocatorTryClone>(
+    pub(super) unsafe fn deallocate_and_ascend<A: Allocator>(
         self,
-        alloc: A,
+        alloc: &A,
     ) -> Option<Handle<NodeRef<marker::Dying, K, V, marker::Internal>, marker::Edge>> {
         let height = self.height;
         let node = self.node;
@@ -784,7 +784,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// Returns a new owned tree, with its own root node that is initially empty.
-    pub(super) fn new<A: AllocatorTryClone>(alloc: A) -> Result<Self, AllocError> {
+    pub(super) fn new<A: Allocator>(alloc: &A) -> Result<Self, AllocError> {
         Ok(NodeRef::new_leaf(alloc)?.forget_type())
     }
 
@@ -792,7 +792,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// make that new node the root node, and return it.
     ///
     /// This increases the height by 1 and is the opposite of `pop_internal_level`.
-    pub(super) fn push_internal_level<A: AllocatorTryClone>(
+    pub(super) fn push_internal_level<A: Allocator>(
         &mut self,
         reserved_top: Box<InternalNode<K, V>, A>,
     ) -> NodeRef<marker::Mut<'_>, K, V, marker::Internal> {
@@ -817,7 +817,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// rooted at the first child of `self`.
     ///
     /// Panics if there is no internal level, i.e., if the root node is a leaf.
-    pub(super) fn pop_internal_level<A: AllocatorTryClone>(&mut self, alloc: A) {
+    pub(super) fn pop_internal_level<A: Allocator>(&mut self, alloc: &A) {
         assert!(self.height > 0);
 
         let top = self.node;
@@ -1121,7 +1121,7 @@ impl<BorrowType, K, V, NodeType, HandleType>
     }
 }
 
-impl<'a, K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, HandleType> {
+impl<K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'_>, K, V, NodeType>, HandleType> {
     /// Temporarily takes out another mutable handle on the same location. Beware, as
     /// this method is very dangerous, doubly so since it might not immediately appear
     /// dangerous.
@@ -1183,6 +1183,10 @@ impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, mar
         }
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     pub(super) fn left_kv(
         self,
     ) -> Result<Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV>, Self> {
@@ -1194,6 +1198,10 @@ impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, mar
         }
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "this is the clearest type representation"
+    )]
     pub(super) fn right_kv(
         self,
     ) -> Result<Handle<NodeRef<BorrowType, K, V, NodeType>, marker::KV>, Self> {
@@ -1273,7 +1281,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         clippy::type_complexity,
         reason = "this is likely the best type declaration, std uses it"
     )]
-    fn insert<A: AllocatorTryClone>(
+    fn insert<A: Allocator>(
         self,
         key: K,
         val: V,
@@ -1356,7 +1364,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     // Inserts a new key-value pair and an edge that will go to the right of that new pair
     /// between this edge and the key-value pair to the right of this edge. This method splits
     /// the node if there isn't enough room.
-    fn insert<A: AllocatorTryClone>(
+    fn insert<A: Allocator>(
         mut self,
         key: K,
         val: V,
@@ -1406,7 +1414,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     ///
     /// Unlike the std algorithm, this algorithm works on pre-reserved leaf and internal nodes,
     /// and will panic if there are not enough corresponding nodes.
-    pub fn insert_recursing<'n, A: AllocatorTryClone>(
+    pub fn insert_recursing<'n, A: Allocator>(
         self,
         key: K,
         value: V,
@@ -1636,7 +1644,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// - The key and value pointed to by this handle are extracted.
     /// - All the key-value pairs to the right of this handle are put into the newly
     ///   preallocated node specified by `new_node`.
-    pub fn split<A: AllocatorTryClone>(
+    pub fn split<A: Allocator>(
         mut self,
         mut new_node: Box<LeafNode<K, V>, A>,
     ) -> SplitResult<'a, K, V, marker::Leaf> {
@@ -1683,7 +1691,7 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// - The key and value pointed to by this handle are extracted.
     /// - All the edges and key-value pairs to the right of this handle are put into
     ///   a newly allocated node.
-    pub fn split<A: AllocatorTryClone>(
+    pub fn split<A: Allocator>(
         mut self,
         mut new_node: Box<InternalNode<K, V>, A>,
     ) -> SplitResult<'a, K, V, marker::Internal> {
@@ -1831,7 +1839,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     >(
         self,
         result: F,
-        alloc: A,
+        alloc: &A,
     ) -> R {
         let Handle {
             node: parent_node,
@@ -1936,9 +1944,9 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     /// the left child node and returns the shrunk parent node.
     ///
     /// Panics unless we `.can_merge()`.
-    pub(super) fn merge_tracking_parent<A: AllocatorTryClone>(
+    pub(super) fn merge_tracking_parent<A: Allocator>(
         self,
-        alloc: A,
+        alloc: &A,
     ) -> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
         self.do_merge(|parent, _child| parent, alloc)
     }
@@ -1947,9 +1955,9 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     /// the left child node and returns the left child node.
     ///
     /// Panics unless we `.can_merge()`.
-    pub(super) fn merge_tracking_child<A: AllocatorTryClone>(
+    pub(super) fn merge_tracking_child<A: Allocator>(
         self,
-        alloc: A,
+        alloc: &A,
     ) -> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
         self.do_merge(|_parent, child| child, alloc)
     }
@@ -1959,10 +1967,10 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
     /// where the tracked child edge ended up.
     ///
     /// Panics unless we `.can_merge()`.
-    pub(super) fn merge_tracking_child_edge<A: AllocatorTryClone>(
+    pub(super) fn merge_tracking_child_edge<A: Allocator>(
         self,
         track_edge_idx: LeftOrRight<usize>,
-        alloc: A,
+        alloc: &A,
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
         let old_left_len = self.left_child.len();
         let right_len = self.right_child.len();

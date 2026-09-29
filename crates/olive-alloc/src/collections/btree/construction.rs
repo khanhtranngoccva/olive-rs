@@ -3,9 +3,9 @@
 use olive_core::mem::ManuallyDrop;
 
 use super::map::BTreeMap;
-use crate::alloc::{AllocatorTryClone, Global};
+use crate::alloc::{Allocator, Global};
 
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Attempts to create an empty `BTreeMap` with the given allocator.
     pub fn new_in(alloc: A) -> Self {
         Self {

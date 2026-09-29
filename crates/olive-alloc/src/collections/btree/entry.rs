@@ -17,7 +17,7 @@
 //!    are performed as pure pointer surgery. No allocation occurs here, so
 //!    failure is impossible.
 
-use crate::alloc::{AllocError, AllocatorTryClone, Global};
+use crate::alloc::{AllocError, Allocator, Global};
 use crate::collections::btree::scratch;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
@@ -27,7 +27,7 @@ use super::map::BTreeMap;
 use super::node::{CAPACITY, Handle, NodeRef, marker};
 use super::search::SearchResult;
 
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Gets an [`Entry`] to a single entry in the map, which may either be
     /// occupied or vacant.
     ///
@@ -110,7 +110,7 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
 /// A view into a single entry in a map, which may either be vacant or occupied.
 ///
 /// This `enum` is constructed from the [`entry`] method on [`BTreeMap`].
-pub enum Entry<'a, K: 'a, V: 'a, A: AllocatorTryClone = Global> {
+pub enum Entry<'a, K: 'a, V: 'a, A: Allocator = Global> {
     /// A vacant entry.
     Vacant(VacantEntry<'a, K, V, A>),
     /// An occupied entry.
@@ -118,7 +118,7 @@ pub enum Entry<'a, K: 'a, V: 'a, A: AllocatorTryClone = Global> {
 }
 
 /// A vacant entry in a [`BTreeMap`].
-pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
+pub struct VacantEntry<'a, K, V, A: Allocator = Global> {
     pub(super) key: K,
     /// The edge handle in the target leaf where the key belongs, if the map
     /// is non-empty. `None` when the map is empty and a new root must be created.
@@ -129,21 +129,21 @@ pub struct VacantEntry<'a, K, V, A: AllocatorTryClone = Global> {
 }
 
 /// An occupied entry in a [`BTreeMap`].
-pub struct OccupiedEntry<'a, K, V, A: AllocatorTryClone = Global> {
+pub struct OccupiedEntry<'a, K, V, A: Allocator = Global> {
     pub(super) handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::KV>,
     pub(super) dormant_map: DormantMutRef<'a, BTreeMap<K, V, A>>,
     // Be invariant in `K` and `V`
     pub(super) _marker: PhantomData<&'a mut (K, V)>,
 }
 
-impl<K, V, A: AllocatorTryClone> VacantEntry<'_, K, V, A> {
+impl<K, V, A: Allocator> VacantEntry<'_, K, V, A> {
     /// Returns a reference to the key that was probed.
     pub(super) fn key(&self) -> &K {
         &self.key
     }
 }
 
-impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
+impl<K, V, A: Allocator> OccupiedEntry<'_, K, V, A> {
     /// Gets a reference to the value in the entry.
     pub(super) fn get(&self) -> &V {
         self.handle.reborrow().into_kv().1
@@ -208,7 +208,7 @@ impl<K, V, A: AllocatorTryClone> OccupiedEntry<'_, K, V, A> {
     clippy::type_complexity,
     reason = "this type declaration is inherently complex"
 )]
-fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
+fn do_two_phase<'a, K, V, A: Allocator>(
     map: &mut DormantMutRef<'a, BTreeMap<K, V, A>>,
     handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
     key: K,
@@ -235,7 +235,7 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
     Ok(new_handle)
 }
 
-impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
+impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
     /// Inserts the value into the vacant slot, performing the full
     /// reserve-and-commit insertion if a split cascade is needed.
     ///

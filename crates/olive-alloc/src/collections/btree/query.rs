@@ -4,9 +4,9 @@ use core::borrow::Borrow;
 
 use super::map::BTreeMap;
 use super::search::SearchResult;
-use crate::alloc::AllocatorTryClone;
+use crate::alloc::Allocator;
 
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Returns true if the map contains no elements.
     pub fn is_empty(&self) -> bool {
         self.length == 0

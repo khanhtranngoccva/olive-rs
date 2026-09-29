@@ -8,9 +8,9 @@ use super::entry::Entry;
 use super::extract_if::{ExtractIf, ExtractIfInner};
 use super::map::BTreeMap;
 
-use crate::alloc::AllocatorTryClone;
+use crate::alloc::Allocator;
 
-impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Removes all entries in this map.
     pub fn clear(&mut self) {
         if self.root.is_some() {
@@ -844,7 +844,7 @@ mod tests {
         for i in 0..N {
             map.try_insert(i, i).unwrap();
         }
-        let rng = TestRng::new(0xDEAD_BEEF_CA_FE_F00D);
+        let rng = TestRng::new(0xDEAD_BEEF_CAFE_F00D);
         for (idx, key) in rng.permuted(0..N).enumerate() {
             assert_eq!(map.remove(&key), Some(key), "wrong value for key {}", key);
             check_tree_invariant(&map);

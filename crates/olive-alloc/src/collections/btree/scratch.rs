@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 use super::node::marker::{Edge, Immut, Leaf};
 use super::node::{B, CAPACITY, Handle, InternalNode, LeafNode, NodeRef};
 use crate::boxed::Box;
-use olive_core::alloc::{AllocError, AllocatorTryClone};
+use olive_core::alloc::{AllocError, Allocator};
 
 /// Worst-case height of a B-tree with branching factor `B` and up to
 /// `usize::MAX` keys, computed as `floor(log_B((n + 1) / 2))` (Wikipedia).
@@ -77,7 +77,7 @@ const _ASSERT_RESERVE_BOUNDS: () = __assert_reserve_bounds();
 ///
 /// Index `depth - 1` holds the next node to pop, so popping walks downward from
 /// the highest reserved level.
-pub(super) struct Nodes<'a, K, V, A: AllocatorTryClone> {
+pub(super) struct Nodes<'a, K, V, A: Allocator> {
     /// Raw pointer to the pre-allocated leaf node.
     leaf: Option<NonNull<LeafNode<K, V>>>,
     /// Fixed-capacity stack of pre-reserved internal node pointers.
@@ -90,11 +90,11 @@ pub(super) struct Nodes<'a, K, V, A: AllocatorTryClone> {
 
 /// Panic-aware drop guard that borrows a [`Nodes`] buffer. If a panic occurs
 /// mid-drop, the guard's `Drop` re-runs [`Nodes::do_drop`] on whatever remains.
-struct DropGuard<'n, 'a, K, V, A: AllocatorTryClone> {
+struct DropGuard<'n, 'a, K, V, A: Allocator> {
     nodes: &'n mut Nodes<'a, K, V, A>,
 }
 
-impl<K, V, A: AllocatorTryClone> Drop for DropGuard<'_, '_, K, V, A> {
+impl<K, V, A: Allocator> Drop for DropGuard<'_, '_, K, V, A> {
     fn drop(&mut self) {
         // Called during unwind after a panic in the main drop loop.
         // Free everything still held. A second panic here aborts the process.
@@ -102,7 +102,7 @@ impl<K, V, A: AllocatorTryClone> Drop for DropGuard<'_, '_, K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> Nodes<'_, K, V, A> {
+impl<K, V, A: Allocator> Nodes<'_, K, V, A> {
     /// Destroys and deallocates every node still held in this buffer.
     /// Slots already taken to `None` are skipped.
     fn do_drop(&mut self) {
@@ -111,7 +111,7 @@ impl<K, V, A: AllocatorTryClone> Nodes<'_, K, V, A> {
     }
 }
 
-impl<K, V, A: AllocatorTryClone> Drop for Nodes<'_, K, V, A> {
+impl<K, V, A: Allocator> Drop for Nodes<'_, K, V, A> {
     fn drop(&mut self) {
         // Arm the guard before doing any work. The guard's `Drop`
         // re-runs `do_drop` on whatever is left if the implementation panics.
@@ -120,7 +120,7 @@ impl<K, V, A: AllocatorTryClone> Drop for Nodes<'_, K, V, A> {
     }
 }
 
-impl<'a, K, V, A: AllocatorTryClone> Nodes<'a, K, V, A> {
+impl<'a, K, V, A: Allocator> Nodes<'a, K, V, A> {
     /// Creates a new empty buffer bound to the given allocator reference.
     pub(super) fn with_alloc(alloc: &'a A) -> Self {
         Self {
@@ -240,7 +240,7 @@ impl<'a, K, V, A: AllocatorTryClone> Nodes<'a, K, V, A> {
 /// Returns [`AllocError`] if allocation of any node fails, or if the required
 /// number of internals would exceed [`MAX_RESERVE_INTERNALS`] (impossible for a
 /// valid tree).
-pub(super) fn reserve_for_insertion<'a, K, V, A: AllocatorTryClone>(
+pub(super) fn reserve_for_insertion<'a, K, V, A: Allocator>(
     handle: Handle<NodeRef<Immut<'_>, K, V, Leaf>, Edge>,
     alloc: &'a A,
 ) -> Result<Nodes<'a, K, V, A>, AllocError> {
