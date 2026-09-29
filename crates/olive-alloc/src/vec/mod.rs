@@ -2332,13 +2332,13 @@ impl<T, A: Allocator> TryExtend<T> for Vec<T, A> {
     }
 }
 
-impl<'s, T, A: Allocator> TryExtendFromSlice<'s, T> for Vec<T, A>
+impl<T, A: Allocator> TryExtendFromSlice<T> for Vec<T, A>
 where
     T: TryClone,
 {
     type Error = TryVecWithCloneError;
 
-    fn try_extend_from_slice(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
+    fn try_extend_from_slice<'s>(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
         if other.is_empty() {
             return Ok(());
         }

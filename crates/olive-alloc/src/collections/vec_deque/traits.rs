@@ -348,7 +348,7 @@ impl<T, A: Allocator> TryExtend<T> for VecDeque<T, A> {
 // TryExtendFromSlice
 // ---------------------------------------------------------------------------
 
-impl<'s, T, A: Allocator> TryExtendFromSlice<'s, T> for VecDeque<T, A>
+impl<T, A: Allocator> TryExtendFromSlice<T> for VecDeque<T, A>
 where
     T: TryClone,
 {
@@ -368,7 +368,7 @@ where
     /// Returns `(&'s [T], TryVecDequeWithCloneError)` if reserving capacity or
     /// cloning an element fails. The returned slice is the remainder beginning
     /// at the first failed element.
-    fn try_extend_from_slice(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
+    fn try_extend_from_slice<'s>(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
         if other.is_empty() {
             return Ok(());
         }

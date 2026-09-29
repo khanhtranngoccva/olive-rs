@@ -48,7 +48,7 @@ pub trait TryExtend<Item>: Sized {
 /// the input slice) and the underlying error. Callers can retry with just the
 /// remainder once memory pressure has eased. A mid-way clone failure does not
 /// trigger a rollback.
-pub trait TryExtendFromSlice<'s, Item>: Sized {
+pub trait TryExtendFromSlice<Item>: Sized {
     /// The error type accompanying the remainder slice.
     type Error;
 
@@ -56,6 +56,8 @@ pub trait TryExtendFromSlice<'s, Item>: Sized {
     ///
     /// # Errors
     /// - The [`Self::Error`] type defined by the implementation.
-    fn try_extend_from_slice(&mut self, other: &'s [Item])
-    -> Result<(), (&'s [Item], Self::Error)>;
+    fn try_extend_from_slice<'s>(
+        &mut self,
+        other: &'s [Item],
+    ) -> Result<(), (&'s [Item], Self::Error)>;
 }

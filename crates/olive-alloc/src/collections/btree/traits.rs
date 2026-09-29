@@ -8,11 +8,14 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
 
+use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 
+use super::TryBTreeMapWithCloneError;
 use super::map::BTreeMap;
-use crate::alloc::{Allocator, AllocatorTryClone, Global};
+use crate::alloc::{AllocError, Allocator, AllocatorTryClone, Global};
 
 // ---------------------------------------------------------------------------
 // Debug
@@ -127,6 +130,71 @@ impl<K: Ord, V> TryDefault for BTreeMap<K, V, Global> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(BTreeMap::new_in(Global))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TryExtend / TryExtendFromSlice
+// ---------------------------------------------------------------------------
+
+impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
+    type Error = AllocError;
+
+    fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
+    where
+        S: ResumableSource<Item = (K, V)>,
+    {
+        let (head, mut inner, _hint) = source.decompose_with_size_hint();
+
+        // Insert the stranded head first, if any.
+        if let Some((k, v)) = head {
+            if let Err((k, v)) = self.try_insert_give_back(k, v) {
+                return Err((Resume::new((k, v), inner), AllocError));
+            }
+        }
+
+        // Insert the remainder one pair at a time. Each insertion is atomic:
+        // on allocation failure the tree is left unmodified and we strand the
+        // current pair in a `Resume` for retry.
+        while let Some((k, v)) = inner.next() {
+            if let Err((k, v)) = self.try_insert_give_back(k, v) {
+                return Err((Resume::new((k, v), inner), AllocError));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<K: Ord + TryClone, V: TryClone, A: Allocator> TryExtendFromSlice<(K, V)>
+    for BTreeMap<K, V, A>
+{
+    type Error = TryBTreeMapWithCloneError;
+
+    fn try_extend_from_slice<'s>(
+        &mut self,
+        other: &'s [(K, V)],
+    ) -> Result<(), (&'s [(K, V)], Self::Error)> {
+        let mut i = 0usize;
+        for (k, v) in other {
+            let cloned_k = k
+                .try_clone()
+                .map_err(|e| (&other[i..], TryBTreeMapWithCloneError::Clone(e)))?;
+            let cloned_v = v
+                .try_clone()
+                .map_err(|e| (&other[i..], TryBTreeMapWithCloneError::Clone(e)))?;
+            match self.try_insert_give_back(cloned_k, cloned_v) {
+                Ok(_) => {
+                    #[allow(clippy::arithmetic_side_effects, reason = "asserted i < other.len()")]
+                    {
+                        i += 1;
+                    }
+                }
+                Err(_) => {
+                    return Err((&other[i..], TryBTreeMapWithCloneError::Alloc(AllocError)));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
