@@ -35,7 +35,7 @@ use core::slice;
 use crate::alloc::{Allocator, Global};
 use crate::boxed::Box;
 use crate::raw_vec::RawVec;
-use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::slice::{TrySliceRangeError, try_range};
@@ -2376,13 +2376,11 @@ impl<T: TryClone, A: AllocatorTryClone> TryClone for Vec<T, A> {
     }
 }
 
-// An empty vector never allocates, so its default construction is infallible.
-// The default allocator is `Global`, matching std's `Vec<T>` (which defaults
-// to the global allocator).
-impl<T> TryDefault for Vec<T, Global> {
+impl<T, A: AllocatorTryDefault> TryDefault for Vec<T, A> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Vec::new())
+        let alloc = A::try_default()?;
+        Ok(Vec::new_in(alloc))
     }
 }
 

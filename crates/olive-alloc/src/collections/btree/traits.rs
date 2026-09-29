@@ -10,7 +10,6 @@ use core::hash::{Hash, Hasher};
 
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
-use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
@@ -117,20 +116,6 @@ impl<K: Ord + TryClone, V: TryClone, A: AllocatorTryClone> TryClone for BTreeMap
             out.try_insert(ck, cv).map_err(TryCloneError::from)?;
         }
         Ok(out)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TryDefault
-// ---------------------------------------------------------------------------
-
-/// An empty `BTreeMap` never allocates, so its default construction is
-/// infallible. The default allocator is [`Global`], matching std's `BTreeMap`
-/// (which defaults to the global allocator).
-impl<K: Ord, V> TryDefault for BTreeMap<K, V, Global> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(BTreeMap::new_in(Global))
     }
 }
 
@@ -546,14 +531,5 @@ mod tests {
         for i in 0..4 {
             assert_eq!(map.get(&i), Some(&i));
         }
-    }
-
-    // --- TryDefault ------------------------------------------------------------
-
-    #[test]
-    fn try_default_creates_empty_map() {
-        let map: BTreeMap<i32, i32, Global> = TryDefault::try_default().expect("default ok");
-        assert!(map.is_empty());
-        assert_eq!(map.len(), 0);
     }
 }

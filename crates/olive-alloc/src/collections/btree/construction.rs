@@ -1,6 +1,10 @@
 //! Construction methods for [`BTreeMap`].
 
-use olive_core::mem::ManuallyDrop;
+use olive_core::{
+    alloc::AllocatorTryDefault,
+    mem::ManuallyDrop,
+    try_traits::{TryDefault, TryDefaultError},
+};
 
 use super::map::BTreeMap;
 use crate::alloc::{Allocator, Global};
@@ -30,6 +34,14 @@ impl<K: Ord, V> BTreeMap<K, V, Global> {
 impl<K: Ord, V> Default for BTreeMap<K, V, Global> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K: Ord, V, A: AllocatorTryDefault> TryDefault for BTreeMap<K, V, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        let alloc = A::try_default()?;
+        Ok(BTreeMap::new_in(alloc))
     }
 }
 
@@ -129,5 +141,14 @@ mod tests {
             assert_eq!(map.get(&i), Some(&(i * 3)), "missing key {}", i);
         }
         drop(map);
+    }
+
+    // --- TryDefault ------------------------------------------------------------
+
+    #[test]
+    fn try_default_creates_empty_map() {
+        let map: BTreeMap<i32, i32, Global> = TryDefault::try_default().expect("default ok");
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
     }
 }

@@ -13,7 +13,7 @@ use super::VecDeque;
 use super::wrapped_index::WrappedIndex;
 use crate::alloc::Global;
 use crate::raw_vec::RawVec;
-use olive_core::alloc::Allocator;
+use olive_core::alloc::{Allocator, AllocatorTryDefault};
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::prelude::TryDefault;
 
@@ -113,11 +113,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 }
 
-// An empty deque never allocates, so its default construction is infallible.
-impl<T> TryDefault for VecDeque<T, Global> {
+impl<T, A: AllocatorTryDefault> TryDefault for VecDeque<T, A> {
     #[inline]
     fn try_default() -> Result<Self, olive_core::prelude::TryDefaultError> {
-        Ok(Self::new())
+        let alloc = A::try_default()?;
+        Ok(Self::new_in(alloc))
     }
 }
 
