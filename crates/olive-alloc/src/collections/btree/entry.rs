@@ -255,11 +255,7 @@ impl<'a, K, V, A: AllocatorTryClone> VacantEntry<'a, K, V, A> {
             None => {
                 // SAFETY: There is no tree yet so no reference to it exists.
                 let map = unsafe { self.dormant_map.reborrow() };
-                let alloc = match map.alloc.try_clone() {
-                    Ok(a) => a,
-                    Err(_) => return Err((self.key, value, AllocError)),
-                };
-                let node_ref = match NodeRef::new_leaf(alloc) {
+                let node_ref = match NodeRef::new_leaf(&*map.alloc) {
                     Ok(a) => a,
                     Err(e) => return Err((self.key, value, e)),
                 };
