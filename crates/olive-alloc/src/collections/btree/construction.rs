@@ -27,6 +27,12 @@ impl<K: Ord, V> BTreeMap<K, V, Global> {
     }
 }
 
+impl<K: Ord, V> Default for BTreeMap<K, V, Global> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
