@@ -225,7 +225,6 @@ impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
             root: Some(right_root),
             length: right_len,
             alloc: ManuallyDrop::new(alloc),
-            reserve_stack: ManuallyDrop::new(None),
         })
     }
 }

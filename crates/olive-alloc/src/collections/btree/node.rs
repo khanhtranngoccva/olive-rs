@@ -40,7 +40,7 @@ use core::num::NonZero;
 use core::ptr::{self, NonNull};
 use core::slice::SliceIndex;
 
-const B: usize = 6;
+pub(super) const B: usize = 6;
 pub(super) const CAPACITY: usize = 2 * B - 1;
 pub(super) const MIN_LEN_AFTER_SPLIT: usize = B - 1;
 pub(super) const KV_IDX_CENTER: usize = B - 1;
@@ -1406,17 +1406,17 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     ///
     /// Unlike the std algorithm, this algorithm works on pre-reserved leaf and internal nodes,
     /// and will panic if there are not enough corresponding nodes.
-    pub fn insert_recursing<A: AllocatorTryClone>(
+    pub fn insert_recursing<'n, A: AllocatorTryClone>(
         self,
         key: K,
         value: V,
-        mut nodes: Nodes<K, V, A>,
+        nodes: &mut Nodes<'n, K, V, A>,
         split_root: impl FnOnce(
             SplitResult<'a, K, V, marker::LeafOrInternal>,
-            Box<InternalNode<K, V>, A>,
+            Box<InternalNode<K, V>, &'n A>,
         ),
     ) -> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV> {
-        let (mut split, handle) = match self.insert(key, value, nodes.leaf.take()) {
+        let (mut split, handle) = match self.insert(key, value, nodes.take_leaf()) {
             // SAFETY: we have finished splitting and can now re-awaken the
             // handle to the inserted element.
             (None, handle) => return unsafe { handle.awaken() },

@@ -2,22 +2,16 @@
 
 use olive_core::mem::ManuallyDrop;
 
-use super::map::{try_clone_err_to_alloc_error, BTreeMap};
+use super::map::BTreeMap;
 use crate::alloc::{AllocatorTryClone, Global};
-use crate::vec::Vec;
 
 impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// Attempts to create an empty `BTreeMap` with the given allocator.
     pub fn new_in(alloc: A) -> Self {
-        let alloc_clone = alloc.try_clone().map_err(try_clone_err_to_alloc_error).ok();
         Self {
             root: None,
             length: 0,
             alloc: ManuallyDrop::new(alloc),
-            // Lazily clones the alloc for one more chance.
-            reserve_stack: ManuallyDrop::new(
-                alloc_clone.map(|alloc_clone| Vec::new_in(alloc_clone)),
-            ),
         }
     }
 }

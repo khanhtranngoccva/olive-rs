@@ -587,7 +587,6 @@ impl<K, V, A: AllocatorTryClone> IntoIterator for BTreeMap<K, V, A> {
 
     fn into_iter(self) -> Self::IntoIter {
         let mut me = ManuallyDrop::new(self);
-        let _reserve_stack = unsafe { ManuallyDrop::take(&mut me.reserve_stack) };
         if let Some(root) = me.root.take() {
             let full_range = root.into_dying().full_range();
             IntoIter {

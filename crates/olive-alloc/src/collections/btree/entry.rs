@@ -19,7 +19,6 @@
 
 use crate::alloc::{AllocError, AllocatorTryClone, Global};
 use crate::collections::btree::scratch;
-use crate::vec::Vec;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 
@@ -216,30 +215,16 @@ fn do_two_phase<'a, K, V, A: AllocatorTryClone>(
     value: V,
 ) -> Result<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>, (K, V, AllocError)> {
     let immut_reborrow = handle.reborrow();
-    // SAFETY: we reborrow the map only to access the reserve stack and
-    // extract the allocator. The borrow ends before insert_recursing is
-    // called, so the split_root closure can safely reborrow the map again.
-    let nodes = {
-        let map_ref = unsafe { map.reborrow() };
-        if map_ref.reserve_stack.is_none() {
-            let cloned = match map_ref.alloc.try_clone() {
-                Ok(allocator) => allocator,
-                Err(_) => return Err((key, value, AllocError)),
-            };
-            *map_ref.reserve_stack = Some(Vec::new_in(cloned));
-        }
-        let stack = map_ref
-            .reserve_stack
-            .as_mut()
-            .expect("reserve stack is just initialized");
-        match scratch::reserve_for_insertion(stack, immut_reborrow, &map_ref.alloc) {
-            Ok(nodes) => nodes,
-            Err(e) => return Err((key, value, e)),
-        }
+    // Reserve phase: allocate all needed nodes with a borrowed allocator reference.
+    // Zero allocator clones are performed. On any allocation failure the partially
+    // allocated nodes are dropped and the untouched tree is returned unchanged.
+    let map_ref = unsafe { map.reborrow() };
+    let mut nodes = match scratch::reserve_for_insertion(immut_reborrow, &*map_ref.alloc) {
+        Ok(nodes) => nodes,
+        Err(e) => return Err((key, value, e)),
     };
-    // At this point, no mutable borrow of the map is alive.
-    // The `nodes` struct owns all its data and does not reference the map.
-    let new_handle = handle.insert_recursing(key, value, nodes, |ins, new_node| {
+    // Commit phase: perform the splits bottom-up using the reserved nodes.
+    let new_handle = handle.insert_recursing(key, value, &mut nodes, |ins, new_node| {
         // SAFETY: Pushing a new root node doesn't invalidate
         // handles to existing nodes.
         let map = unsafe { map.reborrow() };

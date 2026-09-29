@@ -9,7 +9,6 @@ use super::extract_if::{ExtractIf, ExtractIfInner};
 use super::map::BTreeMap;
 
 use crate::alloc::AllocatorTryClone;
-use crate::vec::Vec;
 
 impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     /// Removes all entries in this map.
@@ -23,7 +22,6 @@ impl<K: Ord, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
                 root: self.root.take(),
                 length: self.length,
                 alloc: ManuallyDrop::new(alloc),
-                reserve_stack: ManuallyDrop::new(Some(Vec::new_in(alloc))),
             };
             drop(ephemeral);
         }

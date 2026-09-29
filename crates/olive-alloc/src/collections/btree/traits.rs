@@ -360,14 +360,14 @@ mod tests {
         use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
 
-        // Give the allocator enough budget to build a small map (each insert
-        // into an empty tree clones the alloc once for the leaf node). Then
-        // exhaust the remaining budget so the final `try_clone` call fails.
+        // Give the allocator enough budget to build a small map (an insert into
+        // an empty tree clones the alloc once for the leaf node). Then exhaust
+        // the remaining budget so the final `try_clone` call fails.
         let budget = Arc::new(CloneBudget::new(2));
         let alloc = FlakyCloneAlloc::new(budget.clone());
         let mut map: BTreeMap<i32, i32, FlakyCloneAlloc> = BTreeMap::new_in(alloc);
-        // First insert: new_in consumed 1 clone (for reserve_stack), this
-        // insert needs another clone for the leaf → uses the last unit.
+        // First insert into an empty tree clones the alloc once for the leaf,
+        // leaving 1 unit of budget. The try_clone below needs one more and fails.
         map.try_insert(1, 10).unwrap();
 
         // Budget is now exhausted; cloning the allocator must fail.
