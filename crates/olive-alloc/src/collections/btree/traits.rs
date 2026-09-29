@@ -12,6 +12,7 @@ use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
+use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::TryBTreeMapWithCloneError;
 use super::map::BTreeMap;
@@ -130,6 +131,45 @@ impl<K: Ord, V> TryDefault for BTreeMap<K, V, Global> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(BTreeMap::new_in(Global))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TryFromIterator
+// ---------------------------------------------------------------------------
+
+impl<K: Ord, V> TryFromIterator<(K, V)> for BTreeMap<K, V, Global> {
+    type Error = AllocError;
+
+    /// Fallibly collect an iterator of key-value pairs into a [`BTreeMap`] on
+    /// the default [`Global`] allocator. For a custom allocator use
+    /// [`BTreeMap::try_from_iter_in`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if an internal allocation fails during insertion.
+    fn try_from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Result<Self, Self::Error> {
+        Self::try_from_iter_in(iter, Global)
+    }
+}
+
+impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
+    /// Fallibly collects an iterator of key-value pairs into a [`BTreeMap`] on
+    /// the given allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if reserving capacity for an incoming element
+    /// fails. On failure the partially constructed map is discarded.
+    pub fn try_from_iter_in<I: IntoIterator<Item = (K, V)>>(
+        iter: I,
+        alloc: A,
+    ) -> Result<Self, AllocError> {
+        let mut map = Self::new_in(alloc);
+        for (k, v) in iter {
+            map.try_insert(k, v)?;
+        }
+        Ok(map)
     }
 }
 
