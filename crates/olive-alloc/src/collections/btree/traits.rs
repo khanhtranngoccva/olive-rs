@@ -226,7 +226,10 @@ impl<K: Ord + TryClone, V: TryClone, A: Allocator> TryExtendFromSlice<(K, V)>
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+
     use super::*;
+    use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use std::format;
 
     // --- Debug ---------------------------------------------------------------
@@ -491,7 +494,7 @@ mod tests {
         );
 
         alloc.drain();
-
+        // DEBUG: check map state before extend
         let result = map.try_clone();
         assert!(
             result.is_err(),
@@ -531,5 +534,372 @@ mod tests {
         for i in 0..4 {
             assert_eq!(map.get(&i), Some(&i));
         }
+    }
+
+    // --- TryFromIterator ------------------------------------------------------
+
+    #[test]
+    fn try_from_iterator_builds_sorted_map() {
+        // Insertion order is deliberately scrambled; the result must be keyed
+        // in ascending order regardless of iterator order.
+        let pairs: std::vec::Vec<(u32, u32)> = [3, 0, 5, 1, 4, 2]
+            .into_iter()
+            .map(|k| (k, k * 10))
+            .collect();
+        let map: BTreeMap<u32, u32> =
+            TryFromIterator::try_from_iter(pairs.into_iter()).expect("iter ok");
+        assert_eq!(map.len(), 6);
+        let keys: std::vec::Vec<u32> = map.keys().copied().collect();
+        assert_eq!(keys, [0, 1, 2, 3, 4, 5]);
+        for (k, v) in map.iter() {
+            assert_eq!(*v, *k * 10);
+        }
+    }
+
+    #[test]
+    fn try_from_iterator_empty_is_empty() {
+        let map: BTreeMap<u32, u32> =
+            TryFromIterator::try_from_iter(std::iter::empty()).expect("ok");
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn try_from_iterator_duplicate_keys_last_wins() {
+        // Mirrors `Extend` semantics: a repeated key keeps its final value.
+        let pairs = [(1u32, 100u32), (2, 200), (1, 111)];
+        let map: BTreeMap<u32, u32> =
+            TryFromIterator::try_from_iter(pairs.into_iter()).expect("iter ok");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&1), Some(&111));
+        assert_eq!(map.get(&2), Some(&200));
+    }
+
+    #[test]
+    fn try_from_iterator_alloc_failure_leaves_nothing_behind() {
+        use crate::test_helpers::FailAlloc;
+
+        let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
+        let (resume, _err) = map
+            .try_extend([(1u32, 10u32), (2, 20)].into_iter())
+            .expect_err("allocation should fail");
+        assert!(map.is_empty(), "no pair may survive a failed insert");
+        // The resume carries the unconsumed remainder plus any stranded
+        // element, so it must not be empty.
+        let remaining: std::vec::Vec<(u32, u32)> = resume.into_remainder().collect();
+        assert!(
+            !remaining.is_empty(),
+            "resume must carry the unconsumed tail"
+        );
+    }
+
+    #[test]
+    fn try_collect_into_btreemap_via_trait() {
+        // Exercises the blanket `TryCollect` wiring end-to-end.
+        use olive_core::try_traits::try_collect::TryCollect;
+
+        let map: BTreeMap<u32, u32> = (0..5u32)
+            .map(|k| (k, k + 100))
+            .try_collect()
+            .expect("collect ok");
+        assert_eq!(map.len(), 5);
+        for k in 0..5u32 {
+            assert_eq!(map.get(&k), Some(&(k + 100)));
+        }
+    }
+
+    // --- TryExtend ------------------------------------------------------------
+
+    #[test]
+    fn try_extend_success_merges_and_overwrites() {
+        let mut map = BTreeMap::new();
+        map.try_insert(1, 100).unwrap();
+        map.try_insert(2, 200).unwrap();
+        map.try_extend([(2u32, 201u32), (3, 300)].into_iter())
+            .expect("extend ok");
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get(&1), Some(&100));
+        assert_eq!(map.get(&2), Some(&201), "existing key must be overwritten");
+        assert_eq!(map.get(&3), Some(&300));
+    }
+
+    #[test]
+    fn try_extend_retry_recovers() {
+        let start = Resume::new((1u32, 10u32), [(2, 20), (3, 30)].into_iter());
+        let mut map = BTreeMap::new();
+        map.try_extend(start).expect("retry ok");
+        assert_eq!(map.len(), 3);
+        for (k, v) in map.iter() {
+            assert_eq!(*v, *k * 10);
+        }
+    }
+
+    #[test]
+    fn try_extend_partial_commit_then_oom_strands_one_pair() {
+        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+
+        // Build a populated map under a shared budget, then drain it so the next
+        // insertion OOMs mid-extend. Because `try_extend` commits each successful
+        // insert irreversibly, a partial merge is expected: some new keys land,
+        // exactly one pair is stranded in the resume, and nothing is lost or
+        // duplicated across map + stranded pair.
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut m: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        for i in (0..40u32).step_by(2) {
+            let kid = ledger.allocate();
+            ledger.register(kid);
+            let vid = ledger.allocate();
+            ledger.register(vid);
+            m.try_insert(
+                TrackedItem {
+                    id: kid,
+                    ledger: ledger.clone(),
+                    inner: i,
+                },
+                TrackedItem {
+                    id: vid,
+                    ledger: ledger.clone(),
+                    inner: i * 100,
+                },
+            )
+            .unwrap();
+        }
+        let len_before = m.len();
+
+        // Extend with 40 fresh odd keys; the first insert that needs a new node
+        // will OOM, stranding its pair.
+        let mut src_pairs: std::vec::Vec<(TrackedItem<u32>, TrackedItem<u32>)> =
+            std::vec::Vec::new();
+        for i in (1..80u32).step_by(2) {
+            let kid = ledger.allocate();
+            ledger.register(kid);
+            let vid = ledger.allocate();
+            ledger.register(vid);
+            src_pairs.push((
+                TrackedItem {
+                    id: kid,
+                    ledger: ledger.clone(),
+                    inner: i,
+                },
+                TrackedItem {
+                    id: vid,
+                    ledger: ledger.clone(),
+                    inner: i * 100,
+                },
+            ));
+        }
+
+        // Attempt to fail mid-extend. This figure is an educated guess - allocation demand depends on the shape
+        // and not be easily predicted. However, 40 items easily require allocating more than 1 node.
+        alloc.set_budget(1);
+
+        let (resume, _e) = m
+            .try_extend(src_pairs.into_iter())
+            .expect_err("OOM mid-extend");
+
+        // Map must remain a valid, sorted tree.
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+        assert!(m.len() >= len_before, "successful inserts are irreversible");
+
+        // The stranded pair is carried by the resume and absent from the map.
+        let stranded: std::vec::Vec<(TrackedItem<u32>, TrackedItem<u32>)> =
+            resume.into_remainder().collect();
+        assert!(
+            !stranded.is_empty(),
+            "resume must carry at least the stranded pair"
+        );
+        for (sk, _) in &stranded {
+            assert!(m.get(sk).is_none(), "stranded key must not be committed");
+        }
+
+        // No double-drop / leak across the whole failure path.
+        drop(m);
+        drop(stranded);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped: {:?}",
+            ledger.double_dropped()
+        );
+    }
+
+    // --- TryExtendFromSlice ---------------------------------------------------
+
+    #[test]
+    fn try_extend_from_slice_success() {
+        let mut map = BTreeMap::new();
+        map.try_insert(9, 90).unwrap();
+        map.try_extend_from_slice(&[(1u32, 10u32), (5, 50), (9, 99)])
+            .expect("slice extend ok");
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get(&1), Some(&10));
+        assert_eq!(map.get(&5), Some(&50));
+        assert_eq!(map.get(&9), Some(&99), "existing key must be overwritten");
+    }
+
+    #[test]
+    fn try_extend_from_slice_empty_is_noop() {
+        let mut map = BTreeMap::new();
+        map.try_extend_from_slice(&[] as &[(u32, u32)]).expect("ok");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn try_extend_from_slice_first_alloc_failure_carries_whole_tail() {
+        use crate::test_helpers::FailAlloc;
+
+        let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
+        let src: &[(u32, u32)] = &[(1, 10), (2, 20), (3, 30)];
+        let (rest, _e) = map
+            .try_extend_from_slice(src)
+            .expect_err("allocation should fail");
+        assert!(map.is_empty(), "nothing may be committed under total OOM");
+        assert!(
+            !rest.is_empty(),
+            "remainder must point at the unprocessed tail"
+        );
+        assert_eq!(rest.len(), 3, "the whole slice remains unprocessed");
+    }
+
+    #[test]
+    fn try_extend_from_slice_clone_failure_returns_tail() {
+        use crate::test_helpers::FlakyClone;
+
+        // `FlakyClone::new(0)` never clones successfully, so the very first
+        // source element's value clone fails. The returned tail must point at the
+        // start of the slice (index 0) and nothing may be committed.
+        let mut m: BTreeMap<u32, FlakyClone> = BTreeMap::new();
+        let src: &[(u32, FlakyClone)] = &[
+            (1, FlakyClone::new(0)),
+            (2, FlakyClone::new(0)),
+            (3, FlakyClone::new(0)),
+        ];
+        let (rest, e) = m
+            .try_extend_from_slice(src)
+            .expect_err("first clone should fail");
+        assert!(matches!(
+            e,
+            TryBTreeMapWithCloneError::Clone(TryCloneError::Other(_))
+        ));
+        assert!(
+            m.is_empty(),
+            "nothing may be committed before a failed clone"
+        );
+        assert_eq!(rest.len(), 3, "the whole slice remains unprocessed");
+    }
+
+    #[test]
+    fn try_extend_from_slice_commits_prefix_before_clone_failure() {
+        use crate::test_helpers::FlakyClone;
+
+        // Elements 0 and 1 clone cleanly (their values have headroom); element 2
+        // has no headroom and its value clone fails. Only the successful prefix
+        // may be committed, and the tail must begin exactly at the failing element.
+        let mut m: BTreeMap<u32, FlakyClone> = BTreeMap::new();
+        let src: &[(u32, FlakyClone)] = &[
+            (
+                1,
+                FlakyClone {
+                    count: 0,
+                    threshold: 5,
+                },
+            ),
+            (
+                2,
+                FlakyClone {
+                    count: 0,
+                    threshold: 5,
+                },
+            ),
+            (
+                3,
+                FlakyClone {
+                    count: 5,
+                    threshold: 5,
+                },
+            ),
+        ];
+        let (rest, e) = m
+            .try_extend_from_slice(src)
+            .expect_err("third clone should fail");
+        assert!(matches!(
+            e,
+            TryBTreeMapWithCloneError::Clone(TryCloneError::Other(_))
+        ));
+        assert_eq!(rest.len(), 1, "tail must start at the failing element");
+        assert_eq!(m.len(), 2, "only the successful prefix is committed");
+    }
+
+    #[test]
+    fn try_extend_from_slice_commits_prefix_before_alloc_failure() {
+        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use std::sync::Arc;
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = Arc::new(Ledger::new());
+        let mut map: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        for i in 0..10u32 {
+            map.try_insert(
+                TrackedItem::construct(&ledger, i),
+                TrackedItem::construct(&ledger, i * 100),
+            )
+            .unwrap();
+        }
+        assert_eq!(map.len(), 10);
+
+        let src: [(TrackedItem<u32>, TrackedItem<u32>); 2] = [
+            (
+                TrackedItem::construct(&ledger, 10),
+                TrackedItem::construct(&ledger, 1000),
+            ),
+            (
+                TrackedItem::construct(&ledger, 11),
+                TrackedItem::construct(&ledger, 1000),
+            ),
+        ];
+
+        alloc.drain();
+
+        let result = map.try_extend_from_slice(&src);
+        assert!(
+            result.is_err(),
+            "expected an allocation failure during the split"
+        );
+        let (rest, e) = result.unwrap_err();
+        assert!(
+            matches!(e, TryBTreeMapWithCloneError::Alloc(_)),
+            "failure must be an allocation error, got {:?}",
+            e
+        );
+        assert_eq!(rest.len(), 1, "the slice has one unprocessed element");
+
+        // The map survived the failed split, but has an additional element.
+        assert_eq!(map.len(), 11);
+        check_tree_invariant(&map);
+        check_ascending_keys(&map);
+
+        // Drop everything — the map plus the returned tail — and verify each
+        // allocated id dies exactly once: no leak from the partially-built
+        // right tree, no double-drop of the stranded clones.
+        drop(map);
+        drop(src);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped: {:?}",
+            ledger.double_dropped()
+        );
     }
 }

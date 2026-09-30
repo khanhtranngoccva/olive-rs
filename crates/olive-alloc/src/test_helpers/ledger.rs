@@ -30,6 +30,21 @@ impl<C> Drop for TrackedItem<C> {
     }
 }
 
+impl<C> TrackedItem<C> {
+    /// Constructs a tracked item with the next available id from `ledger`,
+    /// registering it as live in one step. Convenience wrapper around
+    /// [`Ledger::allocate`] + [`Ledger::register`].
+    pub fn construct(ledger: &Arc<Ledger>, inner: C) -> Self {
+        let id = ledger.allocate();
+        ledger.register(id);
+        Self {
+            id,
+            ledger: ledger.clone(),
+            inner,
+        }
+    }
+}
+
 impl<C: TryClone> TryClone for TrackedItem<C> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         // Gate on the inner first so a failed clone never mints a stray id.
