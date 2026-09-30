@@ -7,6 +7,7 @@
 
 pub mod allocators;
 pub mod counters;
+pub mod default;
 pub mod ledger;
 pub mod rng;
 // `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
@@ -15,6 +16,7 @@ pub mod rng;
 // name in current tests, hence the allow.
 #[allow(unused_imports)]
 pub use counters::CloneCounter;
+pub use default::NoDefault;
 #[allow(unused_imports)]
 pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
 pub use rng::TestRng;

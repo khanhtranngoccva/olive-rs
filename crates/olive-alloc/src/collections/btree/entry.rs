@@ -508,3 +508,391 @@ fn do_two_phase<'a, K, V, A: Allocator>(
     });
     Ok(new_handle)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use core::convert::Infallible;
+
+    use super::super::map::BTreeMap;
+    use super::{Entry, OccupiedEntry, VacantEntry};
+    use crate::alloc::Global;
+    use crate::collections::btree::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
+    use crate::test_helpers::NoDefault;
+
+    // An error type for and_try_modify / or_try_insert_with closures.
+    #[derive(Debug, PartialEq, Eq)]
+    struct MyErr(u8);
+    impl core::fmt::Display for MyErr {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "MyErr({})", self.0)
+        }
+    }
+    impl core::error::Error for MyErr {}
+
+    // ── Entry::and_modify / and_try_modify ────────────────────────────────────
+
+    #[test]
+    fn and_modify_changes_value_when_occupied() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        map.entry(1).and_modify(|v| *v += 5);
+        assert_eq!(map.get(&1), Some(&15));
+    }
+
+    #[test]
+    fn and_modify_is_noop_when_vacant() {
+        let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        map.entry(42).and_modify(|v| *v += 5);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn and_try_modify_applies_closure_on_success() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        let _entry = map
+            .entry(1)
+            .and_try_modify(|v| -> Result<(), Infallible> {
+                *v *= 2;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(map.get(&1), Some(&20));
+    }
+
+    #[test]
+    fn and_try_modify_returns_error_from_closure() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        let res: Result<_, MyErr> = map.entry(1).and_try_modify(|_| Err(MyErr(7)));
+        assert_eq!(res.err(), Some(MyErr(7)));
+        // Value untouched on error.
+        assert_eq!(map.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn and_try_modify_ok_when_vacant() {
+        let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        let entry = map
+            .entry(99)
+            .and_try_modify(|_| -> Result<(), Infallible> { Ok(()) })
+            .unwrap();
+        assert!(matches!(entry, Entry::Vacant(_)));
+        assert!(map.is_empty());
+    }
+
+    // ── Entry::key ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn key_of_both_variants() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(3, "three").unwrap();
+        assert_eq!(map.entry(3).key(), &3);
+        assert_eq!(map.entry(4).key(), &4);
+    }
+
+    // ── Entry::try_insert_entry ───────────────────────────────────────────────
+
+    #[test]
+    fn try_insert_entry_into_vacant_slot() {
+        let mut map = BTreeMap::new_in(Global);
+        let oe = map.entry(1).try_insert_entry(100).unwrap();
+        assert_eq!(oe.key(), &1);
+        assert_eq!(oe.get(), &100);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&100));
+    }
+
+    #[test]
+    fn try_insert_entry_replaces_existing_value() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 1).unwrap();
+        let oe = map.entry(1).try_insert_entry(2).unwrap();
+        assert_eq!(oe.get(), &2);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&2));
+    }
+
+    #[test]
+    fn try_insert_entry_across_leaf_splits() {
+        // CAPACITY is 11 (B = 6), so the 12th insert forces a leaf split.
+        let mut map = BTreeMap::new_in(Global);
+        for i in 0..11 {
+            map.entry(i).try_insert_entry(i * 10).unwrap();
+        }
+        let oe = map.entry(11).try_insert_entry(110).unwrap();
+        assert_eq!(oe.get(), &110);
+        assert_eq!(map.len(), 12);
+        for i in 0..12 {
+            assert_eq!(map.get(&i), Some(&(i * 10)));
+        }
+    }
+
+    // ── Entry::or_try_default ─────────────────────────────────────────────────
+
+    #[test]
+    fn or_try_default_returns_existing_value() {
+        let mut map: BTreeMap<i32, u64> = BTreeMap::new_in(Global);
+        map.try_insert(1, 42).unwrap();
+        let v = map.entry(1).or_try_default().unwrap();
+        assert_eq!(*v, 42);
+    }
+
+    #[test]
+    fn or_try_default_constructs_and_inserts() {
+        let mut map: BTreeMap<i32, u64> = BTreeMap::new_in(Global);
+        let v = map.entry(1).or_try_default().unwrap();
+        assert_eq!(*v, 0);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&0));
+    }
+
+    #[test]
+    fn or_try_default_propagates_construction_failure() {
+        let mut map: BTreeMap<i32, NoDefault> = BTreeMap::new_in(Global);
+        let err = map.entry(1).or_try_default().unwrap_err();
+        assert!(matches!(err, TryBTreeMapEntryWithDefaultError::Default(_)));
+        assert!(map.is_empty());
+    }
+
+    // ── Entry::or_try_insert ──────────────────────────────────────────────────
+
+    #[test]
+    fn or_try_insert_keeps_existing_value() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 7).unwrap();
+        let v = map.entry(1).or_try_insert(99).unwrap();
+        assert_eq!(*v, 7);
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn or_try_insert_inserts_when_vacant() {
+        let mut map = BTreeMap::new_in(Global);
+        let v = map.entry(1).or_try_insert(99).unwrap();
+        assert_eq!(*v, 99);
+        assert_eq!(map.get(&1), Some(&99));
+    }
+
+    // FIXME: need AllocError test case here
+
+    // ── Entry::or_try_insert_with ─────────────────────────────────────────────
+
+    #[test]
+    fn or_try_insert_with_skips_closure_when_occupied() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 5).unwrap();
+        let v = map
+            .entry(1)
+            .or_try_insert_with(|| -> Result<u32, MyErr> {
+                panic!("closure must not run when occupied")
+            })
+            .unwrap();
+        assert_eq!(*v, 5);
+    }
+
+    #[test]
+    fn or_try_insert_with_computes_and_inserts() {
+        let mut map = BTreeMap::new_in(Global);
+        let v = map
+            .entry(1)
+            .or_try_insert_with(|| -> Result<u32, Infallible> { Ok(123) })
+            .unwrap();
+        assert_eq!(*v, 123);
+        assert_eq!(map.get(&1), Some(&123));
+    }
+
+    #[test]
+    fn or_try_insert_with_reports_closure_error() {
+        let mut map = BTreeMap::new_in(Global);
+        let err = map
+            .entry(1)
+            .or_try_insert_with(|| -> Result<u32, MyErr> { Err(MyErr(3)) })
+            .unwrap_err();
+        assert!(matches!(err, TryBTreeMapEntryWithError::Closure(MyErr(3))));
+        assert!(map.is_empty());
+    }
+
+    // FIXME: should have a test case with allocation error
+
+    // ── Entry::or_try_insert_with_key ─────────────────────────────────────────
+
+    #[test]
+    fn or_try_insert_with_key_passes_key_to_closure() {
+        let mut map = BTreeMap::new_in(Global);
+        let v = map
+            .entry(10)
+            .or_try_insert_with_key(|k| -> Result<u32, Infallible> { Ok(*k * 2) })
+            .unwrap();
+        assert_eq!(*v, 20);
+        assert_eq!(map.get(&10), Some(&20));
+    }
+
+    #[test]
+    fn or_try_insert_with_key_skips_closure_when_occupied() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(10, 5).unwrap();
+        let v = map
+            .entry(10)
+            .or_try_insert_with_key(|_| -> Result<u32, MyErr> {
+                panic!("closure must not run when occupied")
+            })
+            .unwrap();
+        assert_eq!(*v, 5);
+    }
+
+    #[test]
+    fn or_try_insert_with_key_reports_closure_error() {
+        let mut map = BTreeMap::new_in(Global);
+        let err = map
+            .entry(10)
+            .or_try_insert_with_key(|_| -> Result<u32, MyErr> { Err(MyErr(9)) })
+            .unwrap_err();
+        assert!(matches!(err, TryBTreeMapEntryWithError::Closure(MyErr(9))));
+        assert!(map.is_empty());
+    }
+
+    // FIXME: need AllocError test case here
+
+    // ── VacantEntry::try_insert / try_insert_entry ────────────────────────────
+
+    #[test]
+    fn vacant_try_insert_returns_mut_ref() {
+        let mut map = BTreeMap::new_in(Global);
+        if let Entry::Vacant(v) = map.entry(1) {
+            let val = v.try_insert(37).unwrap();
+            assert_eq!(*val, 37);
+        } else {
+            panic!("expected vacant entry");
+        }
+        assert_eq!(map.get(&1), Some(&37));
+    }
+
+    #[test]
+    fn vacant_try_insert_into_empty_map_creates_root() {
+        let mut map = BTreeMap::new_in(Global);
+        assert!(map.is_empty());
+        if let Entry::Vacant(v) = map.entry(0) {
+            let val = v.try_insert(0).unwrap();
+            assert_eq!(*val, 0);
+        } else {
+            panic!("expected vacant entry");
+        }
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn vacant_try_insert_triggers_split() {
+        let mut map = BTreeMap::new_in(Global);
+        for i in 0..11 {
+            map.entry(i).try_insert_entry(i).unwrap();
+        }
+        if let Entry::Vacant(v) = map.entry(11) {
+            let val = v.try_insert(11).unwrap();
+            assert_eq!(*val, 11);
+        } else {
+            panic!("expected vacant entry");
+        }
+        assert_eq!(map.len(), 12);
+        for i in 0..12 {
+            assert_eq!(map.get(&i), Some(&i));
+        }
+    }
+
+    #[test]
+    fn vacant_try_insert_entry_returns_occupied_entry() {
+        let mut map = BTreeMap::new_in(Global);
+        if let Entry::Vacant(v) = map.entry(5) {
+            let oe = v.try_insert_entry(50).unwrap();
+            assert_eq!(oe.key(), &5);
+            assert_eq!(oe.get(), &50);
+        } else {
+            panic!("expected vacant entry");
+        }
+        assert_eq!(map.get(&5), Some(&50));
+    }
+
+    // FIXME: need AllocError test case here
+
+    // ── OccupiedEntry::insert / into_mut / remove ─────────────────────────────
+
+    #[test]
+    fn occupied_insert_replaces_and_returns_old() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 1).unwrap();
+        if let Entry::Occupied(mut o) = map.entry(1) {
+            let old = o.insert(2);
+            assert_eq!(old, 1);
+            assert_eq!(*o.get(), 2);
+        } else {
+            panic!("expected occupied entry");
+        }
+        assert_eq!(map.get(&1), Some(&2));
+    }
+
+    // FIXME: missing get_mut
+
+    #[test]
+    fn occupied_into_mut_gives_live_reference() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        if let Entry::Occupied(o) = map.entry(1) {
+            *o.into_mut() += 1;
+        }
+        assert_eq!(map.get(&1), Some(&11));
+    }
+
+    #[test]
+    fn occupied_remove_entry_removes_pair() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 100).unwrap();
+        map.try_insert(2, 200).unwrap();
+        if let Entry::Occupied(o) = map.entry(1) {
+            let (k, v) = o.remove_entry();
+            assert_eq!((k, v), (1, 100));
+        }
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), None);
+        assert_eq!(map.get(&2), Some(&200));
+    }
+
+    #[test]
+    fn occupied_remove_returns_only_value() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 100).unwrap();
+        if let Entry::Occupied(o) = map.entry(1) {
+            assert_eq!(o.remove(), 100);
+        }
+        assert!(map.is_empty());
+    }
+
+    // ── VacantEntry::key / into_key ───────────────────────────────────────────
+
+    #[test]
+    fn vacant_key_and_into_key() {
+        let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        match map.entry(7) {
+            Entry::Vacant(v) => {
+                assert_eq!(v.key(), &7);
+                assert_eq!(v.into_key(), 7);
+            }
+            _ => panic!("expected vacant entry"),
+        }
+        assert!(map.is_empty());
+    }
+
+    // ── Type-level sanity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn entry_variant_types_are_public() {
+        let mut map: BTreeMap<i32, u32> = BTreeMap::new_in(Global);
+        let _: Option<VacantEntry<i32, u32>> = None;
+        let _: Option<OccupiedEntry<i32, u32>> = None;
+        match map.entry(1) {
+            Entry::Vacant(_) | Entry::Occupied(_) => {}
+        }
+    }
+}

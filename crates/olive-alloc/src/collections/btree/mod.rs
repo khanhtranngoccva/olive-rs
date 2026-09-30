@@ -27,6 +27,7 @@ mod set_val;
 mod split;
 mod traits;
 
+pub use entry::{Entry, OccupiedEntry, VacantEntry};
 pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
 pub use map::BTreeMap;
@@ -121,7 +122,10 @@ impl fmt::Display for TryBTreeMapEntryWithDefaultError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Default(e) => write!(f, "BTreeMap entry operation failed: {e}"),
-            Self::Alloc(_) => write!(f, "BTreeMap entry operation failed: memory allocation failed"),
+            Self::Alloc(_) => write!(
+                f,
+                "BTreeMap entry operation failed: memory allocation failed"
+            ),
         }
     }
 }
@@ -174,7 +178,10 @@ impl<E: fmt::Display> fmt::Display for TryBTreeMapEntryWithError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Closure(e) => write!(f, "BTreeMap entry operation failed: {e}"),
-            Self::Alloc(_) => write!(f, "BTreeMap entry operation failed: memory allocation failed"),
+            Self::Alloc(_) => write!(
+                f,
+                "BTreeMap entry operation failed: memory allocation failed"
+            ),
         }
     }
 }
@@ -187,4 +194,3 @@ impl<E> From<AllocError> for TryBTreeMapEntryWithError<E> {
         Self::Alloc(err)
     }
 }
-
