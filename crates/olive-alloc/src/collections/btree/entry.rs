@@ -516,6 +516,8 @@ mod tests {
     extern crate std;
     use core::convert::Infallible;
 
+    use olive_core::alloc::AllocError;
+
     use super::super::map::BTreeMap;
     use super::{Entry, OccupiedEntry, VacantEntry};
     use crate::alloc::Global;
@@ -677,7 +679,27 @@ mod tests {
         assert_eq!(map.get(&1), Some(&99));
     }
 
-    // FIXME: need AllocError test case here
+    #[test]
+    fn or_try_insert_alloc_error_on_split() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the sole leaf to CAPACITY (11) so the next insert forces a split.
+        for i in 0..11i32 {
+            map.entry(i).or_try_insert((i * 10) as u32).unwrap();
+        }
+        assert_eq!(map.len(), 11);
+
+        // Exhaust the budget so the split's allocation fails mid-insertion.
+        alloc.drain();
+
+        let err = map.entry(11).or_try_insert(110).unwrap_err();
+        assert!(matches!(err, AllocError));
+        // Tree left unmodified: the failed pair is not present.
+        assert_eq!(map.len(), 11);
+        assert_eq!(map.get(&11), None);
+    }
 
     // ── Entry::or_try_insert_with ─────────────────────────────────────────────
 
@@ -755,7 +777,27 @@ mod tests {
         assert!(map.is_empty());
     }
 
-    // FIXME: need AllocError test case here
+    #[test]
+    fn or_try_insert_with_key_alloc_error_on_split() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        for i in 0..11i32 {
+            map.entry(i).or_try_insert((i * 10) as u32).unwrap();
+        }
+        assert_eq!(map.len(), 11);
+
+        alloc.drain();
+
+        let err = map
+            .entry(11)
+            .or_try_insert_with_key(|k| -> Result<u32, Infallible> { Ok((*k * 10) as u32) })
+            .unwrap_err();
+        assert!(matches!(err, TryBTreeMapEntryWithError::Alloc(_)));
+        assert_eq!(map.len(), 11);
+        assert_eq!(map.get(&11), None);
+    }
 
     // ── VacantEntry::try_insert / try_insert_entry ────────────────────────────
 
@@ -815,7 +857,25 @@ mod tests {
         assert_eq!(map.get(&5), Some(&50));
     }
 
-    // FIXME: need AllocError test case here
+    #[test]
+    fn vacant_try_insert_entry_alloc_error_on_split() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        for i in 0..11i32 {
+            map.entry(i).try_insert_entry((i * 10) as u32).unwrap();
+        }
+        assert_eq!(map.len(), 11);
+
+        alloc.drain();
+
+        let (k, v, e) = map.entry(11).try_insert_entry(110).unwrap_err();
+        assert_eq!((k, v), (11, 110));
+        assert!(matches!(e, AllocError));
+        assert_eq!(map.len(), 11);
+        assert_eq!(map.get(&11), None);
+    }
 
     // ── OccupiedEntry::insert / into_mut / remove ─────────────────────────────
 
