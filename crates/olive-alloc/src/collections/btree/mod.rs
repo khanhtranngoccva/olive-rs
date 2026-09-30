@@ -3,6 +3,7 @@
 use core::fmt;
 use olive_core::alloc::AllocError;
 use olive_core::try_traits::try_clone::TryCloneError;
+use olive_core::try_traits::try_default::TryDefaultError;
 
 mod borrow;
 mod construction;
@@ -88,3 +89,102 @@ impl From<TryCloneError> for TryBTreeMapWithCloneError {
         Self::Clone(err)
     }
 }
+
+/// Error returned by [`Entry::or_try_default`](entry::Entry::or_try_default).
+///
+/// The default value may fail to be constructed, or the subsequent insertion
+/// may fail due to an allocation error.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryBTreeMapEntryWithDefaultError {
+    /// The default value failed to be constructed.
+    Default(TryDefaultError),
+    /// An allocation during tree restructuring failed.
+    Alloc(AllocError),
+}
+
+impl fmt::Debug for TryBTreeMapEntryWithDefaultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Default(e) => f
+                .debug_tuple("TryBTreeMapEntryWithDefaultError::Default")
+                .field(e)
+                .finish(),
+            Self::Alloc(e) => f
+                .debug_tuple("TryBTreeMapEntryWithDefaultError::Alloc")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryBTreeMapEntryWithDefaultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Default(e) => write!(f, "BTreeMap entry operation failed: {e}"),
+            Self::Alloc(_) => write!(f, "BTreeMap entry operation failed: memory allocation failed"),
+        }
+    }
+}
+
+impl core::error::Error for TryBTreeMapEntryWithDefaultError {}
+
+impl From<TryDefaultError> for TryBTreeMapEntryWithDefaultError {
+    #[inline]
+    fn from(err: TryDefaultError) -> Self {
+        Self::Default(err)
+    }
+}
+
+impl From<AllocError> for TryBTreeMapEntryWithDefaultError {
+    #[inline]
+    fn from(err: AllocError) -> Self {
+        Self::Alloc(err)
+    }
+}
+
+/// Error returned by [`Entry::or_try_insert_with`](entry::Entry::or_try_insert_with)
+/// and [`Entry::or_try_insert_with_key`](entry::Entry::or_try_insert_with_key).
+///
+/// The closure may fail, or the subsequent insertion may fail due to an
+/// allocation error.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryBTreeMapEntryWithError<E> {
+    /// The closure failed with this error.
+    Closure(E),
+    /// An allocation during tree restructuring failed.
+    Alloc(AllocError),
+}
+
+impl<E: fmt::Debug> fmt::Debug for TryBTreeMapEntryWithError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Closure(e) => f
+                .debug_tuple("TryBTreeMapEntryWithError::Closure")
+                .field(e)
+                .finish(),
+            Self::Alloc(e) => f
+                .debug_tuple("TryBTreeMapEntryWithError::Alloc")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for TryBTreeMapEntryWithError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Closure(e) => write!(f, "BTreeMap entry operation failed: {e}"),
+            Self::Alloc(_) => write!(f, "BTreeMap entry operation failed: memory allocation failed"),
+        }
+    }
+}
+
+impl<E: core::error::Error> core::error::Error for TryBTreeMapEntryWithError<E> {}
+
+impl<E> From<AllocError> for TryBTreeMapEntryWithError<E> {
+    #[inline]
+    fn from(err: AllocError) -> Self {
+        Self::Alloc(err)
+    }
+}
+

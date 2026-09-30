@@ -546,8 +546,7 @@ mod tests {
             .into_iter()
             .map(|k| (k, k * 10))
             .collect();
-        let map: BTreeMap<u32, u32> =
-            TryFromIterator::try_from_iter(pairs.into_iter()).expect("iter ok");
+        let map: BTreeMap<u32, u32> = TryFromIterator::try_from_iter(pairs).expect("iter ok");
         assert_eq!(map.len(), 6);
         let keys: std::vec::Vec<u32> = map.keys().copied().collect();
         assert_eq!(keys, [0, 1, 2, 3, 4, 5]);
@@ -568,8 +567,7 @@ mod tests {
     fn try_from_iterator_duplicate_keys_last_wins() {
         // Mirrors `Extend` semantics: a repeated key keeps its final value.
         let pairs = [(1u32, 100u32), (2, 200), (1, 111)];
-        let map: BTreeMap<u32, u32> =
-            TryFromIterator::try_from_iter(pairs.into_iter()).expect("iter ok");
+        let map: BTreeMap<u32, u32> = TryFromIterator::try_from_iter(pairs).expect("iter ok");
         assert_eq!(map.len(), 2);
         assert_eq!(map.get(&1), Some(&111));
         assert_eq!(map.get(&2), Some(&200));
