@@ -855,6 +855,7 @@ mod tests {
         }
         assert_eq!(map.len(), 10);
 
+        // Element 0 clones cleanly, element 1 clones, but cannot be inserted.
         let src: [(TrackedItem<u32>, TrackedItem<u32>); 2] = [
             (
                 TrackedItem::construct(&ledger, 10),
@@ -886,9 +887,6 @@ mod tests {
         check_tree_invariant(&map);
         check_ascending_keys(&map);
 
-        // Drop everything — the map plus the returned tail — and verify each
-        // allocated id dies exactly once: no leak from the partially-built
-        // right tree, no double-drop of the stranded clones.
         drop(map);
         drop(src);
         assert!(
