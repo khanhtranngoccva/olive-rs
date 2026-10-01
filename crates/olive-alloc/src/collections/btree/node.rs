@@ -233,7 +233,7 @@ unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Owned, K, V, Type> 
 unsafe impl<K: Send, V: Send, Type> Send for NodeRef<marker::Dying, K, V, Type> {}
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
-    pub(super) fn new_leaf<'a, A: Allocator>(alloc: &'a A) -> Result<Self, AllocError> {
+    pub(super) fn new_leaf<A: Allocator>(alloc: &A) -> Result<Self, AllocError> {
         Ok(Self::from_new_leaf(LeafNode::new(alloc)?))
     }
 
@@ -784,6 +784,9 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::LeafOrInternal> {
     /// Returns a new owned tree, with its own root node that is initially empty.
+    ///
+    /// # Warning
+    /// - The value is not cleaned up on Drop.
     pub(super) fn new<A: Allocator>(alloc: &A) -> Result<Self, AllocError> {
         Ok(NodeRef::new_leaf(alloc)?.forget_type())
     }

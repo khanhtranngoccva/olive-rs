@@ -538,10 +538,8 @@ fn do_two_phase<'a, K, V, A: Allocator>(
     };
     // Commit phase: perform the splits bottom-up using the reserved nodes.
     let new_handle = handle.insert_recursing(key, value, &mut nodes, |ins, new_node| {
-        // SAFETY: Pushing a new root node doesn't invalidate
-        // handles to existing nodes.
-        let map = unsafe { map.reborrow() };
-        let root = map.root.as_mut().unwrap(); // same as ins.left
+        // Already borrowed above, do not need a second borrow.
+        let root = map_ref.root.as_mut().unwrap(); // same as ins.left
         root.push_internal_level(new_node)
             .push(ins.kv.0, ins.kv.1, ins.right)
     });

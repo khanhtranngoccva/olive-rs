@@ -5,6 +5,7 @@ use super::map::BTreeMap;
 use super::node::ForceResult::*;
 use super::node::{Handle, InternalNode, Root};
 use super::search::SearchResult::*;
+use crate::collections::btree::node::{LeafNode, NodeRef};
 use crate::vec::Vec;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 
@@ -143,17 +144,18 @@ impl<K, V> Root<K, V> {
 
     /// Creates a tree consisting of empty nodes.
     fn new_pillar<A: Allocator>(height: usize, alloc: &A) -> Result<Self, AllocError> {
-        let mut root = Root::new(alloc)?;
         let new_count = height;
         let mut ephemeral_stack =
             Vec::try_with_capacity_in(new_count, alloc).map_err(|_| AllocError)?;
-        // Allocate additional nodes if we need more than what was cached.
+        // Allocate additional nodes if we need more.
         for _ in 0..new_count {
             let intermediate = unsafe { InternalNode::new(alloc)? };
             ephemeral_stack
                 .try_push(intermediate)
                 .expect("we just reserved enough items");
         }
+        // Allocate the root node here.
+        let mut root = Root::new(alloc)?;
         for _ in 0..height {
             root.push_internal_level(
                 ephemeral_stack
@@ -161,6 +163,7 @@ impl<K, V> Root<K, V> {
                     .expect("internal node should be available"),
             );
         }
+        debug_assert!(ephemeral_stack.is_empty());
         Ok(root)
     }
 }
