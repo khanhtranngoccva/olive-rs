@@ -307,10 +307,55 @@ pub struct OccupiedEntry<'a, K, V, A: Allocator = Global> {
 }
 
 impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
+    /// Descends the tree once for `key` and hands back either a fillable
+    /// [`VacantEntry`] or the probed key itself.
+    ///
+    /// Unlike [`BTreeMap::entry`], which moves the key into the returned
+    /// [`Entry`] (and thereby drops the caller's copy on an occupied result),
+    /// this method keeps ownership of the probed key in every case:
+    ///
+    /// - if the key is absent it returns `Ok(vacant_entry)`, ready to be filled
+    ///   via [`VacantEntry::try_insert_entry`];
+    /// - if the key is already present it returns `Err(key)`, handing the probed
+    ///   key straight back so the caller can salvage it.
+    ///
+    /// This lets "insert-if-absent" operations avoid both a double search (a
+    /// separate occupancy check plus an insert) and the loss of the probed key
+    /// on collision.
+    pub(super) fn vacant_entry_give_back(
+        map: &'a mut BTreeMap<K, V, A>,
+        key: K,
+    ) -> Result<Self, K>
+    where
+        K: Ord,
+    {
+        let (map, dormant_map) = DormantMutRef::new(map);
+        match map.root {
+            None => Ok(Self {
+                key,
+                handle: None,
+                dormant_map,
+                _marker: PhantomData,
+            }),
+            Some(ref mut root) => match root.borrow_mut().search_tree(&key) {
+                // Occupied: hand the probed key back untouched rather than
+                // burying it in an `OccupiedEntry`.
+                SearchResult::Found(_) => Err(key),
+                SearchResult::GoDown(handle) => Ok(Self {
+                    key,
+                    handle: Some(handle),
+                    dormant_map,
+                    _marker: PhantomData,
+                }),
+            },
+        }
+    }
+
     /// Returns a reference to the key that was probed.
     pub fn key(&self) -> &K {
         &self.key
     }
+
 
     /// Takes back the key that was originally passed to [`BTreeMap::entry`].
     pub fn into_key(self) -> K {

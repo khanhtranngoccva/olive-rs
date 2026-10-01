@@ -6,8 +6,8 @@ pub mod vec_deque;
 pub mod btree_map {
     pub use super::btree::{
         BTreeMap, Entry, ExtractIf, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys,
-        TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError, TryBTreeMapWithCloneError,
-        Values, ValuesMut,
+        TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError, TryBTreeMapUniqueError,
+        TryBTreeMapWithCloneError, Values, ValuesMut,
     };
 }
 

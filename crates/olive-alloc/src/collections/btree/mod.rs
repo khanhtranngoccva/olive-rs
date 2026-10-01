@@ -199,3 +199,52 @@ impl<E> From<AllocError> for TryBTreeMapEntryWithError<E> {
         Self::Alloc(err)
     }
 }
+
+/// Error returned by fallible [`BTreeMap`](map::BTreeMap) operations that
+/// enforce a uniqueness check before inserting (including but not limited to 
+/// insertion).
+///
+/// There are two ways these operations can fail:
+/// - the key is already present in the map ([`Self::KeyExists`]),
+/// - or an allocation fails while restructuring the tree to insert a
+///   previously-absent key ([`Self::Alloc`]).
+#[derive(Clone)]
+pub enum TryBTreeMapUniqueError {
+    /// The key was already present in the map, so nothing was inserted.
+    KeyExists,
+    /// An allocation during tree restructuring failed.
+    Alloc(AllocError),
+}
+
+impl fmt::Debug for TryBTreeMapUniqueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyExists => f.debug_tuple("TryBTreeMapUniqueError::KeyExists").finish(),
+            Self::Alloc(e) => f
+                .debug_tuple("TryBTreeMapUniqueError::Alloc")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryBTreeMapUniqueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyExists => write!(f, "BTreeMap unique operation failed: key already exists"),
+            Self::Alloc(_) => write!(
+                f,
+                "BTreeMap unique operation failed: memory allocation failed"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for TryBTreeMapUniqueError {}
+
+impl From<AllocError> for TryBTreeMapUniqueError {
+    #[inline]
+    fn from(err: AllocError) -> Self {
+        Self::Alloc(err)
+    }
+}

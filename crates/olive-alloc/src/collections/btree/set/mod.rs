@@ -10,13 +10,15 @@
 //! Every operation that may allocate returns a `Result` whose error carries the
 //! offending value plus an [`AllocError`]. On failure the set is left unmodified.
 
-use crate::alloc::{Allocator, Global};
 use super::map::BTreeMap;
 use super::set_val::SetValZST;
+use crate::alloc::{Allocator, Global};
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
 
 mod construction;
 mod entry;
+mod insertion;
+mod query;
 
 /// An ordered set based on a B-tree.
 ///

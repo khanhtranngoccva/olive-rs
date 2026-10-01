@@ -17,8 +17,19 @@ use super::super::entry::{
     Entry as MapEntry, OccupiedEntry as MapOccupied, VacantEntry as MapVacant,
 };
 use super::super::set_val::SetValZST;
+use super::BTreeSet;
 use crate::alloc::{AllocError, Allocator, Global};
 use core::fmt;
+
+impl<T: Ord, A: Allocator> BTreeSet<T, A> {
+    /// Gets an [`Entry`] to a single value in the set, which may either be
+    /// vacant or occupied.
+    ///
+    /// This is the standard entry API, mirroring `std`.
+    pub fn entry(&mut self, value: T) -> Entry<'_, T, A> {
+        Entry::from_map_entry(self.map.entry(value))
+    }
+}
 
 /// A view into a single entry in a [`BTreeSet`](super::BTreeSet), which may
 /// either be vacant or occupied.
@@ -206,5 +217,300 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_, T, A> {
         f.debug_tuple("OccupiedEntry")
             .field(self.inner.key())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use std::format;
+
+    use super::super::super::set::BTreeSet;
+    use super::*;
+    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+
+    type TestSet = BTreeSet<TrackedItem<u32>, BudgetedAlloc>;
+
+    #[test]
+    fn entry_vacant_into_value_returns_original() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        match set.entry(42) {
+            Entry::Vacant(ve) => {
+                let value = ve.into_value();
+                assert_eq!(value, 42);
+            }
+            _ => panic!("expected vacant"),
+        }
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn entry_try_insert_adds_when_absent() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        let oe = set.entry(7).try_insert().unwrap();
+        assert_eq!(*oe.get(), 7);
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&7));
+    }
+
+    #[test]
+    fn entry_try_insert_noop_when_present() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        set.try_insert(5).unwrap();
+        let oe = set.entry(5).try_insert().unwrap();
+        assert_eq!(*oe.get(), 5);
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn entry_or_try_insert_keeps_when_present() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        set.try_insert(9).unwrap();
+        set.entry(9).or_try_insert().unwrap();
+        assert!(set.contains(&9));
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn entry_or_try_insert_inserts_when_absent() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        set.entry(3).or_try_insert().unwrap();
+        assert!(set.contains(&3));
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn entry_try_insert_give_back_adds_when_absent() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        let oe = set.entry(8).try_insert_give_back().unwrap();
+        assert_eq!(*oe.get(), 8);
+        assert!(set.contains(&8));
+    }
+
+    #[test]
+    fn entry_or_try_insert_give_back_inserts_when_absent() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        set.entry(4).or_try_insert_give_back().unwrap();
+        assert!(set.contains(&4));
+    }
+
+    #[test]
+    fn entry_occupied_remove_deletes() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        set.try_insert(1).unwrap();
+        set.try_insert(2).unwrap();
+        match set.entry(1) {
+            Entry::Occupied(oe) => {
+                let v = oe.remove();
+                assert_eq!(v, 1);
+            }
+            _ => panic!("expected occupied"),
+        }
+        assert!(!set.contains(&1));
+        assert!(set.contains(&2));
+    }
+
+    #[test]
+    fn entry_key_reflects_state() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        // Vacant: value is the probe value.
+        assert_eq!(*set.entry(10).get(), 10);
+        // Occupied: value is the stored value.
+        set.try_insert(10).unwrap();
+        assert_eq!(*set.entry(10).get(), 10);
+    }
+
+    #[test]
+    fn entry_debug_variants() {
+        let mut set: BTreeSet<i32> = BTreeSet::new();
+        let vac = format!("{:?}", set.entry(1));
+        assert!(vac.contains("VacantEntry"));
+        set.try_insert(1).unwrap();
+        let occ = format!("{:?}", set.entry(1));
+        assert!(occ.contains("OccupiedEntry"));
+    }
+
+    #[test]
+    fn entry_try_insert_vacant_fails_with_alloc_error_and_no_leak() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 7);
+        let entry = set.entry(item);
+        if let Entry::Vacant(_) = &entry {
+        } else {
+            panic!("expected vacant")
+        }
+        alloc.drain();
+
+        match entry.try_insert() {
+            Err(e) => assert!(matches!(e, AllocError)),
+            Ok(_) => panic!("expected allocation failure"),
+        }
+        // The probed value was dropped on failure — nothing leaked.
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn entry_or_try_insert_vacant_fails_with_alloc_error_and_no_leak() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 9);
+        let entry = set.entry(item);
+        alloc.drain();
+
+        match entry.or_try_insert() {
+            Err(e) => assert!(matches!(e, AllocError)),
+            Ok(()) => panic!("expected allocation failure"),
+        }
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn entry_try_insert_give_back_returns_value_on_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 42);
+        let entry = set.entry(item);
+        alloc.drain();
+
+        match entry.try_insert_give_back() {
+            Err((returned, e)) => {
+                assert!(matches!(e, AllocError));
+                assert_eq!(*returned, 42, "value must be handed back intact");
+                drop(returned);
+            }
+            Ok(_) => panic!("expected allocation failure"),
+        }
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn entry_or_try_insert_give_back_returns_value_on_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 55);
+        let entry = set.entry(item);
+        alloc.drain();
+
+        match entry.or_try_insert_give_back() {
+            Err((returned, e)) => {
+                assert!(matches!(e, AllocError));
+                assert_eq!(*returned, 55);
+                drop(returned);
+            }
+            Ok(()) => panic!("expected allocation failure"),
+        }
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn vacant_try_insert_fails_with_alloc_error_and_no_leak() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 3);
+        let entry = set.entry(item);
+        alloc.drain();
+
+        let vacant = match entry {
+            Entry::Vacant(v) => v,
+            _ => panic!("expected vacant"),
+        };
+        match vacant.try_insert() {
+            Err(e) => assert!(matches!(e, AllocError)),
+            Ok(()) => panic!("expected allocation failure"),
+        }
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn vacant_try_insert_give_back_returns_value_on_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let item = TrackedItem::construct(&ledger, 88);
+        let entry = set.entry(item);
+        alloc.drain();
+
+        let vacant = match entry {
+            Entry::Vacant(v) => v,
+            _ => panic!("expected vacant"),
+        };
+        match vacant.try_insert_give_back() {
+            Err((returned, e)) => {
+                assert!(matches!(e, AllocError));
+                assert_eq!(*returned, 88);
+                drop(returned);
+            }
+            Ok(()) => panic!("expected allocation failure"),
+        }
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    // FIXME: Should have filled with 11 entries, and make the split fail if another vacant key is used
+    #[test]
+    fn occupied_path_never_allocates_and_succeeds_despite_drained_budget() {
+        // An occupied entry returns immediately without touching the allocator,
+        // so it succeeds even after the budget is drained.
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: TestSet = BTreeSet::new_in(alloc.clone());
+        let existing = TrackedItem::construct(&ledger, 10);
+        set.try_insert(existing)
+            .expect("seed insert should succeed");
+        alloc.drain();
+
+        let probe = TrackedItem::construct(&ledger, 10);
+        let entry = set.entry(probe);
+        // Consume the entry (moves out of the borrow) and verify the occupied
+        // path returns the existing value without allocating.
+        let result = entry.try_insert();
+        match result {
+            Ok(occupied) => assert_eq!(**occupied.get(), 10),
+            Err(_) => panic!("occupied path must not allocate or fail"),
+        }
+        // Drop the set so the seeded value deregisters from the ledger before
+        // we check for leaks.
+        drop(set);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
     }
 }

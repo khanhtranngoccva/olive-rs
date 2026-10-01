@@ -6,6 +6,7 @@
 
 use crate::alloc::{AllocError, Allocator};
 
+use super::TryBTreeMapUniqueError;
 use super::entry::Entry;
 use super::map::BTreeMap;
 
@@ -36,60 +37,73 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     ///
     /// # Errors
     ///
-    /// Returns `Err((key, value))` if memory allocation fails. The tree is
+    /// Returns `Err((key, value, AllocError))` if memory allocation fails. The tree is
     /// left unmodified on failure.
     pub fn try_insert_give_back(
         &mut self,
         key: K,
         value: V,
-    ) -> Result<Result<Option<V>, ()>, (K, V)> {
+    ) -> Result<Option<V>, (K, V, AllocError)> {
         match self.entry(key) {
-            Entry::Occupied(mut occ) => Ok(Ok(Some(occ.insert(value)))),
+            Entry::Occupied(mut occ) => Ok(Some(occ.insert(value))),
             Entry::Vacant(vac) => match vac.try_insert_entry(value) {
-                Ok(_) => Ok(Ok(None)),
-                Err((k, v, _)) => Err((k, v)),
+                Ok(_) => Ok(None),
+                Err((k, v, e)) => Err((k, v, e)),
             },
         }
     }
 
     /// Inserts a key-value pair only if the key does not already exist.
     ///
-    /// Returns `true` if the key was newly inserted, `false` if it was
-    /// already present (in which case the existing value is unchanged).
-    ///
     /// # Errors
     ///
-    /// Returns [`AllocError`] if memory allocation fails.
-    pub fn try_insert_unique(&mut self, key: K, value: V) -> Result<bool, AllocError> {
+    /// Returns [`TryBTreeMapUniqueError::KeyExists`] if the key is already
+    /// present in the map (nothing is inserted; the key and value are
+    /// dropped).
+    ///
+    /// Returns [`TryBTreeMapUniqueError::Alloc`] if memory
+    /// allocation fails during insertion of a previously-absent key.
+    ///
+    /// Use [`try_insert_unique_give_back`](Self::try_insert_unique_give_back)
+    /// to recover the key-value pair on either failure.
+    pub fn try_insert_unique(&mut self, key: K, value: V) -> Result<(), TryBTreeMapUniqueError> {
         match self.entry(key) {
-            Entry::Occupied(_) => Ok(false),
+            Entry::Occupied(_) => Err(TryBTreeMapUniqueError::KeyExists),
             Entry::Vacant(vac) => vac
                 .try_insert_entry(value)
-                .map(|_| true)
-                .map_err(|(_, _, e)| e),
+                .map(|_| ())
+                .map_err(|(_, _, e)| TryBTreeMapUniqueError::Alloc(e)),
         }
     }
 
-    /// Like [`Self::try_insert_unique`], but returns the key and value back
-    /// on allocation failure.
-    ///
-    /// Returns `Ok(true)` if the key was newly inserted, `Ok(false)` if it was
-    /// already present.
+    /// Like [`Self::try_insert_unique`], but returns the key and value
+    /// back on any failure so the caller can retry or salvage them.
     ///
     /// # Errors
     ///
-    /// Returns `Err((key, value))` if memory allocation fails. The tree is
-    /// left unmodified on failure.
+    /// Returns `Err((key, value, TryBTreeMapUniqueError))` when the operation
+    /// fails — either because the key already exists
+    /// ([`TryBTreeMapUniqueError::KeyExists`]) or because an allocation failed
+    /// while inserting a previously-absent key
+    /// ([`TryBTreeMapUniqueError::Alloc`]).
+    ///
+    /// The `(key, value)` pair is returned separately from the error.
+    /// The tree is left unmodified on failure.
     pub fn try_insert_unique_give_back(
         &mut self,
         key: K,
         value: V,
-    ) -> Result<Result<bool, ()>, (K, V)> {
-        match self.entry(key) {
-            Entry::Occupied(_) => Ok(Ok(false)),
-            Entry::Vacant(vac) => match vac.try_insert_entry(value) {
-                Ok(_) => Ok(Ok(true)),
-                Err((k, v, _)) => Err((k, v)),
+    ) -> Result<(), (K, V, TryBTreeMapUniqueError)> {
+        // Single descent: either we get a fillable vacant slot back, or the
+        // probed key comes straight back because it was already present.
+        match super::entry::VacantEntry::vacant_entry_give_back(self, key) {
+            // Collision: hand the probed pair back alongside KeyExists.
+            Err(k) => Err((k, value, TryBTreeMapUniqueError::KeyExists)),
+            // Absent: fill the slot; on allocation failure the stranded pair
+            // is returned separately from the error.
+            Ok(vac) => match vac.try_insert_entry(value) {
+                Ok(_) => Ok(()),
+                Err((k, v, e)) => Err((k, v, TryBTreeMapUniqueError::Alloc(e))),
             },
         }
     }
@@ -99,7 +113,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// If a key from `other` is already present in `self`, the respective
     /// value from `self` will be overwritten with the respective value from
     /// `other`. Similar to [`try_insert`](Self::try_insert), though, the key
-    /// is not overwritten, which matters for types that can be `==` without
+    /// is not overwritten, which matters for types that can be [`Eq`] without
     /// being identical.
     ///
     /// Uses the "slow" approach: iterates over `other`'s entries and re-inserts
@@ -117,8 +131,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// resolved to `other`'s values.
     ///
     /// There is no cheap way to make this operation all-or-nothing, because doing
-    /// so would require snapshotting every evicted value up front - as costly
-    /// as copying the whole map.
+    /// so would require snapshotting every evicted value up front.
     ///
     /// Callers who need true all-or-nothing semantics should build the result
     /// in a fresh map and commit only on success.
@@ -133,7 +146,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     pub fn try_append(&mut self, other: &mut Self) -> Result<(), AllocError> {
         match self.try_append_give_back(other) {
             Ok(()) => Ok(()),
-            Err((_key, _value)) => Err(AllocError),
+            Err((_key, _value, e)) => Err(e),
         }
     }
 
@@ -149,10 +162,10 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     ///
     /// # Errors
     ///
-    /// Returns `Err((key, value), AllocError)` - a tuple carrying the current un-inserted
-    /// pair and an [`AllocError`] memory allocation fails during one of the individual
-    /// insertions.
-    pub fn try_append_give_back(&mut self, other: &mut Self) -> Result<(), (K, V)> {
+    /// Returns `Err((key, value, AllocError))` - a tuple carrying the current
+    /// un-inserted pair and an [`AllocError`] if memory allocation fails during
+    /// one of the individual insertions.
+    pub fn try_append_give_back(&mut self, other: &mut Self) -> Result<(), (K, V, AllocError)> {
         while let Some((k, v)) = other.pop_first() {
             match self.try_insert_give_back(k, v) {
                 Ok(_) => {}
@@ -171,6 +184,10 @@ mod tests {
     extern crate std;
     use super::super::map::BTreeMap;
     use crate::alloc::Global;
+    use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn insert_and_get_single() {
@@ -363,12 +380,11 @@ mod tests {
     /// `ledger` so their eventual drop can be verified. Returns the allocated
     /// key ID.
     fn insert_tracked_pair(
-        map: &mut BTreeMap<crate::test_helpers::TrackedItem<u32>, crate::test_helpers::TrackedItem<u32>>,
+        map: &mut BTreeMap<TrackedItem<u32>, TrackedItem<u32>>,
         key_val: u32,
         val_val: u32,
-        ledger: &std::sync::Arc<crate::test_helpers::Ledger>,
+        ledger: &Arc<Ledger>,
     ) -> u32 {
-        use crate::test_helpers::TrackedItem;
         let kid = ledger.allocate();
         ledger.register(kid);
         let vid = ledger.allocate();
@@ -422,7 +438,7 @@ mod tests {
         // If the merge ever substituted `b`'s key for `a`'s, the surviving
         // entry would carry `b`'s ID and this assertion would fail.
         use crate::test_helpers::{Ledger, TrackedItem};
-        let ledger = std::sync::Arc::new(Ledger::new());
+        let ledger = Arc::new(Ledger::new());
         let mut a: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
 
@@ -440,8 +456,14 @@ mod tests {
         assert!(b.is_empty());
 
         // The merged entry at key 3 keeps SELF's key object (original ID)…
-        let (k, v) = a.iter().find(|(k, _)| k.inner == 3).expect("key 3 survives");
-        assert_eq!(k.id, a_k3, "surviving key must be self's original key, not other's");
+        let (k, v) = a
+            .iter()
+            .find(|(k, _)| k.inner == 3)
+            .expect("key 3 survives");
+        assert_eq!(
+            k.id, a_k3,
+            "surviving key must be self's original key, not other's"
+        );
         // …and carries OTHER's value payload (its old value was displaced).
         assert_eq!(v.inner, 31);
 
@@ -449,8 +471,16 @@ mod tests {
         // allocated ids (3 pairs per map) was dropped exactly once.
         drop(a);
         drop(b);
-        assert!(ledger.leaked_ids().is_empty(), "leaked ids: {:?}", ledger.leaked_ids());
-        assert!(ledger.double_dropped().is_empty(), "double-dropped: {:?}", ledger.double_dropped());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped: {:?}",
+            ledger.double_dropped()
+        );
         assert_eq!(ledger.total_allocated(), 12);
     }
 
@@ -497,10 +527,10 @@ mod tests {
     /// both IDs with `ledger`. Used by the failed-append tests below so the
     /// ledger can prove no element is dropped twice.
     fn insert_tracked_pair_budgeted(
-        map: &mut BTreeMap<crate::test_helpers::TrackedItem<u32>, crate::test_helpers::TrackedItem<u32>, crate::test_helpers::BudgetedAlloc>,
+        map: &mut BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc>,
         key_val: u32,
         val_val: u32,
-        ledger: &std::sync::Arc<crate::test_helpers::Ledger>,
+        ledger: &Arc<Ledger>,
     ) {
         use crate::test_helpers::TrackedItem;
         let kid = ledger.allocate();
@@ -530,7 +560,7 @@ mod tests {
         // Build both maps under a generous shared budget so construction
         // succeeds deterministically.
         let alloc = BudgetedAlloc::new(1 << 20);
-        let ledger = std::sync::Arc::new(Ledger::new());
+        let ledger = Arc::new(Ledger::new());
         let mut a: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
             BTreeMap::new_in(alloc.clone());
         let mut b: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
@@ -546,7 +576,7 @@ mod tests {
 
         // Snapshot the original union as a key -> value map so we can verify
         // the partition contract after a forced failure.
-        let mut expected: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut expected: HashMap<u32, u32> = HashMap::new();
         for (k, v) in a.iter() {
             expected.insert(k.inner, v.inner);
         }
@@ -560,7 +590,7 @@ mod tests {
 
         let result = a.try_append_give_back(&mut b);
         assert!(result.is_err(), "expected an allocation failure mid-append");
-        let (sk, sv) = result.unwrap_err();
+        let (sk, sv, _err) = result.unwrap_err();
 
         // The stranded pair must be present in neither map.
         assert!(a.get(&sk).is_none(), "stranded key must not be in self");
@@ -576,7 +606,11 @@ mod tests {
                 "duplicate key in self after failure: {}",
                 k.inner
             );
-            assert_eq!(v.inner, expected[&k.inner], "value mismatch in self for key {}", k.inner);
+            assert_eq!(
+                v.inner, expected[&k.inner],
+                "value mismatch in self for key {}",
+                k.inner
+            );
         }
         for (k, v) in b.iter() {
             assert!(
@@ -584,10 +618,20 @@ mod tests {
                 "duplicate key in other after failure: {}",
                 k.inner
             );
-            assert_eq!(v.inner, expected[&k.inner], "value mismatch in other for key {}", k.inner);
+            assert_eq!(
+                v.inner, expected[&k.inner],
+                "value mismatch in other for key {}",
+                k.inner
+            );
         }
-        assert!(seen.insert(sk.inner), "stranded key duplicates an existing key");
-        assert_eq!(sv.inner, expected[&sk.inner], "stranded value mismatches original");
+        assert!(
+            seen.insert(sk.inner),
+            "stranded key duplicates an existing key"
+        );
+        assert_eq!(
+            sv.inner, expected[&sk.inner],
+            "stranded value mismatches original"
+        );
         assert_eq!(
             seen.len(),
             total,
@@ -601,7 +645,11 @@ mod tests {
         drop(a);
         drop(b);
         drop((sk, sv));
-        assert!(ledger.leaked_ids().is_empty(), "leaked ids: {:?}", ledger.leaked_ids());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
         assert!(
             ledger.double_dropped().is_empty(),
             "double-dropped: {:?}",
@@ -620,7 +668,7 @@ mod tests {
         // Tracked items let us additionally prove the discarded pair was
         // dropped exactly once — not leaked, not dropped twice.
         let alloc = BudgetedAlloc::new(1 << 20);
-        let ledger = std::sync::Arc::new(Ledger::new());
+        let ledger = Arc::new(Ledger::new());
         let mut a: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
             BTreeMap::new_in(alloc.clone());
         let mut b: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
@@ -636,26 +684,134 @@ mod tests {
 
         let result = a.try_append(&mut b);
         assert!(result.is_err(), "expected try_append to surface the OOM");
-        // Whatever subset made it in, `a` must still be a valid, sorted map.
-        let mut last_key = None;
-        for (k, _) in a.iter() {
-            if let Some(prev) = last_key {
-                assert!(prev < k.inner, "self must remain sorted after failed append");
-            }
-            last_key = Some(k.inner);
-        }
+        // Whatever subset made it in, `a` and `b` must still be valid, sorted maps.
+        check_tree_invariant(&a);
+        check_ascending_keys(&a);
+        check_tree_invariant(&b);
+        check_ascending_keys(&b);
 
         // The stranded pair was handed back and then dropped by `try_append`;
         // dropping the maps completes the picture. Every one of the 80 ids
         // must have been dropped exactly once.
         drop(a);
         drop(b);
-        assert!(ledger.leaked_ids().is_empty(), "leaked ids: {:?}", ledger.leaked_ids());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
         assert!(
             ledger.double_dropped().is_empty(),
             "double-dropped: {:?}",
             ledger.double_dropped()
         );
         assert_eq!(ledger.total_allocated(), 80);
+    }
+
+    #[test]
+    fn try_insert_unique_occupied_errors_with_key_exists() {
+        use super::super::TryBTreeMapUniqueError;
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, "one").unwrap();
+        // Key already present → Err(KeyExists); the incoming value is dropped
+        // and no allocation is attempted.
+        assert!(matches!(
+            map.try_insert_unique(1, "dup"),
+            Err(TryBTreeMapUniqueError::KeyExists)
+        ));
+        // The map still holds the original value, untouched.
+        assert_eq!(map.get(&1), Some(&"one"));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn try_insert_unique_absent_stores_value() {
+        let mut map = BTreeMap::new_in(Global);
+        assert!(matches!(map.try_insert_unique(5, "five"), Ok(())));
+        assert_eq!(map.get(&5), Some(&"five"));
+    }
+
+    #[test]
+    fn try_insert_unique_give_back_collision_hands_pair_back_with_key_exists() {
+        use super::super::TryBTreeMapUniqueError;
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, "one").unwrap();
+        // Collision: the probed pair is handed back alongside KeyExists.
+        match map.try_insert_unique_give_back(1, "dup") {
+            Err((sk, sv, err)) => {
+                assert_eq!(sk, 1);
+                assert_eq!(sv, "dup");
+                assert!(matches!(err, TryBTreeMapUniqueError::KeyExists));
+            }
+            _ => panic!("expected Err with KeyExists"),
+        }
+        // Map unchanged.
+        assert_eq!(map.get(&1), Some(&"one"));
+        assert_eq!(map.len(), 1);
+    }
+
+    /// The plain variant surfaces `TryBTreeMapUniqueError` on OOM and drops
+    /// the probed pair (no leak).
+    #[test]
+    fn try_insert_unique_fails_with_unique_error_and_no_leak() {
+        use super::super::TryBTreeMapUniqueError;
+        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = Arc::new(Ledger::new());
+        let mut map: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        let key = TrackedItem::construct(&ledger, 9);
+        let value = TrackedItem::construct(&ledger, 90);
+        alloc.drain();
+
+        match map.try_insert_unique(key, value) {
+            Err(TryBTreeMapUniqueError::Alloc(_)) => {}
+            other => panic!("expected Alloc error, got {:?}", other),
+        }
+        // Probed key was dropped on failure — nothing leaked.
+        assert!(map.is_empty());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    /// The give-back variant returns the stranded `(key, value)` *separately*
+    /// from the error, so the data can be recovered and inspected on its own.
+    #[test]
+    fn try_insert_unique_give_back_hands_pair_separately_from_error() {
+        use super::super::TryBTreeMapUniqueError;
+        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = Arc::new(Ledger::new());
+        let mut map: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        let key = TrackedItem::construct(&ledger, 7);
+        let value = TrackedItem::construct(&ledger, 70);
+        alloc.drain();
+
+        match map.try_insert_unique_give_back(key, value) {
+            Err((sk, sv, err)) => {
+                // The pair is returned as its own fields, not embedded in the
+                // error: we can read the value straight off it.
+                assert_eq!(sv.inner, 70);
+                assert_eq!(sk.inner, 7);
+                // And the error is a pure marker of the failure reason.
+                assert!(matches!(err, TryBTreeMapUniqueError::Alloc(_)));
+                drop(sk);
+            }
+            other => panic!("expected Err with stranded pair, got {:?}", other),
+        }
+        assert!(map.is_empty());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
     }
 }

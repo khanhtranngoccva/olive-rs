@@ -173,7 +173,7 @@ impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
 
         // Insert the stranded head first, if any.
         if let Some((k, v)) = head {
-            if let Err((k, v)) = self.try_insert_give_back(k, v) {
+            if let Err((k, v, _e)) = self.try_insert_give_back(k, v) {
                 return Err((Resume::new((k, v), inner), AllocError));
             }
         }
@@ -182,7 +182,7 @@ impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
         // on allocation failure the tree is left unmodified and we strand the
         // current pair in a `Resume` for retry.
         while let Some((k, v)) = inner.next() {
-            if let Err((k, v)) = self.try_insert_give_back(k, v) {
+            if let Err((k, v, _e)) = self.try_insert_give_back(k, v) {
                 return Err((Resume::new((k, v), inner), AllocError));
             }
         }
