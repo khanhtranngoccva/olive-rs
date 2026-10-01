@@ -23,14 +23,19 @@ mod query;
 mod remove;
 mod scratch;
 mod search;
+mod set;
 mod set_val;
 mod split;
 mod traits;
 
-pub use entry::{Entry, OccupiedEntry, VacantEntry};
+pub use entry::Entry;
 pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
 pub use map::BTreeMap;
+pub use set::{
+    BTreeSet, Entry as BTreeSetEntry, OccupiedEntry as BTreeSetOccupiedEntry,
+    VacantEntry as BTreeSetVacantEntry,
+};
 
 // ---------------------------------------------------------------------------
 // Error types

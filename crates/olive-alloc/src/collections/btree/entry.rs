@@ -17,8 +17,8 @@
 //!    are performed as pure pointer surgery. No allocation occurs here, so
 //!    failure is impossible.
 
-use crate::alloc::{AllocError, Allocator, Global};
 use super::scratch;
+use crate::alloc::{AllocError, Allocator, Global};
 use core::borrow::Borrow;
 use core::fmt;
 use core::marker::PhantomData;
@@ -384,9 +384,7 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
 
 impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for VacantEntry<'_, K, V, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("VacantEntry")
-            .field("key", &self.key)
-            .finish()
+        f.debug_tuple("VacantEntry").field(&self.key).finish()
     }
 }
 
@@ -519,9 +517,9 @@ mod tests {
     use olive_core::alloc::AllocError;
 
     use super::super::map::BTreeMap;
+    use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
     use super::{Entry, OccupiedEntry, VacantEntry};
     use crate::alloc::Global;
-    use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
     use crate::test_helpers::NoDefault;
 
     // An error type for and_try_modify / or_try_insert_with closures.

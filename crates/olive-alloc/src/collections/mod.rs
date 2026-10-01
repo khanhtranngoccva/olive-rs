@@ -10,3 +10,11 @@ pub mod btree_map {
         Values, ValuesMut,
     };
 }
+
+/// A fallible port of `alloc::collections::BTreeSet`.
+pub mod btree_set {
+    pub use super::btree::{
+        BTreeSet, BTreeSetEntry as Entry, BTreeSetOccupiedEntry as OccupiedEntry,
+        BTreeSetVacantEntry as VacantEntry,
+    };
+}
