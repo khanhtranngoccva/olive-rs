@@ -16,7 +16,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
         if self.root.is_some() {
             // Bootstrap a throwaway map that owns the old root and length, and holds a
             // reference to our allocator (`&A` is itself an allocator). Dropping it runs
-            // the normal `into_iter()` teardown path, freeing every node through us.
+            // the normal `into_iter()` teardown path, freeing every node.
             let alloc = &*self.alloc;
             let ephemeral = BTreeMap::<K, V, &A> {
                 root: self.root.take(),

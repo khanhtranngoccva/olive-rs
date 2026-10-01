@@ -18,6 +18,7 @@ pub use entry::{Entry, OccupiedEntry, VacantEntry};
 mod construction;
 mod entry;
 mod insertion;
+mod mutation;
 mod query;
 
 /// An ordered set based on a B-tree.
