@@ -10,18 +10,12 @@
 //! Every operation that may allocate returns a `Result` whose error carries the
 //! offending value plus an [`AllocError`]. On failure the set is left unmodified.
 
-use crate::alloc::{AllocError, Allocator, AllocatorTryDefault, Global};
-use core::borrow::Borrow;
-use core::cmp::Ordering;
-use core::fmt;
-use core::hash::{Hash, Hasher};
-use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-
-use super::iter::{IntoKeys, Keys};
+use crate::alloc::{Allocator, Global};
 use super::map::BTreeMap;
 use super::set_val::SetValZST;
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
 
+mod construction;
 mod entry;
 
 /// An ordered set based on a B-tree.
