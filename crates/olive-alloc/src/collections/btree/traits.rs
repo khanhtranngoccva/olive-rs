@@ -226,7 +226,7 @@ impl<K: Ord + TryClone, V: TryClone, A: Allocator> TryExtendFromSlice<(K, V)>
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+    use super::super::invariant::{check_ascending_keys, check_tree_invariant};
 
     use super::*;
     use olive_core::try_traits::try_from_iterator::TryFromIterator;

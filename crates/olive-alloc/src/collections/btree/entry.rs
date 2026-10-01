@@ -18,7 +18,7 @@
 //!    failure is impossible.
 
 use crate::alloc::{AllocError, Allocator, Global};
-use crate::collections::btree::scratch;
+use super::scratch;
 use core::borrow::Borrow;
 use core::fmt;
 use core::marker::PhantomData;
@@ -521,7 +521,7 @@ mod tests {
     use super::super::map::BTreeMap;
     use super::{Entry, OccupiedEntry, VacantEntry};
     use crate::alloc::Global;
-    use crate::collections::btree::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
+    use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
     use crate::test_helpers::NoDefault;
 
     // An error type for and_try_modify / or_try_insert_with closures.

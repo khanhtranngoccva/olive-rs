@@ -76,7 +76,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// # Examples
     ///
     /// ```ignore
-    /// use olive_alloc::collections::btree::BTreeMap;
+    /// use olive_alloc::collections::btree_map::BTreeMap;
     ///
     /// let mut map = BTreeMap::new();
     /// map.try_insert(1, "a").unwrap();
@@ -110,7 +110,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// # Examples
     ///
     /// ```ignore
-    /// use olive_alloc::collections::btree::BTreeMap;
+    /// use olive_alloc::collections::btree_map::BTreeMap;
     /// use olive_alloc::vec::Vec;
     ///
     /// let mut map = BTreeMap::new();
