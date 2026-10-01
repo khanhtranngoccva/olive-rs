@@ -481,7 +481,6 @@ mod tests {
         assert!(ledger.double_dropped().is_empty());
     }
 
-    // FIXME: Should have filled with 11 entries, and make the split fail if another vacant key is used
     #[test]
     fn occupied_path_never_allocates_and_succeeds_despite_drained_budget() {
         // An occupied entry returns immediately without touching the allocator,
@@ -489,9 +488,9 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let ledger = std::sync::Arc::new(Ledger::new());
         let mut set: TestSet = BTreeSet::new_in(alloc.clone());
-        let existing = TrackedItem::construct(&ledger, 10);
-        set.try_insert(existing)
-            .expect("seed insert should succeed");
+        for i in 0..11 {
+            set.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
         alloc.drain();
 
         let probe = TrackedItem::construct(&ledger, 10);

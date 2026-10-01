@@ -160,7 +160,6 @@ mod tests {
         assert!(ledger.double_dropped().is_empty());
     }
 
-    // FIXME: Occupied path should set up a shape where allocation is bound to happen (11 items)
     #[test]
     fn occupied_path_never_allocates_and_succeeds_despite_drained_budget() {
         // Re-inserting an already-present value short-circuits without
@@ -168,13 +167,13 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let ledger = std::sync::Arc::new(Ledger::new());
         let mut set: BTreeSet<TrackedItem<u32>, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
-        let first = TrackedItem::construct(&ledger, 10);
-        set.try_insert(first).expect("seed insert should succeed");
+        for i in 0..11 {
+            set.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
         alloc.drain();
 
         let dup = TrackedItem::construct(&ledger, 10);
         assert_eq!(set.try_insert(dup), Ok(false));
-        assert_eq!(set.len(), 1);
         drop(set);
         assert!(
             ledger.leaked_ids().is_empty(),

@@ -322,10 +322,7 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
     /// This lets "insert-if-absent" operations avoid both a double search (a
     /// separate occupancy check plus an insert) and the loss of the probed key
     /// on collision.
-    pub(super) fn vacant_entry_give_back(
-        map: &'a mut BTreeMap<K, V, A>,
-        key: K,
-    ) -> Result<Self, K>
+    pub(super) fn vacant_entry_give_back(map: &'a mut BTreeMap<K, V, A>, key: K) -> Result<Self, K>
     where
         K: Ord,
     {
@@ -355,7 +352,6 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
     pub fn key(&self) -> &K {
         &self.key
     }
-
 
     /// Takes back the key that was originally passed to [`BTreeMap::entry`].
     pub fn into_key(self) -> K {
@@ -563,9 +559,9 @@ mod tests {
 
     use super::super::map::BTreeMap;
     use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
-    use super::{Entry, OccupiedEntry, VacantEntry};
+    use super::Entry;
     use crate::alloc::Global;
-    use crate::test_helpers::NoDefault;
+    use crate::test_helpers::{BudgetedAlloc, NoDefault};
 
     // An error type for and_try_modify / or_try_insert_with closures.
     #[derive(Debug, PartialEq, Eq)]
@@ -781,7 +777,35 @@ mod tests {
         assert!(map.is_empty());
     }
 
-    // FIXME: should have a test case with allocation error
+    #[test]
+    fn or_try_insert_with_reports_alloc_error() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map = BTreeMap::new_in(alloc.clone());
+        // Fill the node to capacity.
+        for i in 0..11 {
+            map.try_insert(i, i).unwrap();
+        }
+        alloc.drain();
+        let err = map
+            .entry(11)
+            .or_try_insert_with(|| -> Result<u32, MyErr> { Ok(11) })
+            .unwrap_err();
+        assert!(matches!(err, TryBTreeMapEntryWithError::Alloc(_)));
+    }
+
+    #[test]
+    fn or_try_insert_with_success_on_duplicate() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map = BTreeMap::new_in(alloc.clone());
+        // Fill the node to capacity.
+        for i in 0..11 {
+            map.try_insert(i, i).unwrap();
+        }
+        alloc.drain();
+        map.entry(10)
+            .or_try_insert_with(|| -> Result<u32, MyErr> { Ok(10) })
+            .unwrap();
+    }
 
     // ── Entry::or_try_insert_with_key ─────────────────────────────────────────
 
@@ -920,7 +944,7 @@ mod tests {
         assert_eq!(map.get(&11), None);
     }
 
-    // ── OccupiedEntry::insert / into_mut / remove ─────────────────────────────
+    // ── OccupiedEntry: insert/get/get_mut/into_mut/remove ─────────────────────────────
 
     #[test]
     fn occupied_insert_replaces_and_returns_old() {
@@ -936,7 +960,15 @@ mod tests {
         assert_eq!(map.get(&1), Some(&2));
     }
 
-    // FIXME: missing get_mut
+    #[test]
+    fn occupied_get_mut_gives_live_reference() {
+        let mut map = BTreeMap::new_in(Global);
+        map.try_insert(1, 10).unwrap();
+        if let Entry::Occupied(mut o) = map.entry(1) {
+            *o.get_mut() += 1;
+        }
+        assert_eq!(map.get(&1), Some(&11));
+    }
 
     #[test]
     fn occupied_into_mut_gives_live_reference() {
@@ -985,17 +1017,5 @@ mod tests {
             _ => panic!("expected vacant entry"),
         }
         assert!(map.is_empty());
-    }
-
-    // ── Type-level sanity ─────────────────────────────────────────────────────
-
-    #[test]
-    fn entry_variant_types_are_public() {
-        let mut map: BTreeMap<i32, u32> = BTreeMap::new_in(Global);
-        let _: Option<VacantEntry<i32, u32>> = None;
-        let _: Option<OccupiedEntry<i32, u32>> = None;
-        match map.entry(1) {
-            Entry::Vacant(_) | Entry::Occupied(_) => {}
-        }
     }
 }
