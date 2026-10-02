@@ -41,6 +41,19 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
         // successful removal yields a key — i.e. the stored value itself.
         self.map.remove_entry(value).map(|(k, _)| k)
     }
+
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In place, removes all elements from the set for which the predicate
+    /// returns `false`. The predicate receives each element by reference and
+    /// must return `true` to keep it. Elements for which the predicate returns
+    /// `false` are removed and dropped.
+    pub fn retain<P>(&mut self, mut keep: P)
+    where
+        P: FnMut(&T) -> bool,
+    {
+        self.map.retain(move |k, _| keep(k));
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -248,11 +261,7 @@ mod tests {
         let popped = set.pop_first().expect("non-empty");
         assert_eq!(popped.inner, 0, "lowest inner should pop first");
         drop(popped);
-        assert!(
-            ledger.leaked_ids().is_empty(),
-            "leaked: {:?}",
-            ledger.leaked_ids()
-        );
+        // 14 items are still live in the set; only double-frees matter here.
         assert!(ledger.double_dropped().is_empty());
         drop(set);
         assert!(
@@ -315,11 +324,7 @@ mod tests {
         let popped = set.pop_last().expect("non-empty");
         assert_eq!(popped.inner, 14, "highest inner should pop last");
         drop(popped);
-        assert!(
-            ledger.leaked_ids().is_empty(),
-            "leaked: {:?}",
-            ledger.leaked_ids()
-        );
+        // 14 items are still live in the set; only double-frees matter here.
         assert!(ledger.double_dropped().is_empty());
         drop(set);
         assert!(
@@ -437,11 +442,7 @@ mod tests {
         let removed = set.remove(&5u32).expect("inner 5 should exist");
         assert_eq!(removed.inner, 5);
         drop(removed);
-        assert!(
-            ledger.leaked_ids().is_empty(),
-            "leaked: {:?}",
-            ledger.leaked_ids()
-        );
+        // 14 items remain in the set; only double-frees matter here.
         assert!(ledger.double_dropped().is_empty());
         drop(set);
         assert!(
@@ -462,11 +463,7 @@ mod tests {
             // Second removal of the same inner must miss.
             assert!(set.remove(&i).is_none());
             drop(removed);
-            assert!(
-                ledger.leaked_ids().is_empty(),
-                "leaked: {:?}",
-                ledger.leaked_ids()
-            );
+            // Remaining items are still live; only double-frees matter mid-drain.
             assert!(ledger.double_dropped().is_empty());
         }
         assert!(set.is_empty());
@@ -533,5 +530,98 @@ mod tests {
             check_ascending_keys(&set.map);
         }
         assert!(set.is_empty());
+    }
+
+    // ── retain ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn retain_empty_set() {
+        let mut set = BTreeSet::<i32>::new();
+        set.retain(|_| true);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn retain_keeps_matching_only() {
+        let mut set = BTreeSet::new();
+        for i in 0..10u32 {
+            set.try_insert(i).unwrap();
+        }
+        set.retain(|v| v % 2 == 1);
+        assert_eq!(set.len(), 5);
+        for i in (0..10u32).filter(|i| i % 2 == 1) {
+            assert!(set.contains(&i), "kept {i} lost");
+        }
+        for i in (0..10u32).filter(|i| i % 2 == 0) {
+            assert!(!set.contains(&i), "filtered-out {i} still present");
+        }
+    }
+
+    #[test]
+    fn retain_keeps_none() {
+        let mut set = BTreeSet::new();
+        for i in 0..20u32 {
+            set.try_insert(i).unwrap();
+        }
+        set.retain(|_| false);
+        assert!(set.is_empty());
+        assert_eq!(set.len(), 0);
+    }
+
+    #[test]
+    fn retain_keeps_all() {
+        let mut set = BTreeSet::new();
+        for i in 0..20u32 {
+            set.try_insert(i).unwrap();
+        }
+        set.retain(|_| true);
+        assert_eq!(set.len(), 20);
+        for i in 0..20u32 {
+            assert!(set.contains(&i));
+        }
+    }
+
+    #[test]
+    fn retain_multilevel() {
+        let mut set = BTreeSet::new();
+        for i in 0..300u32 {
+            set.try_insert(i).unwrap();
+        }
+        assert!(set.map.root.as_ref().is_some_and(|r| r.height() >= 2));
+        set.retain(|v| v % 3 != 0);
+        check_tree_invariant(&set.map);
+        check_ascending_keys(&set.map);
+        assert_eq!(set.len(), 200);
+        for i in 0..300u32 {
+            if i % 3 == 0 {
+                assert!(!set.contains(&i), "{i} should be retained out");
+            } else {
+                assert!(set.contains(&i), "survivor {i} damaged");
+            }
+        }
+    }
+
+    #[test]
+    fn retain_scrambled_schedule_preserves_invariant() {
+        let mut set = BTreeSet::new();
+        const N: u32 = 120;
+        for i in 0..N {
+            set.try_insert(i).unwrap();
+        }
+        let rng = TestRng::new(0xCAFE_F00D_DEAD_BEED);
+        let keep_set: std::collections::BTreeSet<u32> =
+            rng.permuted(0..N).take((N / 3) as usize).collect();
+        set.retain(|v| keep_set.contains(v));
+        check_tree_invariant(&set.map);
+        check_ascending_keys(&set.map);
+        assert_eq!(set.len(), keep_set.len());
+        for &v in &keep_set {
+            assert!(set.contains(&v), "keeper {v} lost");
+        }
+        for i in 0..N {
+            if !keep_set.contains(&i) {
+                assert!(!set.contains(&i), "{i} should be pruned");
+            }
+        }
     }
 }

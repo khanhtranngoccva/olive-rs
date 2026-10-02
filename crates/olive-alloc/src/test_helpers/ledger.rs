@@ -202,8 +202,7 @@ impl Ledger {
     }
 
     /// Ids that were allocated but never dropped (a subset of the live set,
-    /// excluding any that also dropped — impossible here since dropping clears
-    /// live, but kept explicit for clarity). Empty ⇒ no leaks.
+    /// excluding any that also dropped). Empty ⇒ no leaks.
     pub fn leaked_ids(&self) -> Vec<u32> {
         self.live_ids()
     }

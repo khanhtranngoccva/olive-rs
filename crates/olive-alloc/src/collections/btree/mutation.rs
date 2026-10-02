@@ -2,6 +2,7 @@
 
 use core::borrow::Borrow;
 use core::mem::ManuallyDrop;
+use core::ops::RangeBounds;
 
 use super::borrow::DormantMutRef;
 use super::entry::Entry;
@@ -91,74 +92,9 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     where
         P: FnMut(&K, &mut V) -> bool,
     {
-        self.extract_if(|k, v| !keep(k, v)).for_each(drop);
+        self.extract_if(.., |k, v| !keep(k, v)).for_each(drop);
     }
 
-    /// Creates an iterator that extracts all elements matching the given predicate
-    /// from this map.
-    ///
-    /// The returned iterator can be used to iterate over the extracted entries.
-    /// Each call to `next` returns the next entry `(key, value)` for which the
-    /// predicate returned true, or `None` if there are no more such entries.
-    ///
-    /// The entries are removed from the map as they are yielded.
-    ///
-    /// # Panics
-    ///
-    /// On panic, this iterator stops functioning and yields no more entries.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use olive_alloc::collections::btree_map::BTreeMap;
-    /// use olive_alloc::vec::Vec;
-    ///
-    /// let mut map = BTreeMap::new();
-    /// map.try_insert(1, "a").unwrap();
-    /// map.try_insert(2, "b").unwrap();
-    /// map.try_insert(3, "c").unwrap();
-    ///
-    /// let extracted: Vec<_> = map.extract_if(|&k, _| k % 2 == 0).try_collect().unwrap();
-    /// assert_eq!(extracted, try_vec![(2, "b")].unwrap());
-    /// assert_eq!(map.len(), 2);
-    /// ```
-    pub fn extract_if<F>(&mut self, pred: F) -> ExtractIf<'_, K, V, F, A>
-    where
-        F: FnMut(&K, &mut V) -> bool,
-    {
-        // If the map is empty, return an iterator that immediately yields nothing.
-        // This works regardless of whether root exists or not.
-        if self.length == 0 {
-            let inner = ExtractIfInner {
-                length: &mut self.length,
-                dormant_root: None,
-                cur_leaf_edge: None,
-            };
-            return ExtractIf {
-                pred,
-                inner,
-                alloc: &self.alloc,
-            };
-        }
-
-        let (root, dormant_root) = DormantMutRef::new(
-            self.root
-                .as_mut()
-                .expect("length > 0 implies root exists on BTree*"),
-        );
-        let root = root.borrow_mut();
-        let cur_leaf_edge = Some(root.first_leaf_edge());
-        let inner = ExtractIfInner {
-            length: &mut self.length,
-            dormant_root: Some(dormant_root),
-            cur_leaf_edge,
-        };
-        ExtractIf {
-            pred,
-            inner,
-            alloc: &self.alloc,
-        }
-    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

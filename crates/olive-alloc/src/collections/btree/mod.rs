@@ -33,8 +33,8 @@ pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
 pub use map::BTreeMap;
 pub use set::{
-    BTreeSet, Entry as BTreeSetEntry, OccupiedEntry as BTreeSetOccupiedEntry,
-    VacantEntry as BTreeSetVacantEntry,
+    BTreeSet, Entry as BTreeSetEntry, ExtractIf as BTreeSetExtractIf,
+    OccupiedEntry as BTreeSetOccupiedEntry, VacantEntry as BTreeSetVacantEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ impl<E> From<AllocError> for TryBTreeMapEntryWithError<E> {
 }
 
 /// Error returned by fallible [`BTreeMap`](map::BTreeMap) operations that
-/// enforce a uniqueness check before inserting (including but not limited to 
+/// enforce a uniqueness check before inserting (including but not limited to
 /// insertion).
 ///
 /// There are two ways these operations can fail:

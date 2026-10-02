@@ -14,9 +14,11 @@ use super::map::BTreeMap;
 use super::set_val::SetValZST;
 use crate::alloc::{Allocator, Global};
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
+pub use extract_if::ExtractIf;
 
 mod construction;
 mod entry;
+mod extract_if;
 mod insertion;
 mod mutation;
 mod query;
