@@ -26,6 +26,20 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
         self.map.pop_last().map(|(k, _)| k)
     }
 
+    /// Removes a value from the set, returning `true` if it was present and
+    /// `false` otherwise.
+    ///
+    /// The probe type `Q` need not be identical to the set's element type `T`;
+    /// it only has to borrow-compare against it (e.g. removing from a
+    /// `BTreeSet<String>` with a `&str`).
+    pub fn remove<Q>(&mut self, value: &Q) -> bool
+    where
+        T: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.map.remove(value).is_some()
+    }
+
     /// Removes a value from the set and returns it, or `None` if no such value
     /// was present.
     ///
@@ -419,6 +433,44 @@ mod tests {
         assert!(set.contains("apple"));
         assert!(set.contains("cherry"));
         assert_eq!(set.take("durian"), None);
+    }
+
+    // ── remove (bool-returning) tests ────────────────────────────────────────
+
+    #[test]
+    fn remove_bool_present_returns_true_and_removes() {
+        let mut set = BTreeSet::new();
+        for i in [1, 3, 5] {
+            set.try_insert(i).unwrap();
+        }
+        assert!(set.remove(&3));
+        assert!(!set.contains(&3));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn remove_bool_absent_returns_false_and_leaves_set_untouched() {
+        let mut set = BTreeSet::new();
+        for i in [1, 3, 5] {
+            set.try_insert(i).unwrap();
+        }
+        assert!(!set.remove(&99));
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&1));
+        assert!(set.contains(&3));
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn remove_bool_borrowed_probe() {
+        let mut set: BTreeSet<std::string::String> = BTreeSet::new();
+        set.try_insert(std::string::String::from("hello")).unwrap();
+        set.try_insert(std::string::String::from("world")).unwrap();
+        // &str probe against String elements.
+        assert!(set.remove("world"));
+        assert!(!set.contains("world"));
+        assert!(set.contains("hello"));
+        assert!(!set.remove("nonexistent"));
     }
 
     #[test]

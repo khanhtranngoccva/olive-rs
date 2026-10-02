@@ -43,6 +43,54 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
             Err((k, _marker, e)) => Err((k, e)),
         }
     }
+
+    /// Moves all elements from `other` into `self`, leaving `other` empty.
+    ///
+    /// If a value from `other` is already present in `self`, it is simply
+    /// skipped (sets cannot hold duplicates, so there is nothing to overwrite).
+    ///
+    /// Uses the "slow" approach: iterates over `other`'s entries and re-inserts
+    /// them into `self` one by one. Each individual insertion is atomic — on
+    /// allocation failure, `self` remains in a valid state instead of being
+    /// completely destroyed.
+    ///
+    /// # Irreversibility on failure
+    ///
+    /// This method is **not** transactional. Once an insertion succeeds, its
+    /// effects cannot be undone. So if the append later fails, `self` is left
+    /// in a half-merged state containing some of `other`'s values, and `other`
+    /// retains only the tail of entries not yet drained.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if memory allocation fails during one of the
+    /// individual insertions. On failure the first un-inserted value is dropped
+    /// (see [`try_append_give_back`](Self::try_append_give_back) to recover it);
+    /// entries inserted before the failure remain in `self`, and `other` retains
+    /// only the tail of entries not yet drained.
+    pub fn try_append(&mut self, other: &mut Self) -> Result<(), AllocError> {
+        self.map.try_append(&mut other.map)
+    }
+
+    /// Like [`try_append`](Self::try_append), but returns the first un-inserted
+    /// value back to the caller on allocation failure instead of dropping it,
+    /// so it can be retried or otherwise handled.
+    ///
+    /// Semantics are identical to [`try_append`](Self::try_append): overlapping
+    /// values are skipped (the set already holds them), and each insertion is
+    /// atomic.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(T, AllocError)` if memory allocation fails during one of the
+    /// individual insertions. The tuple carries the current un-inserted value
+    /// back to the caller.
+    pub fn try_append_give_back(&mut self, other: &mut Self) -> Result<(), (T, AllocError)> {
+        match self.map.try_append_give_back(&mut other.map) {
+            Ok(()) => Ok(()),
+            Err((key, _marker, e)) => Err((key, e)),
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -52,7 +100,9 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
     use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use std::vec::Vec;
 
     #[test]
     fn insert_single_returns_true_and_is_visible() {
@@ -213,6 +263,230 @@ mod tests {
         }
         // Value was recovered and dropped by us — nothing leaked.
         assert!(set.is_empty());
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    // ── try_append tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn append_empty_to_empty() {
+        let mut a = BTreeSet::<i32>::new();
+        let mut b = BTreeSet::new();
+        a.try_append(&mut b).unwrap();
+        assert!(a.is_empty());
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn append_disjoint_sets_yields_union() {
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for i in 0..5u32 {
+            a.try_insert(i).unwrap();
+        }
+        for i in 5..10u32 {
+            b.try_insert(i).unwrap();
+        }
+        a.try_append(&mut b).unwrap();
+        assert_eq!(a.len(), 10);
+        assert!(b.is_empty());
+        for i in 0..10u32 {
+            assert!(a.contains(&i), "missing {}", i);
+        }
+    }
+
+    #[test]
+    fn append_overlapping_values_collapses_without_duplication() {
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for i in [1, 3, 5, 7] {
+            a.try_insert(i).unwrap();
+        }
+        for i in [3, 5, 9, 11] {
+            b.try_insert(i).unwrap();
+        }
+        a.try_append(&mut b).unwrap();
+        // Union is {1, 3, 5, 7, 9, 11} — overlaps at 3 and 5 collapse.
+        assert_eq!(a.len(), 6);
+        assert!(b.is_empty());
+        for i in [1, 3, 5, 7, 9, 11] {
+            assert!(a.contains(&i));
+        }
+    }
+
+    #[test]
+    fn append_interleaved_ranges_preserves_ordering() {
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for i in [10, 20, 40] {
+            a.try_insert(i).unwrap();
+        }
+        for i in [5, 15, 30, 50] {
+            b.try_insert(i).unwrap();
+        }
+        a.try_append(&mut b).unwrap();
+        assert_eq!(a.len(), 7);
+        assert!(b.is_empty());
+        let collected: Vec<u32> = a.iter().copied().collect();
+        assert_eq!(collected, std::vec![5, 10, 15, 20, 30, 40, 50]);
+    }
+
+    #[test]
+    fn append_multilevel_trees() {
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for i in 0..200u32 {
+            a.try_insert(i).unwrap();
+        }
+        for i in 100..300u32 {
+            b.try_insert(i).unwrap();
+        }
+        // Both trees should be multilevel at this size (CAPACITY is 11).
+        assert!(
+            a.map.root.as_ref().is_some_and(|r| r.height() >= 2),
+            "expected multi-level tree"
+        );
+        assert!(
+            b.map.root.as_ref().is_some_and(|r| r.height() >= 2),
+            "expected multi-level tree"
+        );
+
+        a.try_append(&mut b).unwrap();
+        assert_eq!(a.len(), 300);
+        assert!(b.is_empty());
+        check_tree_invariant(&a.map);
+        check_ascending_keys(&a.map);
+        for i in 0..300u32 {
+            assert!(a.contains(&i), "missing {}", i);
+        }
+    }
+
+    #[test]
+    fn append_clears_other() {
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for i in 0..20u32 {
+            b.try_insert(i).unwrap();
+        }
+        assert_eq!(b.len(), 20);
+        a.try_append(&mut b).unwrap();
+        assert!(b.is_empty());
+        assert_eq!(b.len(), 0);
+        assert_eq!(a.len(), 20);
+    }
+
+    #[test]
+    fn append_drops_other_elements_once_no_leak() {
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut a: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
+        let mut b: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
+        for i in 0..10u32 {
+            a.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+        for i in 10..20u32 {
+            b.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+        a.try_append(&mut b).unwrap();
+        assert_eq!(a.len(), 20);
+        assert!(b.is_empty());
+        drop(a);
+        drop(b);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn append_overlap_drops_duplicate_from_other_once() {
+        // When both sets contain the same value, `other`'s copy must be
+        // dropped exactly once (the set already holds it; nothing is stored).
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut a: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
+        let mut b: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
+        // Overlap on inner values 5 and 10.
+        for i in [3, 5, 7, 10] {
+            a.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+        for i in [5, 10, 12, 14] {
+            b.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+        let id_of_five = a.get(&5).unwrap().id;
+        a.try_append(&mut b).unwrap();
+        let new_id_of_five = a.get(&5).unwrap().id;
+        assert_eq!(
+            new_id_of_five, id_of_five,
+            "old item should not be pushed out"
+        );
+        // Union: {3, 5, 7, 10, 12, 14}
+        assert_eq!(a.len(), 6);
+        assert!(b.is_empty());
+        drop(a);
+        drop(b);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn append_give_back_hands_stranded_value_and_partitions_union() {
+        use std::collections::HashSet;
+
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut a: BTreeSet<TrackedItem<u32>, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        let mut b: BTreeSet<TrackedItem<u32>, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        for i in 0..40u32 {
+            if i % 2 == 0 {
+                a.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+            } else {
+                b.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+            }
+        }
+
+        // Snapshot the original union.
+        let expected: HashSet<u32> = a.iter().chain(b.iter()).map(|item| item.inner).collect();
+
+        // Drain the budget so the next node allocation during re-insertion fails.
+        alloc.drain();
+
+        let result = a.try_append_give_back(&mut b);
+        assert!(result.is_err(), "expected an allocation failure mid-append");
+        let (stranded, _err) = result.unwrap_err();
+
+        // The stranded value must be present in neither set.
+        assert!(!a.contains(&stranded.inner));
+        assert!(!b.contains(&stranded.inner));
+
+        // Partition contract: self ∪ other ∪ {stranded} == original union.
+        let mut seen: HashSet<u32> = HashSet::new();
+        for item in a.iter() {
+            assert!(seen.insert(item.inner), "duplicate in self: {}", item.inner);
+        }
+        for item in b.iter() {
+            assert!(
+                seen.insert(item.inner),
+                "duplicate in other: {}",
+                item.inner
+            );
+        }
+        assert!(seen.insert(stranded.inner), "stranded value duplicated");
+        assert_eq!(seen, expected, "partition does not cover original union");
+
+        // Drop everything; no leaks, no double-frees.
+        drop(stranded);
+        drop(a);
+        drop(b);
         assert!(
             ledger.leaked_ids().is_empty(),
             "leaked: {:?}",
