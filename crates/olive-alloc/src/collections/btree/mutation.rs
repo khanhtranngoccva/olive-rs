@@ -1,13 +1,9 @@
 //! Mutation methods for `BTreeMap`: clearing, popping from ends, and removing by key.
 
+use super::entry::Entry;
+use super::map::BTreeMap;
 use core::borrow::Borrow;
 use core::mem::ManuallyDrop;
-use core::ops::RangeBounds;
-
-use super::borrow::DormantMutRef;
-use super::entry::Entry;
-use super::extract_if::{ExtractIf, ExtractIfInner};
-use super::map::BTreeMap;
 
 use crate::alloc::Allocator;
 
@@ -94,7 +90,6 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     {
         self.extract_if(.., |k, v| !keep(k, v)).for_each(drop);
     }
-
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

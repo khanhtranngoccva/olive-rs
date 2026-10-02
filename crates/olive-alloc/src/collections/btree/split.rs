@@ -5,7 +5,6 @@ use super::map::BTreeMap;
 use super::node::ForceResult::*;
 use super::node::{Handle, InternalNode, Root};
 use super::search::SearchResult::*;
-use crate::collections::btree::node::{LeafNode, NodeRef};
 use crate::vec::Vec;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 
