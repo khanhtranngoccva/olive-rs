@@ -15,11 +15,13 @@ use super::set_val::SetValZST;
 use crate::alloc::{Allocator, Global};
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
 pub use extract_if::ExtractIf;
+pub use iter::{IntoIter, Iter};
 
 mod construction;
 mod entry;
 mod extract_if;
 mod insertion;
+mod iter;
 mod mutation;
 mod query;
 

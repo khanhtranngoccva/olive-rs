@@ -15,6 +15,7 @@ pub mod btree_map {
 pub mod btree_set {
     pub use super::btree::{
         BTreeSet, BTreeSetEntry as Entry, BTreeSetExtractIf as ExtractIf,
-        BTreeSetOccupiedEntry as OccupiedEntry, BTreeSetVacantEntry as VacantEntry,
+        BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter, BTreeSetOccupiedEntry as OccupiedEntry,
+        BTreeSetVacantEntry as VacantEntry,
     };
 }

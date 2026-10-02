@@ -40,7 +40,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.length, Some(self.length))
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<(&'a K, &'a V)> {
@@ -121,7 +121,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<&'a K> {
@@ -189,7 +189,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Values<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<&'a V> {
@@ -256,7 +256,7 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.length, Some(self.length))
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<(&'a K, &'a mut V)> {
@@ -321,7 +321,7 @@ impl<'a, K: 'a, V: 'a> Iterator for ValuesMut<'a, K, V> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<&'a mut V> {
@@ -365,7 +365,7 @@ impl<K, V, A: Allocator> Iterator for IntoIter<K, V, A> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.length, Some(self.length))
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<Self::Item> {
@@ -461,7 +461,7 @@ impl<K, V, A: Allocator> Iterator for IntoKeys<K, V, A> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<Self::Item> {
@@ -500,7 +500,7 @@ impl<K, V, A: Allocator> Iterator for IntoValues<K, V, A> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
+        (self.len(), Some(self.len()))
     }
 
     fn last(mut self) -> Option<V> {
