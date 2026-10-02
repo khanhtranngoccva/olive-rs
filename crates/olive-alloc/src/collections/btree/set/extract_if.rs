@@ -544,7 +544,7 @@ mod tests {
         for i in 0..10u32 {
             set.try_insert(i).unwrap();
         }
-        set.remove(&4);
+        set.take(&4);
         let extracted: std::vec::Vec<u32> = set.extract_if(4.., |_| true).collect();
         assert_eq!(extracted, (5..10).collect::<std::vec::Vec<_>>());
         assert_eq!(set.len(), 4);

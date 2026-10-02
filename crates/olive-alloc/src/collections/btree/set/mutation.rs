@@ -32,7 +32,7 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
     /// The probe type `Q` need not be identical to the set's element type `T`;
     /// it only has to borrow-compare against it (e.g. removing from a
     /// `BTreeSet<String>` with a `&str`).
-    pub fn remove<Q>(&mut self, value: &Q) -> Option<T>
+    pub fn take<Q>(&mut self, value: &Q) -> Option<T>
     where
         T: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -341,7 +341,7 @@ mod tests {
     fn remove_single_element() {
         let mut set = BTreeSet::new();
         set.try_insert(10).unwrap();
-        assert_eq!(set.remove(&10), Some(10));
+        assert_eq!(set.take(&10), Some(10));
         assert!(set.is_empty());
     }
 
@@ -350,7 +350,7 @@ mod tests {
         let mut set = BTreeSet::new();
         set.try_insert(1).unwrap();
         set.try_insert(2).unwrap();
-        assert_eq!(set.remove(&99), None);
+        assert_eq!(set.take(&99), None);
         assert_eq!(set.len(), 2);
     }
 
@@ -361,7 +361,7 @@ mod tests {
             set.try_insert(i).unwrap();
         }
         for i in (0..5u32).rev() {
-            assert_eq!(set.remove(&i), Some(i));
+            assert_eq!(set.take(&i), Some(i));
         }
         assert!(set.is_empty());
     }
@@ -373,7 +373,7 @@ mod tests {
             set.try_insert(i).unwrap();
         }
         for i in (0..25u32).step_by(2) {
-            assert_eq!(set.remove(&(i * 2)), Some(i * 2));
+            assert_eq!(set.take(&(i * 2)), Some(i * 2));
         }
         check_tree_invariant(&set.map);
         check_ascending_keys(&set.map);
@@ -387,7 +387,7 @@ mod tests {
         }
         for i in 0..20u32 {
             if i % 2 == 0 {
-                assert_eq!(set.remove(&i), Some(i));
+                assert_eq!(set.take(&i), Some(i));
             } else {
                 set.try_insert(100 + i).unwrap();
             }
@@ -413,12 +413,12 @@ mod tests {
         set.try_insert(std::string::String::from("banana")).unwrap();
         set.try_insert(std::string::String::from("cherry")).unwrap();
         // Remove via &str probe exercises the real Q != T path.
-        let removed = set.remove("banana").expect("should find banana");
+        let removed = set.take("banana").expect("should find banana");
         assert_eq!(removed.as_str(), "banana");
         assert!(!set.contains("banana"));
         assert!(set.contains("apple"));
         assert!(set.contains("cherry"));
-        assert_eq!(set.remove("durian"), None);
+        assert_eq!(set.take("durian"), None);
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
         }
         while set.len() > 1 {
             let next = *set.map.first_key_value().unwrap().0;
-            assert_eq!(set.remove(&next), Some(next));
+            assert_eq!(set.take(&next), Some(next));
         }
         assert_eq!(set.len(), 1);
     }
@@ -439,7 +439,7 @@ mod tests {
         let ledger = std::sync::Arc::new(Ledger::new());
         let mut set = build_set(15, &ledger);
         // Probe with the raw inner (TrackedItem borrows through its inner).
-        let removed = set.remove(&5u32).expect("inner 5 should exist");
+        let removed = set.take(&5u32).expect("inner 5 should exist");
         assert_eq!(removed.inner, 5);
         drop(removed);
         // 14 items remain in the set; only double-frees matter here.
@@ -458,10 +458,10 @@ mod tests {
         let ledger = std::sync::Arc::new(Ledger::new());
         let mut set = build_set(20, &ledger);
         for i in 0..20u32 {
-            let removed = set.remove(&i).expect("value should exist");
+            let removed = set.take(&i).expect("value should exist");
             assert_eq!(removed.inner, i);
             // Second removal of the same inner must miss.
-            assert!(set.remove(&i).is_none());
+            assert!(set.take(&i).is_none());
             drop(removed);
             // Remaining items are still live; only double-frees matter mid-drain.
             assert!(ledger.double_dropped().is_empty());
@@ -485,7 +485,7 @@ mod tests {
             set.try_insert(i).unwrap();
         }
         for v in rng.permuted(0..n) {
-            assert_eq!(set.remove(&v), Some(v));
+            assert_eq!(set.take(&v), Some(v));
             check_tree_invariant(&set.map);
             check_ascending_keys(&set.map);
         }
@@ -499,7 +499,7 @@ mod tests {
             set.try_insert(i).unwrap();
         }
         for i in (0..40u32).step_by(2) {
-            assert_eq!(set.remove(&i), Some(i));
+            assert_eq!(set.take(&i), Some(i));
         }
         assert_eq!(set.len(), 20);
         check_tree_invariant(&set.map);
@@ -523,9 +523,9 @@ mod tests {
         for &k in &order {
             assert!(!seen[k as usize], "duplicate in removal schedule");
             seen[k as usize] = true;
-            assert_eq!(set.remove(&k), Some(k));
+            assert_eq!(set.take(&k), Some(k));
             // The value is gone immediately: a second remove misses.
-            assert!(set.remove(&k).is_none());
+            assert!(set.take(&k).is_none());
             check_tree_invariant(&set.map);
             check_ascending_keys(&set.map);
         }
