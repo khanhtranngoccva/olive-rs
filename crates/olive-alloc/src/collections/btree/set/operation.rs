@@ -950,4 +950,5 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, [&1, &3, &4]);
     }
+
 }
