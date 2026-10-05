@@ -43,6 +43,16 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
         self.get(value).is_some()
     }
 
+    /// Gets the smallest value in the set, or `None` if the set is empty.
+    pub fn first(&self) -> Option<&T> {
+        self.map.first_key_value().map(|(k, _)| k)
+    }
+
+    /// Gets the greatest value in the set, or `None` if the set is empty.
+    pub fn last(&self) -> Option<&T> {
+        self.map.last_key_value().map(|(k, _)| k)
+    }
+
     /// Returns a reference to the allocator this set is using.
     pub fn allocator(&self) -> &A {
         self.map.allocator()
@@ -124,6 +134,43 @@ mod tests {
         assert_eq!(set.get(&79), Some(&79));
         assert_eq!(set.get(&40), Some(&40));
         assert_eq!(set.get(&1000), None);
+    }
+
+    #[test]
+    fn first_last_empty_set() {
+        let set: BTreeSet<i32> = BTreeSet::new();
+        assert_eq!(set.first(), None);
+        assert_eq!(set.last(), None);
+    }
+
+    #[test]
+    fn first_last_single_element() {
+        let mut set = BTreeSet::new();
+        set.try_insert(42).unwrap();
+        assert_eq!(set.first(), Some(&42));
+        assert_eq!(set.last(), Some(&42));
+    }
+
+    #[test]
+    fn first_last_multiple_elements() {
+        let mut set = BTreeSet::new();
+        for v in [7, 3, 9, 1, 5] {
+            set.try_insert(v).unwrap();
+        }
+        assert_eq!(set.first(), Some(&1));
+        assert_eq!(set.last(), Some(&9));
+    }
+
+    #[test]
+    fn first_last_multilevel_tree() {
+        // Descending insertion forces a multi-level tree.
+        let mut set = BTreeSet::new();
+        for i in (0..80u32).rev() {
+            set.try_insert(i).unwrap();
+        }
+        assert_eq!(set.len(), 80);
+        assert_eq!(set.first(), Some(&0));
+        assert_eq!(set.last(), Some(&79));
     }
 
     #[test]
