@@ -3,6 +3,8 @@
 //! Unlike the borrowed iterators, this consumes the vector by value and yields
 //! its elements one at a time, moving them out of the buffer.
 
+use core::fmt;
+use core::fmt::Debug;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
@@ -219,5 +221,15 @@ impl<T, A: Allocator> Drop for IntoIter<T, A> {
         // The owned `RawVec` field is dropped automatically after this body
         // returns, freeing the backing block and dropping the allocator. No
         // explicit free call or guard is needed: `RawVec::drop` handles both.
+    }
+}
+
+impl<T: Debug, A: Allocator> Debug for IntoIter<T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debugger = f.debug_list();
+        if self.remaining() > 0 {
+            debugger.entries(self.as_slice());
+        }
+        debugger.finish()
     }
 }
