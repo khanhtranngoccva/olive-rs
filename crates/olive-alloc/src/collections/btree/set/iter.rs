@@ -4,6 +4,7 @@ use super::super::iter::{IntoIter as MapIntoIter, Iter as MapIter};
 use super::super::set_val::SetValZST;
 use super::BTreeSet;
 use crate::alloc::{Allocator, Global};
+use core::fmt;
 use core::iter::{DoubleEndedIterator, ExactSizeIterator, FusedIterator, Iterator};
 use olive_core::try_traits::{TryClone, TryCloneError};
 
@@ -75,6 +76,14 @@ impl<'a, T: 'a> TryClone for Iter<'a, T> {
     }
 }
 
+impl<T: fmt::Debug> fmt::Debug for Iter<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.iter.clone().map(|(k, _v)| k))
+            .finish()
+    }
+}
+
 // ── IntoIter ─────────────────────────────────────────────────────────────────
 
 /// An owning iterator over the values of a [`BTreeSet`], consuming the set.
@@ -115,9 +124,17 @@ impl<T, A: Allocator> ExactSizeIterator for IntoIter<T, A> {
 
 impl<T, A: Allocator> FusedIterator for IntoIter<T, A> {}
 
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.iter.iter().map(|(k, _v)| k))
+            .finish()
+    }
+}
+
 // ── BTreeSet methods ─────────────────────────────────────────────────────────
 
-impl<T: Ord, A: Allocator> BTreeSet<T, A> {
+impl<T, A: Allocator> BTreeSet<T, A> {
     /// Returns an iterator visiting the values in ascending order.
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
@@ -126,7 +143,7 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
     }
 }
 
-impl<T: Ord, A: Allocator> IntoIterator for BTreeSet<T, A> {
+impl<T, A: Allocator> IntoIterator for BTreeSet<T, A> {
     type Item = T;
     type IntoIter = IntoIter<T, A>;
 
@@ -137,7 +154,7 @@ impl<T: Ord, A: Allocator> IntoIterator for BTreeSet<T, A> {
     }
 }
 
-impl<'a, T: Ord, A: Allocator> IntoIterator for &'a BTreeSet<T, A> {
+impl<'a, T, A: Allocator> IntoIterator for &'a BTreeSet<T, A> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
 

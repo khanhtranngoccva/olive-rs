@@ -10,6 +10,8 @@
 //! Every operation that may allocate returns a `Result` whose error carries the
 //! offending value plus an [`AllocError`]. On failure the set is left unmodified.
 
+use core::fmt;
+
 use super::map::BTreeMap;
 use super::set_val::SetValZST;
 use crate::alloc::{Allocator, Global};
@@ -23,6 +25,7 @@ mod extract_if;
 mod insertion;
 mod iter;
 mod mutation;
+mod operation;
 mod query;
 
 /// An ordered set based on a B-tree.
@@ -32,4 +35,10 @@ mod query;
 /// side is never exposed through the public API.
 pub struct BTreeSet<T, A: Allocator = Global> {
     map: BTreeMap<T, SetValZST, A>,
+}
+
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for BTreeSet<T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
+    }
 }

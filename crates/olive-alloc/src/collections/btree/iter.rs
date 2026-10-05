@@ -7,6 +7,7 @@ use super::navigate::LazyLeafRange;
 use super::node::marker;
 use super::node::{Handle, NodeRef};
 use crate::alloc::{Allocator, Global};
+use core::fmt;
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::mem::ManuallyDrop;
 
@@ -104,6 +105,12 @@ impl<'a, K: 'a, V: 'a> TryClone for Iter<'a, K, V> {
     }
 }
 
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Iter<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 /// An iterator yielding immutable key references over the entries of a `BTreeMap`.
@@ -172,6 +179,12 @@ impl<'a, K: 'a, V: 'a> TryClone for Keys<'a, K, V> {
     }
 }
 
+impl<K: fmt::Debug, V> fmt::Debug for Keys<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
 // ── Values ───────────────────────────────────────────────────────────────────
 
 /// An iterator yielding immutable value references over the entries of a `BTreeMap`.
@@ -226,6 +239,12 @@ impl<'a, K: 'a, V: 'a> TryClone for Values<'a, K, V> {
     }
 }
 
+impl<K, V: fmt::Debug> fmt::Debug for Values<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
 // ── IterMut ──────────────────────────────────────────────────────────────────
 
 /// An iterator over mutable references to the values of a `BTreeMap`.
@@ -234,6 +253,17 @@ impl<'a, K: 'a, V: 'a> TryClone for Values<'a, K, V> {
 pub struct IterMut<'a, K: 'a, V: 'a> {
     range: LazyLeafRange<marker::ValMut<'a>, K, V>,
     length: usize,
+}
+
+impl<K, V> IterMut<'_, K, V> {
+    /// Returns an iterator of references over the remaining items.
+    #[inline]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            range: self.range.reborrow(),
+            length: self.length,
+        }
+    }
 }
 
 impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
@@ -304,6 +334,12 @@ impl<K, V> ExactSizeIterator for IterMut<'_, K, V> {
 
 impl<K, V> FusedIterator for IterMut<'_, K, V> {}
 
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IterMut<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 // ── ValuesMut ────────────────────────────────────────────────────────────────
 
 /// An iterator yielding mutable value references over the entries of a `BTreeMap`.
@@ -343,6 +379,14 @@ impl<K, V> ExactSizeIterator for ValuesMut<'_, K, V> {
 
 impl<K, V> FusedIterator for ValuesMut<'_, K, V> {}
 
+impl<K, V: fmt::Debug> fmt::Debug for ValuesMut<'_, K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.iter.iter().map(|(_, val)| val))
+            .finish()
+    }
+}
+
 // ── IntoIter ─────────────────────────────────────────────────────────────────
 
 /// An owning iterator over the entries of a `BTreeMap`, consuming the map.
@@ -354,6 +398,17 @@ pub struct IntoIter<K, V, A: Allocator = Global> {
     range: LazyLeafRange<marker::Dying, K, V>,
     length: usize,
     alloc: A,
+}
+
+impl<K, V, A: Allocator> IntoIter<K, V, A> {
+    /// Returns an iterator of references over the remaining items.
+    #[inline]
+    pub(super) fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            range: self.range.reborrow(),
+            length: self.length,
+        }
+    }
 }
 
 impl<K, V, A: Allocator> Iterator for IntoIter<K, V, A> {
@@ -444,6 +499,12 @@ impl<K, V, A: Allocator> IntoIter<K, V, A> {
     }
 }
 
+impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<K, V, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 // ── IntoKeys ─────────────────────────────────────────────────────────────────
 
 /// An owning iterator over the keys of a `BTreeMap`, consuming the map.
@@ -483,6 +544,14 @@ impl<K, V, A: Allocator> ExactSizeIterator for IntoKeys<K, V, A> {
 
 impl<K, V, A: Allocator> FusedIterator for IntoKeys<K, V, A> {}
 
+impl<K: fmt::Debug, V, A: Allocator> fmt::Debug for IntoKeys<K, V, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.iter.iter().map(|(k, _v)| k))
+            .finish()
+    }
+}
+
 // ── IntoValues ───────────────────────────────────────────────────────────────
 
 /// An owning iterator over the values of a `BTreeMap`, consuming the map.
@@ -521,6 +590,14 @@ impl<K, V, A: Allocator> ExactSizeIterator for IntoValues<K, V, A> {
 }
 
 impl<K, V, A: Allocator> FusedIterator for IntoValues<K, V, A> {}
+
+impl<K, V: fmt::Debug, A: Allocator> fmt::Debug for IntoValues<K, V, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.iter.iter().map(|(_k, v)| v))
+            .finish()
+    }
+}
 
 // ── BTreeMap methods ─────────────────────────────────────────────────────────
 
@@ -601,6 +678,24 @@ impl<K, V, A: Allocator> IntoIterator for BTreeMap<K, V, A> {
                 alloc: unsafe { ManuallyDrop::take(&mut me.alloc) },
             }
         }
+    }
+}
+
+impl<'a, K, V, A: Allocator> IntoIterator for &'a BTreeMap<K, V, A> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V, A: Allocator> IntoIterator for &'a mut BTreeMap<K, V, A> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 
