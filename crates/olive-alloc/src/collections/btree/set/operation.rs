@@ -11,7 +11,7 @@
 use core::cmp::{Ordering, min};
 use core::fmt;
 use core::fmt::Debug;
-use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
+use core::iter::{DoubleEndedIterator, FusedIterator, Iterator, Peekable};
 use core::marker::PhantomData;
 
 use super::super::merge_iter::MergeIterInner;
@@ -91,6 +91,12 @@ impl<T: Debug, A: Allocator> Debug for IntersectionInner<'_, T, A> {
                 .finish(),
             IntersectionInner::Answer(x) => f.debug_tuple("Answer").field(x).finish(),
         }
+    }
+}
+
+impl<T: Debug, A: Allocator> Debug for Intersection<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Intersection").field(&self.inner).finish()
     }
 }
 
@@ -177,6 +183,43 @@ impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for Intersection<'a, T, A> {
 
 impl<T: Ord, A: Allocator> FusedIterator for Intersection<'_, T, A> {}
 
+impl<'a, T: Ord, A: Allocator> Intersection<'a, T, A> {
+    fn new(self_set: &'a BTreeSet<T, A>, other_set: &'a BTreeSet<T, A>) -> Self {
+        let (Some(self_min), Some(self_max), Some(other_min), Some(other_max)) = (
+            self_set.first(),
+            self_set.last(),
+            other_set.first(),
+            other_set.last(),
+        ) else {
+            return Intersection::empty();
+        };
+
+        Intersection {
+            inner: match (self_min.cmp(other_max), self_max.cmp(other_min)) {
+                (Ordering::Greater, _) | (_, Ordering::Less) => IntersectionInner::Answer(None),
+                (Ordering::Equal, _) => IntersectionInner::Answer(Some(self_min)),
+                (_, Ordering::Equal) => IntersectionInner::Answer(Some(self_max)),
+                _ if self_set.len() <= other_set.len() / ITER_PERFORMANCE_TIPPING_SIZE_DIFF => {
+                    IntersectionInner::Search {
+                        small_iter: self_set.iter(),
+                        large_set: other_set,
+                    }
+                }
+                _ if other_set.len() <= self_set.len() / ITER_PERFORMANCE_TIPPING_SIZE_DIFF => {
+                    IntersectionInner::Search {
+                        small_iter: other_set.iter(),
+                        large_set: self_set,
+                    }
+                }
+                _ => IntersectionInner::Stitch {
+                    a: self_set.iter(),
+                    b: other_set.iter(),
+                },
+            },
+        }
+    }
+}
+
 // ── Union ─────────────────────────────────────────────────────────────────────
 
 /// A lazy iterator producing elements in the union of `BTreeSet`s.
@@ -236,6 +279,194 @@ impl<'a, T: Ord, A: Allocator> Iterator for Union<'a, T, A> {
 
 impl<T: Ord, A: Allocator> FusedIterator for Union<'_, T, A> {}
 
+// ── Difference ────────────────────────────────────────────────────────────────
+
+/// A lazy iterator producing elements in the difference of `BTreeSet`s.
+///
+/// This `struct` is created by the [`difference`] method on [`BTreeSet`].
+/// See its documentation for more.
+///
+/// [`difference`]: BTreeSet::difference
+#[must_use = "this returns the difference as an iterator, \
+              without modifying either input set"]
+#[derive(TryClone)]
+pub struct Difference<'a, T: 'a, A: Allocator = Global> {
+    inner: DifferenceInner<'a, T, A>,
+}
+
+enum DifferenceInner<'a, T: 'a, A: Allocator> {
+    Stitch {
+        self_iter: Iter<'a, T>,
+        other_iter: Peekable<Iter<'a, T>>,
+    },
+    Search {
+        self_iter: Iter<'a, T>,
+        other_set: &'a BTreeSet<T, A>,
+    },
+    Iterate(Iter<'a, T>),
+}
+
+impl<T: Debug, A: Allocator> Debug for DifferenceInner<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DifferenceInner::Stitch {
+                self_iter,
+                other_iter,
+            } => f
+                .debug_struct("Stitch")
+                .field("self_iter", self_iter)
+                .field("other_iter", other_iter)
+                .finish(),
+            DifferenceInner::Search {
+                self_iter,
+                other_set,
+            } => f
+                .debug_struct("Search")
+                .field("self_iter", self_iter)
+                .field("other_set", other_set)
+                .finish(),
+            DifferenceInner::Iterate(x) => f.debug_tuple("Iterate").field(x).finish(),
+        }
+    }
+}
+
+impl<T: Debug, A: Allocator> Debug for Difference<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Difference").field(&self.inner).finish()
+    }
+}
+
+impl<T: Ord, A: Allocator> Clone for Difference<'_, T, A> {
+    fn clone(&self) -> Self {
+        Difference {
+            inner: match &self.inner {
+                DifferenceInner::Stitch {
+                    self_iter,
+                    other_iter,
+                } => DifferenceInner::Stitch {
+                    self_iter: self_iter.clone(),
+                    other_iter: other_iter.clone(),
+                },
+                DifferenceInner::Search {
+                    self_iter,
+                    other_set,
+                } => DifferenceInner::Search {
+                    self_iter: self_iter.clone(),
+                    other_set,
+                },
+                DifferenceInner::Iterate(iter) => DifferenceInner::Iterate(iter.clone()),
+            },
+        }
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> Iterator for Difference<'a, T, A> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        match &mut self.inner {
+            DifferenceInner::Stitch {
+                self_iter,
+                other_iter,
+            } => {
+                let mut self_next = self_iter.next()?;
+                loop {
+                    match other_iter
+                        .peek()
+                        .map_or(Ordering::Less, |other_next| self_next.cmp(other_next))
+                    {
+                        Ordering::Less => return Some(self_next),
+                        Ordering::Equal => {
+                            self_next = self_iter.next()?;
+                            other_iter.next();
+                        }
+                        Ordering::Greater => {
+                            other_iter.next();
+                        }
+                    }
+                }
+            }
+            DifferenceInner::Search {
+                self_iter,
+                other_set,
+            } => loop {
+                let self_next = self_iter.next()?;
+                if !other_set.contains(self_next) {
+                    return Some(self_next);
+                }
+            },
+            DifferenceInner::Iterate(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (self_len, other_len) = match &self.inner {
+            DifferenceInner::Stitch {
+                self_iter,
+                other_iter,
+            } => (self_iter.len(), other_iter.len()),
+            DifferenceInner::Search {
+                self_iter,
+                other_set,
+            } => (self_iter.len(), other_set.len()),
+            DifferenceInner::Iterate(iter) => (iter.len(), 0),
+        };
+        (self_len.saturating_sub(other_len), Some(self_len))
+    }
+
+    fn min(mut self) -> Option<&'a T> {
+        self.next()
+    }
+
+    fn max(self) -> Option<&'a T> {
+        self.last()
+    }
+}
+
+impl<T: Ord, A: Allocator> FusedIterator for Difference<'_, T, A> {}
+
+impl<'a, T: Ord, A: Allocator> Difference<'a, T, A> {
+    pub(super) fn new(self_set: &'a BTreeSet<T, A>, other_set: &'a BTreeSet<T, A>) -> Self {
+        let (Some(self_min), Some(self_max), Some(other_min), Some(other_max)) = (
+            self_set.first(),
+            self_set.last(),
+            other_set.first(),
+            other_set.last(),
+        ) else {
+            return Difference {
+                inner: DifferenceInner::Iterate(self_set.iter()),
+            };
+        };
+
+        let inner = match (self_min.cmp(other_max), self_max.cmp(other_min)) {
+            (Ordering::Greater, _) | (_, Ordering::Less) => {
+                DifferenceInner::Iterate(self_set.iter())
+            }
+            (Ordering::Equal, _) => {
+                let mut it = self_set.iter();
+                it.next();
+                DifferenceInner::Iterate(it)
+            }
+            (_, Ordering::Equal) => {
+                let mut it = self_set.iter();
+                it.next_back();
+                DifferenceInner::Iterate(it)
+            }
+            _ if self_set.len() <= other_set.len() / ITER_PERFORMANCE_TIPPING_SIZE_DIFF => {
+                DifferenceInner::Search {
+                    self_iter: self_set.iter(),
+                    other_set,
+                }
+            }
+            _ => DifferenceInner::Stitch {
+                self_iter: self_set.iter(),
+                other_iter: other_set.iter().peekable(),
+            },
+        };
+        Difference { inner }
+    }
+}
+
 // ── BTreeSet methods ──────────────────────────────────────────────────────────
 
 impl<T: Ord, A: Allocator> BTreeSet<T, A> {
@@ -245,41 +476,19 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
     /// The resulting iterator supports reverse iteration via
     /// [`DoubleEndedIterator::next_back`].
     pub fn intersection<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Intersection<'s, T, A> {
-        let (Some(self_min), Some(self_max), Some(other_min), Some(other_max)) =
-            (self.first(), self.last(), other.first(), other.last())
-        else {
-            return Intersection::empty();
-        };
-
-        Intersection {
-            inner: match (self_min.cmp(other_max), self_max.cmp(other_min)) {
-                (Ordering::Greater, _) | (_, Ordering::Less) => IntersectionInner::Answer(None),
-                (Ordering::Equal, _) => IntersectionInner::Answer(Some(self_min)),
-                (_, Ordering::Equal) => IntersectionInner::Answer(Some(self_max)),
-                _ if self.len() <= other.len() / ITER_PERFORMANCE_TIPPING_SIZE_DIFF => {
-                    IntersectionInner::Search {
-                        small_iter: self.iter(),
-                        large_set: other,
-                    }
-                }
-                _ if other.len() <= self.len() / ITER_PERFORMANCE_TIPPING_SIZE_DIFF => {
-                    IntersectionInner::Search {
-                        small_iter: other.iter(),
-                        large_set: self,
-                    }
-                }
-                _ => IntersectionInner::Stitch {
-                    a: self.iter(),
-                    b: other.iter(),
-                },
-            },
-        }
+        Intersection::new(self, other)
     }
 
     /// Returns an iterator over elements in the union of `self` and `other`,
     /// in ascending order.
     pub fn union<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Union<'s, T, A> {
         Union::new(self, other)
+    }
+
+    /// Returns an iterator over elements in `self` but not in `other`,
+    /// in ascending order.
+    pub fn difference<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Difference<'s, T, A> {
+        Difference::new(self, other)
     }
 }
 
@@ -505,5 +714,120 @@ mod tests {
         assert_eq!(u.next(), Some(&4));
         assert_eq!(u.next(), None);
         assert_eq!(u.next(), None);
+    }
+
+    // ── Difference tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn difference_disjoint_sets_returns_all_self() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[4, 5, 6]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&1, &2, &3]);
+    }
+
+    #[test]
+    fn difference_identical_sets_is_empty() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let result: Vec<&i32> = a.difference(&a).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn difference_partial_overlap() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&1, &2]);
+    }
+
+    #[test]
+    fn difference_with_empty_set_returns_all_self() {
+        let a = build(&[1, 2, 3]);
+        let empty: BTreeSet<i32> = BTreeSet::new();
+        let result: Vec<&i32> = a.difference(&empty).collect();
+        assert_eq!(result, [&1, &2, &3]);
+    }
+
+    #[test]
+    fn difference_of_empty_set_is_empty() {
+        let empty: BTreeSet<i32> = BTreeSet::new();
+        let b = build(&[1, 2, 3]);
+        let result: Vec<&i32> = empty.difference(&b).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn difference_stitch_path_similar_sizes() {
+        let a = build(&[1, 3, 5, 7, 9, 11]);
+        let b = build(&[3, 5, 9, 10, 11, 12]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&1, &7]);
+    }
+
+    #[test]
+    fn difference_search_path_small_vs_large() {
+        let small = build(&[2, 4, 6, 8]);
+        let large = build(&(0..100).collect::<Vec<i32>>());
+        let result: Vec<&i32> = small.difference(&large).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn difference_iterate_path_disjoint_ranges() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[10, 20, 30]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&1, &2, &3]);
+    }
+
+    #[test]
+    fn difference_touching_at_min_skips_first() {
+        let a = build(&[5, 6, 7]);
+        let b = build(&[1, 2, 5]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&6, &7]);
+    }
+
+    #[test]
+    fn difference_touching_at_max_skips_last() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[3, 4, 5]);
+        let result: Vec<&i32> = a.difference(&b).collect();
+        assert_eq!(result, [&1, &2]);
+    }
+
+    #[test]
+    fn difference_size_hint_bounds() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let diff = a.difference(&b);
+        let (low, high) = diff.size_hint();
+        assert!(high.unwrap() <= 5);
+        assert!(low == 0);
+        assert!(low <= high.unwrap());
+    }
+
+    #[test]
+    fn difference_fused_iterator() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[2]);
+        let mut diff = a.difference(&b);
+        assert_eq!(diff.next(), Some(&1));
+        assert_eq!(diff.next(), Some(&3));
+        assert_eq!(diff.next(), None);
+        assert_eq!(diff.next(), None);
+    }
+
+    #[test]
+    fn difference_clone() {
+        let a = build(&[1, 2, 3, 4]);
+        let b = build(&[2]);
+        let diff = a.difference(&b);
+        let cloned = diff.clone();
+        let r1: Vec<&i32> = diff.collect();
+        let r2: Vec<&i32> = cloned.collect();
+        assert_eq!(r1, r2);
+        assert_eq!(r1, [&1, &3, &4]);
     }
 }
