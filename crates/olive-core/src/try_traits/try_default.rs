@@ -190,45 +190,169 @@ mod tests {
         );
     }
 
-    #[derive(TryDefault, Debug, PartialEq)]
-    struct NamedFields {
-        a: u32,
-        b: bool,
-    }
+    mod perfect_derive {
+        use super::*;
 
-    #[derive(TryDefault, Debug, PartialEq)]
-    struct Positional(char, i64);
+        // These test cases govern the basic behaviors.
 
-    #[derive(TryDefault, Debug, PartialEq)]
-    struct Unit;
+        #[derive(TryDefault, Debug, PartialEq)]
+        struct NamedFields {
+            a: u32,
+            b: bool,
+        }
 
-    #[derive(TryDefault, Debug, PartialEq)]
-    enum EnumWithDefault {
-        #[try_default]
-        Empty,
-        #[expect(unused, reason = "test cases do not use it yet")]
-        Full(u32),
-    }
+        #[derive(TryDefault, Debug, PartialEq)]
+        struct Positional(char, i64);
 
-    #[test]
-    fn derive_struct_named_fields() {
-        let v = NamedFields::try_default().unwrap();
-        assert_eq!(v.a, 0);
-        assert!(!v.b);
-    }
+        #[derive(TryDefault, Debug, PartialEq)]
+        struct Unit;
 
-    #[test]
-    fn derive_struct_positional_and_unit() {
-        let p = Positional::try_default().unwrap();
-        assert_eq!((p.0, p.1), ('\0', 0));
-        assert_eq!(Unit::try_default().unwrap(), Unit);
-    }
+        #[derive(TryDefault, Debug, PartialEq)]
+        enum EnumWithDefault {
+            #[try_default]
+            Empty,
+            #[expect(unused, reason = "test cases do not use it yet")]
+            Full(u32),
+        }
 
-    #[test]
-    fn derive_enum_picks_marked_variant() {
-        match EnumWithDefault::try_default().unwrap() {
-            EnumWithDefault::Empty => {}
-            EnumWithDefault::Full(_) => panic!("expected the #[try_default] variant"),
+        #[test]
+        fn derive_struct_named_fields() {
+            let v = NamedFields::try_default().unwrap();
+            assert_eq!(v.a, 0);
+            assert!(!v.b);
+        }
+
+        #[test]
+        fn derive_struct_positional_and_unit() {
+            let p = Positional::try_default().unwrap();
+            assert_eq!((p.0, p.1), ('\0', 0));
+            assert_eq!(Unit::try_default().unwrap(), Unit);
+        }
+
+        #[test]
+        fn derive_enum_picks_marked_variant() {
+            match EnumWithDefault::try_default().unwrap() {
+                EnumWithDefault::Empty => {}
+                EnumWithDefault::Full(_) => panic!("expected the #[try_default] variant"),
+            }
+        }
+
+        /// A fake transformer exposing `Item` through an associated type for
+        /// static typing. It is intentionally non-`TryDefault`.
+        struct FakeTransformer<Item>(core::marker::PhantomData<Item>);
+        impl<Item> Iterator for FakeTransformer<Item> {
+            type Item = Item;
+            fn next(&mut self) -> Option<Self::Item> {
+                None
+            }
+        }
+
+        // Behavior 1: the bound applies to the shallow field type — here the
+        // projection `<I as Iterator>::Item`, so the derive works even though
+        // `I` itself is not `TryDefault`.
+        #[derive(TryDefault)]
+        struct TransformedItem<I: Iterator> {
+            item: I::Item,
+        }
+
+        #[test]
+        fn derive_bounds_shallow_field_type() {
+            let t = TransformedItem::<FakeTransformer<u32>>::try_default().unwrap();
+            assert_eq!(t.item, 0);
+        }
+
+        // Behavior 2: the bound applies only to the marked variant's fields.
+        // `NotDefault` is not `TryDefault`, yet the enum derives fine because
+        // the unmarked variant holds it.
+
+        /// A type that intentionally does NOT implement `TryDefault`.
+        #[derive(Debug)]
+        struct NotDefault(#[expect(dead_code, reason = "only used as a payload type")] u8);
+
+        #[derive(TryDefault)]
+        enum MarkedOnly {
+            #[allow(dead_code)]
+            Heavy(NotDefault),
+            #[try_default]
+            Zero,
+        }
+
+        #[test]
+        fn derive_bounds_only_marked_variant() {
+            match MarkedOnly::try_default().unwrap() {
+                MarkedOnly::Zero => {}
+                _ => panic!("expected Zero"),
+            }
+        }
+
+        #[derive(Debug)]
+        struct MyStr;
+        impl TryDefault for MyStr {
+            fn try_default() -> Result<Self, TryDefaultError> {
+                Ok(MyStr)
+            }
+        }
+
+        #[derive(TryDefault, Debug)]
+        enum MarkedNamedFields {
+            #[expect(dead_code, reason = "test does not invoke this variant")]
+            Other(NotDefault),
+            #[try_default]
+            Named {
+                #[expect(dead_code, reason = "test only checks which variant is produced")]
+                name: MyStr,
+            },
+        }
+
+        #[derive(TryDefault, Debug)]
+        enum MarkedTupleFields {
+            #[expect(dead_code, reason = "test does not invoke this variant")]
+            Other(NotDefault),
+            #[try_default]
+            Pair(i32, bool),
+        }
+
+        #[test]
+        fn derive_enum_marked_variant_fills_named_fields() {
+            match MarkedNamedFields::try_default().unwrap() {
+                MarkedNamedFields::Named { .. } => {}
+                _ => panic!("expected Named"),
+            }
+        }
+
+        #[test]
+        fn derive_enum_marked_variant_fills_tuple_fields() {
+            match MarkedTupleFields::try_default().unwrap() {
+                MarkedTupleFields::Pair(a, b) => assert_eq!((a, b), (0, false)),
+                _ => panic!("expected Pair"),
+            }
+        }
+
+        // Behavior 3: bare type parameters and GATs do not contribute to the
+        // bounds unless they are themselves the shallow field type. Here the
+        // field type is `FakeDefaultBox<I::Item>` (unconditionally
+        // `TryDefault`), so neither `I` nor `I::Item` needs `TryDefault`.
+
+        /// A container with an *unconditional* `TryDefault` impl: constructing
+        /// it never requires its parameter to be `TryDefault`.
+        struct FakeDefaultBox<T>(core::marker::PhantomData<T>);
+
+        impl<T> TryDefault for FakeDefaultBox<T> {
+            fn try_default() -> Result<Self, TryDefaultError> {
+                Ok(FakeDefaultBox(core::marker::PhantomData))
+            }
+        }
+
+        #[derive(TryDefault)]
+        struct NestedBox<I: Iterator> {
+            #[expect(dead_code, reason = "test only checks that construction succeeds")]
+            boxed_item: FakeDefaultBox<I::Item>,
+        }
+
+        #[test]
+        fn derive_ignores_non_shallow_parameters() {
+            let n = NestedBox::<FakeTransformer<NotDefault>>::try_default().unwrap();
+            let NestedBox { boxed_item: _ } = n;
         }
     }
 

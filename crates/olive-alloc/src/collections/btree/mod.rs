@@ -27,6 +27,7 @@ mod set;
 mod set_val;
 mod split;
 mod traits;
+mod merge_iter;
 
 pub use entry::Entry;
 pub use extract_if::ExtractIf;

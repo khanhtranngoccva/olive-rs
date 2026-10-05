@@ -1,0 +1,17 @@
+[package]
+name = "debug"
+description = "Local experimentation sandbox for the Olive workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+olive-core = { workspace = true }
+olive-alloc = { workspace = true }
+olive-std = { workspace = true }
+olive-macros = { workspace = true }
+
+[lints]
+workspace = true

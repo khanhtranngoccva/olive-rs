@@ -1,17 +1,20 @@
 //! `TryDefault` macro generators.
 //!
-//! Both entry points emit code that resolves against the absolute
-//! `::olive_core::try_traits::try_default::{TryDefault, TryDefaultError}` path so
-//! the expansion is correct regardless of where it is invoked from within the
-//! Olive workspace. Every member depends on `olive-core`; additionally
-//! `olive-core` declares `extern crate self as olive_core;` at its crate root so
-//! the same absolute path also resolves for the impls generated *inside*
-//! `olive-core` itself (where the crate would otherwise only be reachable as
-//! `crate`).
+//! The macro implementation emits code that uses the absolute
+//! `::olive_core::try_traits::try_default::{TryDefault, TryDefaultError}` paths so the
+//! expansion is correct regardless of where it is invoked - from within or outside
+//! the Olive workspace.
 
+use core::num::NonZero;
 use proc_macro::TokenStream;
 use quote::quote;
+use std::collections::HashSet;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
+
+use crate::bounds::{
+    build_where_clauses, build_where_clauses_filtered, field_types, parse_error_type,
+    parse_trait_path,
+};
 
 /// Absolute path to the trait as seen from generated code in any dependent crate.
 const TRAIT_PATH: &str = "::olive_core::try_traits::try_default::TryDefault";
@@ -38,13 +41,49 @@ fn try_default_attr_error(ident: &syn::Ident) -> TokenStream {
 pub(crate) fn derive_try_default(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let trait_path = parse_trait_path(TRAIT_PATH);
+    let error_path = parse_error_type(ERROR_PATH);
+
+    // Locate the #[try_default]-marked enum variant once. Exactly one variant
+    // may carry the attribute; duplicates are rejected here so the rest of the
+    // expansion can rely on `marked` being unique.
+    let mut marked_enum_variant: Option<&syn::Variant> = None;
+    if let Data::Enum(data) = &input.data {
+        for variant in &data.variants {
+            if variant
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident(TRY_DEFAULT_ATTR))
+                && marked_enum_variant.replace(variant).is_some()
+            {
+                return try_default_attr_error(name);
+            }
+        }
+    }
+
+    // Only the marked variant's fields need the trait bound; other variants may
+    // hold types that do not implement it.
+    let marked_enum_variant_tys: HashSet<&syn::Type> = marked_enum_variant
+        .map(|v| field_types(&v.fields).into_iter().collect())
+        .unwrap_or_default();
+
+    let predicates = if marked_enum_variant.is_some() {
+        let marked_set = marked_enum_variant_tys.clone();
+        build_where_clauses_filtered(&input, &trait_path, |ty| marked_set.contains(ty))
+    } else {
+        build_where_clauses(&input, &trait_path)
+    };
+    let where_clause = syn::WhereClause {
+        where_token: Default::default(),
+        predicates,
+    };
+
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
 
     // Every field must be constructible via `TryDefault`; we express that bound
     // by simply calling `<FieldType as TryDefault>::try_default()` on each field
-    // and letting the compiler's resolution enforce it at the call site. We do
-    // NOT add an explicit supertrait — `TryDefault` stands alone, mirroring how
-    // `derive(TryClone)` composes over `TryClone` without a `Clone` supertrait.
+    // and letting the compiler's resolution enforce it at the call site.
     let default_body = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
@@ -76,43 +115,34 @@ pub(crate) fn derive_try_default(input: TokenStream) -> TokenStream {
                 }
             }
         },
-        Data::Enum(data) => {
-            // Exactly one variant may carry `#[try_default]`.
-            let mut marked: Option<&syn::Variant> = None;
-            for variant in &data.variants {
-                if variant
-                    .attrs
-                    .iter()
-                    .any(|attr| attr.path().is_ident(TRY_DEFAULT_ATTR))
-                    && marked.replace(variant).is_some()
-                {
-                    return try_default_attr_error(name);
-                }
-            }
-            let Some(variant) = marked else {
+        Data::Enum(_) => {
+            let Some(variant) = marked_enum_variant else {
                 return try_default_attr_error(name);
             };
 
-            // The marked variant must be unit-like: its default value is
-            // unambiguous only when there are no fields to fill in.
+            // Fill the marked variant's fields via `TryDefault`.
             match &variant.fields {
-                Fields::Unit => {}
-                _ => {
-                    return syn::Error::new_spanned(
-                        &variant.ident,
-                        format!(
-                            "the #[{attr}] variant of #[derive(TryDefault)] must be a unit variant",
-                            attr = TRY_DEFAULT_ATTR,
-                        ),
-                    )
-                    .to_compile_error()
-                    .into();
+                Fields::Named(fields) => {
+                    let fd = fields.named.iter().map(|f| {
+                        let ident = &f.ident;
+                        let ty = &f.ty;
+                        quote! { #ident: <#ty as #trait_path>::try_default()?, }
+                    });
+                    let vi = &variant.ident;
+                    quote! { Ok(Self::#vi { #(#fd)* }) }
                 }
-            }
-
-            let variant_ident = &variant.ident;
-            quote! {
-                Ok(Self::#variant_ident)
+                Fields::Unnamed(fields) => {
+                    let fd = fields.unnamed.iter().map(|f| {
+                        let ty = &f.ty;
+                        quote! { <#ty as #trait_path>::try_default()?, }
+                    });
+                    let vi = &variant.ident;
+                    quote! { Ok(Self::#vi (#(#fd)*)) }
+                }
+                Fields::Unit => {
+                    let vi = &variant.ident;
+                    quote! { Ok(Self::#vi) }
+                }
             }
         }
         Data::Union(_) => {
@@ -124,9 +154,6 @@ pub(crate) fn derive_try_default(input: TokenStream) -> TokenStream {
             .into();
         }
     };
-
-    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
-    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
 
     let expanded = quote! {
         impl #impl_generics #trait_path for #name #ty_generics #where_clause {
@@ -141,18 +168,25 @@ pub(crate) fn derive_try_default(input: TokenStream) -> TokenStream {
 }
 
 pub(crate) fn try_default_tuples(input: TokenStream) -> TokenStream {
-    let max: usize = syn::parse::<syn::LitInt>(input)
-        .ok()
-        .and_then(|lit| lit.base10_parse().ok())
-        .unwrap_or(12);
-    let max = max.clamp(1, 16);
+    let lit = match syn::parse::<syn::LitInt>(input) {
+        Ok(lit) => lit,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let max: NonZero<usize> = match lit.base10_parse() {
+        Ok(n) => n,
+        Err(e) => {
+            return syn::Error::new_spanned(&lit, format_args!("invalid tuple arity: {e}"))
+                .to_compile_error()
+                .into();
+        }
+    };
 
-    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
-    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
+    let trait_path = parse_trait_path(TRAIT_PATH);
+    let error_path = parse_error_type(ERROR_PATH);
 
     let mut output = Vec::new();
 
-    for arity in 1..=max {
+    for arity in 1..=max.get() {
         let type_params: Vec<_> = (0..arity).map(|i| quote::format_ident!("T{i}")).collect();
         let bounds: Vec<_> = type_params
             .iter()
@@ -182,7 +216,7 @@ pub(crate) fn try_default_tuples(input: TokenStream) -> TokenStream {
                 if i > 0 {
                     ts.extend(quote!(,));
                 }
-                ts.extend(quote!(#tp::try_default()?));
+                ts.extend(quote!(<#tp as #trait_path>::try_default()?));
             }
             ts
         };

@@ -329,6 +329,7 @@ unsafe impl<T: TryClone> TryCloneToUninit for [T] {
 mod tests {
     extern crate std;
     use super::*;
+    use olive_macros::TryClone;
     use std::format;
 
     #[test]
@@ -470,5 +471,64 @@ mod tests {
         let res = unsafe { src[..].try_clone_to_uninit(buf.as_mut_ptr().cast::<u8>()) };
         assert!(res.is_err());
         assert_eq!(DROPPED.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    // --- Derive: perfect-derive field-type bounds ---------------------------
+    mod perfect_derive {
+        use super::*;
+
+        /// A fake iterator that exposes the Item for static typing.
+        /// It is intentionally non-`TryClone`.
+        struct FakeIter<Item>(core::marker::PhantomData<Item>);
+
+        impl<Item> Iterator for FakeIter<Item> {
+            type Item = Item;
+            fn next(&mut self) -> Option<Self::Item> {
+                None
+            }
+        }
+
+        /// A fake box that mocks the test case where the iterator is not `TryClone` but its item is.
+        #[derive(TryClone)]
+        struct FakeItemBox<I: Iterator> {
+            item: I::Item,
+        }
+
+        /// A type that intentionally does NOT implement `TryClone`.
+        #[derive(Debug)]
+        struct NotCloned(#[expect(dead_code, reason = "only used as a type parameter")] u8);
+
+        /// A container with an *unconditional* `TryClone` impl: cloning it never
+        /// requires its parameter to be `TryClone`.
+        struct FakeCloneBox<T>(core::marker::PhantomData<T>);
+
+        impl<T> TryClone for FakeCloneBox<T> {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                Ok(FakeCloneBox(core::marker::PhantomData))
+            }
+        }
+
+        /// A container that invokes the unconditional `TryClone` behavior even if `I` and `I::Item` is not `TryClone`.
+        #[derive(TryClone)]
+        struct NestedFakeItemBox<I: Iterator> {
+            item: FakeCloneBox<I::Item>,
+        }
+
+        // The macro is a perfect derive macro - the FakeIter does not have TryClone, but Item has TryClone,
+        // so it works.
+        #[test]
+        fn derive_binds_associated_type_projection() {
+            let b = FakeItemBox::<FakeIter<u32>> { item: 7 };
+            assert_eq!(b.try_clone().unwrap().item, 7);
+        }
+
+        // Both bounded types (FakeIter and NotCloned) do not implement TryClone, but Boxed has TryClone.
+        #[test]
+        fn derive_nested_projection_in_unconditional_container() {
+            let b = NestedFakeItemBox::<FakeIter<NotCloned>> {
+                item: FakeCloneBox(core::marker::PhantomData),
+            };
+            let NestedFakeItemBox { item: _ } = b.try_clone().unwrap();
+        }
     }
 }

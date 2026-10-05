@@ -1,3 +1,9 @@
 /target
 # Library crates should ignore Cargo.lock.
 Cargo.lock
+
+# Local-only experimentation crate.
+crates/debug/src/*
+!crates/debug/src/lib.rs
+!crates/debug/src/bin
+crates/debug/src/bin/*

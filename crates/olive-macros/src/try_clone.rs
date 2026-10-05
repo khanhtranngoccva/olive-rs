@@ -1,61 +1,50 @@
 //! `TryClone` macro generators.
 //!
-//! Both entry points emit code that resolves against the absolute
-//! `::olive_core::try_traits::try_clone::{TryClone, TryCloneError}` path so the
-//! expansion is correct regardless of where it is invoked from within the Olive
-//! workspace. Every member depends on `olive-core`; additionally `olive-core`
-//! declares `extern crate self as olive_core;` at its crate root so the same
-//! absolute path also resolves for the impls generated *inside* `olive-core`
-//! itself (where the crate would otherwise only be reachable as `crate`).
+//! The macro implementation emits code that uses the absolute
+//! `::olive_core::try_traits::try_clone::{TryClone, TryCloneError}` paths so the
+//! expansion is correct regardless of where it is invoked - from within or outside
+//! the Olive workspace.
+
+use std::num::NonZero;
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
+
+use crate::bounds::{build_where_clauses, parse_error_type, parse_trait_path};
 
 /// Absolute path to the trait as seen from generated code in any dependent crate.
 const TRAIT_PATH: &str = "::olive_core::try_traits::try_clone::TryClone";
 /// Absolute path to the error type as seen from generated code.
 const ERROR_PATH: &str = "::olive_core::try_traits::try_clone::TryCloneError";
 
-/// Add a `TryClone` bound to every type parameter, mirroring how
-/// `#[derive(Clone)]` adds a `Clone` bound to each type parameter of the impl.
-fn add_try_clone_bounds(mut generics: syn::Generics, trait_path: &syn::Path) -> syn::Generics {
-    for param in generics.type_params_mut() {
-        let bound = syn::TypeParamBound::Trait(syn::TraitBound {
-            paren_token: None,
-            modifier: syn::TraitBoundModifier::None,
-            lifetimes: None,
-            path: trait_path.clone(),
-        });
-        param.bounds.push(bound);
-    }
-    generics
-}
-
 pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
 
-    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
-    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
+    let trait_path = parse_trait_path(TRAIT_PATH);
+    let error_path = parse_error_type(ERROR_PATH);
 
-    // Mirror `derive(Clone)`: constrain every type parameter with `TryClone`.
-    let bounded_generics = add_try_clone_bounds(input.generics.clone(), &trait_path);
-    let (impl_generics, ty_generics, where_clause) = bounded_generics.split_for_impl();
+    let predicates = build_where_clauses(&input, &trait_path);
+    let where_clause = syn::WhereClause {
+        where_token: Default::default(),
+        predicates,
+    };
+
+    // The where clause is populated above.
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
 
     // Every field must be cloneable via `TryClone`; we express that bound by
     // simply calling `.try_clone()` on each field and letting the compiler's
-    // resolution enforce it at the call site. We do NOT add an explicit
-    // `T: TryClone` supertrait because Olive's `TryClone` has no `Clone`
-    // supertrait — adding one would contradict the project's "retire Clone"
-    // directive.
+    // resolution enforce it at the call site.
     let clone_body = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
                 let field_clones = fields.named.iter().map(|field| {
                     let ident = &field.ident;
+                    let ty = &field.ty;
                     quote! {
-                        #ident: self.#ident.try_clone()?,
+                        #ident: <#ty as #trait_path>::try_clone(&self.#ident)?,
                     }
                 });
                 quote! {
@@ -63,11 +52,11 @@ pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
                 }
             }
             Fields::Unnamed(fields) => {
-                let indices = 0..fields.unnamed.len();
-                let field_clones = indices.map(|i| {
+                let field_clones = fields.unnamed.iter().enumerate().map(|(i, field)| {
                     let idx = syn::Index::from(i);
+                    let ty = &field.ty;
                     quote! {
-                        self.#idx.try_clone()?,
+                        <#ty as #trait_path>::try_clone(&self.#idx)?,
                     }
                 });
                 quote! {
@@ -84,7 +73,7 @@ pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
             let arms = data.variants.iter().map(|variant| {
                 let variant_ident = &variant.ident;
                 match &variant.fields {
-                    Fields::Named(fields) if !fields.named.is_empty() => {
+                    Fields::Named(fields) => {
                         let field_idents: Vec<_> = fields
                             .named
                             .iter()
@@ -92,35 +81,46 @@ pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
                             .collect();
                         let field_patterns: Vec<_> =
                             field_idents.iter().map(|id| quote!(#id)).collect();
-                        let field_clones = field_idents.iter().map(|id| {
-                            quote! {
-                                #id: #id.try_clone()?,
-                            }
-                        });
+                        let field_tys: Vec<_> = fields.named.iter().map(|f| f.ty.clone()).collect();
+                        let field_clones: Vec<_> = field_idents
+                            .iter()
+                            .zip(field_tys.iter())
+                            .map(|(id, ty)| {
+                                quote! {
+                                    #id: <#ty as #trait_path>::try_clone(#id)?,
+                                }
+                            })
+                            .collect();
                         quote! {
                             Self::#variant_ident { #(#field_patterns),* } => {
                                 Ok(Self::#variant_ident { #(#field_clones)* })
                             },
                         }
                     }
-                    Fields::Named(_) | Fields::Unit => {
-                        quote! {
-                            Self::#variant_ident => Ok(Self::#variant_ident),
-                        }
-                    }
                     Fields::Unnamed(fields) => {
                         let field_names: Vec<_> = (0..fields.unnamed.len())
                             .map(|i| quote::format_ident!("f{i}"))
                             .collect();
-                        let field_clones = field_names.iter().map(|fn_| {
-                            quote! {
-                                #fn_.try_clone()?,
-                            }
-                        });
+                        let field_tys: Vec<_> =
+                            fields.unnamed.iter().map(|f| f.ty.clone()).collect();
+                        let field_clones: Vec<_> = field_names
+                            .iter()
+                            .zip(field_tys.iter())
+                            .map(|(fn_, ty)| {
+                                quote! {
+                                    <#ty as #trait_path>::try_clone(#fn_)?,
+                                }
+                            })
+                            .collect();
                         quote! {
                             Self::#variant_ident (#(#field_names),*) => {
                                 Ok(Self::#variant_ident (#(#field_clones)*))
                             },
+                        }
+                    }
+                    Fields::Unit => {
+                        quote! {
+                            Self::#variant_ident => Ok(Self::#variant_ident),
                         }
                     }
                 }
@@ -151,18 +151,25 @@ pub(crate) fn derive_try_clone(input: TokenStream) -> TokenStream {
 }
 
 pub(crate) fn try_clone_tuples(input: TokenStream) -> TokenStream {
-    let max: usize = syn::parse::<syn::LitInt>(input)
-        .ok()
-        .and_then(|lit| lit.base10_parse().ok())
-        .unwrap_or(12);
-    let max = max.clamp(1, 16);
+    let lit = match syn::parse::<syn::LitInt>(input) {
+        Ok(lit) => lit,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let max: NonZero<usize> = match lit.base10_parse() {
+        Ok(n) => n,
+        Err(e) => {
+            return syn::Error::new_spanned(&lit, format_args!("invalid tuple arity: {e}"))
+                .to_compile_error()
+                .into();
+        }
+    };
 
-    let trait_path = syn::parse_str::<syn::Path>(TRAIT_PATH).expect("static path parses");
-    let error_path = syn::parse_str::<syn::Type>(ERROR_PATH).expect("static path parses");
+    let trait_path = parse_trait_path(TRAIT_PATH);
+    let error_path = parse_error_type(ERROR_PATH);
 
     let mut output = Vec::new();
 
-    for arity in 1..=max {
+    for arity in 1..=max.get() {
         let type_params: Vec<_> = (0..arity).map(|i| quote::format_ident!("T{i}")).collect();
         let bounds: Vec<_> = type_params
             .iter()
@@ -188,12 +195,12 @@ pub(crate) fn try_clone_tuples(input: TokenStream) -> TokenStream {
 
         let fields_joined: proc_macro2::TokenStream = {
             let mut ts = proc_macro2::TokenStream::new();
-            for i in 0..arity {
+            for (i, tp) in type_params.iter().enumerate() {
                 if i > 0 {
                     ts.extend(quote!(,));
                 }
                 let idx = syn::Index::from(i);
-                ts.extend(quote!(self.#idx.try_clone()?));
+                ts.extend(quote!(<#tp as #trait_path>::try_clone(&self.#idx)?));
             }
             ts
         };

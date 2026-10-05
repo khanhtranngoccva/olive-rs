@@ -21,6 +21,7 @@ members = [
     "crates/olive-core",
     "crates/olive-alloc",
     "crates/olive-std",
+    "crates/debug",
     "xtask",
 ]
 resolver = "2"
@@ -46,7 +47,7 @@ allocator-api2 = { version = "0.4", default-features = false, features = ["fresh
 # Procedural-macro toolchain. Pinned once so olive-macros (and any future macro
 # crate) share identical versions; these are host-side only and never linked
 # into no_std downstream targets.
-syn = { version = "2", features = ["full"] }
+syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
 

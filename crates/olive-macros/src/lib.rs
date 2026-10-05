@@ -4,6 +4,7 @@
 
 extern crate proc_macro;
 
+mod bounds;
 mod try_clone;
 mod try_default;
 
