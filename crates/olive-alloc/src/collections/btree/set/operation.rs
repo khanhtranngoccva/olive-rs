@@ -58,9 +58,11 @@ enum IntersectionInner<'a, T: 'a, A: Allocator> {
     Answer(Option<&'a T>),
 }
 
-impl<T, A: Allocator> IntersectionInner<'_, T, A> {
+impl<T, A: Allocator> Intersection<'_, T, A> {
     fn empty() -> Self {
-        Self::Answer(None)
+        Self {
+            inner: IntersectionInner::Answer(None),
+        }
     }
 }
 
@@ -243,25 +245,10 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
     /// The resulting iterator supports reverse iteration via
     /// [`DoubleEndedIterator::next_back`].
     pub fn intersection<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Intersection<'s, T, A> {
-        let Some(self_min) = self.first() else {
-            return Intersection {
-                inner: IntersectionInner::Answer(None),
-            };
-        };
-        let Some(self_max) = self.last() else {
-            return Intersection {
-                inner: IntersectionInner::Answer(None),
-            };
-        };
-        let Some(other_min) = self.first() else {
-            return Intersection {
-                inner: IntersectionInner::Answer(None),
-            };
-        };
-        let Some(other_max) = self.last() else {
-            return Intersection {
-                inner: IntersectionInner::Answer(None),
-            };
+        let (Some(self_min), Some(self_max), Some(other_min), Some(other_max)) =
+            (self.first(), self.last(), other.first(), other.last())
+        else {
+            return Intersection::empty();
         };
 
         Intersection {
