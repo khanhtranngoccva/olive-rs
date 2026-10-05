@@ -694,13 +694,63 @@ mod tests {
     }
 
     #[test]
-    fn union_size_hint_bounds() {
-        let a = build(&[1, 2, 3, 4, 5]);
-        let b = build(&[3, 4, 5, 6, 7]);
+    fn union_size_hint_disjoint() {
+        let a = build(&[1, 3, 5]);
+        let b = build(&[2, 4, 6]);
         let u = a.union(&b);
         let (low, high) = u.size_hint();
-        assert!(low >= 5);
-        assert_eq!(high, Some(10));
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(6));
+    }
+
+    #[test]
+    fn union_size_hint_identical_sets() {
+        let a = build(&[1, 2, 3]);
+        let u = a.union(&a);
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(6));
+    }
+
+    #[test]
+    fn union_size_hint_one_empty() {
+        let a: BTreeSet<i32> = BTreeSet::new();
+        let b = build(&[1, 2, 3]);
+        let u = a.union(&b);
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(3));
+    }
+
+    #[test]
+    fn union_size_hint_both_empty() {
+        let a: BTreeSet<i32> = BTreeSet::new();
+        let b: BTreeSet<i32> = BTreeSet::new();
+        let u = a.union(&b);
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 0);
+        assert_eq!(high, Some(0));
+    }
+
+    #[test]
+    fn union_size_hint_after_consumption() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next(), Some(&1));
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 5);
+        assert_eq!(high, Some(9));
+    }
+
+    #[test]
+    fn union_size_hint_unequal_sizes() {
+        let a = build(&[1]);
+        let b = build(&[10, 20, 30, 40]);
+        let u = a.union(&b);
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 4);
+        assert_eq!(high, Some(5));
     }
 
     #[test]
@@ -806,6 +856,76 @@ mod tests {
         assert!(high.unwrap() <= 5);
         assert!(low == 0);
         assert!(low <= high.unwrap());
+    }
+
+    // ── Difference size_hint bound paths ────────────────────────────────────────
+
+    #[test]
+    fn difference_size_hint_iterate_exact() {
+        // Disjoint ranges → Iterate path: other_len=0, so low=self_len, high=self_len (exact)
+        let a = build(&[1, 2, 3]);
+        let b = build(&[10, 20, 30]);
+        let diff = a.difference(&b);
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(3));
+    }
+
+    #[test]
+    fn difference_size_hint_empty_self() {
+        // Empty self → Iterate with len 0: low=0, high=0
+        let a: BTreeSet<i32> = BTreeSet::new();
+        let b = build(&[1, 2, 3]);
+        let diff = a.difference(&b);
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 0);
+        assert_eq!(high, Some(0));
+    }
+
+    #[test]
+    fn difference_size_hint_stitch_partial_overlap() {
+        // Stitch path: a=[1..5], b=[3..7] → self_len=5, other_len=5
+        // low = 5.saturating_sub(5) = 0, high = Some(5)
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let diff = a.difference(&b);
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 0);
+        assert_eq!(high, Some(5));
+    }
+
+    #[test]
+    fn difference_size_hint_search_path() {
+        let small = build(&[2, 4, 6, 8]);
+        let large = build(&(0..100).collect::<Vec<i32>>());
+        let diff = small.difference(&large);
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 0);
+        assert_eq!(high, Some(4));
+    }
+
+    #[test]
+    fn difference_size_hint_stitch_mostly_disjoint() {
+        let a = build(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let b = build(&[7, 8, 9, 10, 11, 12, 13, 14]);
+        let diff = a.difference(&b);
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 0);
+        assert_eq!(high, Some(8));
+        let result: Vec<&i32> = diff.clone().collect();
+        assert_eq!(result.len(), 6);
+    }
+
+    #[test]
+    fn difference_size_hint_after_consumption() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b: BTreeSet<i32> = BTreeSet::new();
+        let mut diff = a.difference(&b);
+        assert_eq!(diff.next(), Some(&1));
+        assert_eq!(diff.next(), Some(&2));
+        let (low, high) = diff.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(3));
     }
 
     #[test]
