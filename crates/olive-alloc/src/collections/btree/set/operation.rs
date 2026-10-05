@@ -12,12 +12,15 @@ use core::cmp::{Ordering, min};
 use core::fmt;
 use core::fmt::Debug;
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
+use core::marker::PhantomData;
 
+use super::super::merge_iter::MergeIterInner;
 use super::BTreeSet;
 use super::iter::Iter;
 use crate::alloc::Global;
-use olive_core::TryDefault;
+use olive_core::TryClone;
 use olive_core::alloc::Allocator;
+use olive_core::try_traits::TryClone;
 
 // This constant is used by functions that compare two sets.
 // It estimates the relative size at which searching performs better
@@ -27,6 +30,8 @@ use olive_core::alloc::Allocator;
 // and it's a power of two to make that division cheap.
 const ITER_PERFORMANCE_TIPPING_SIZE_DIFF: usize = 16;
 
+// ── Intersection ──────────────────────────────────────────────────────────────
+
 /// A lazy iterator producing elements in the intersection of `BTreeSet`s.
 ///
 /// This `struct` is created by the [`intersection`] method on [`BTreeSet`].
@@ -35,12 +40,12 @@ const ITER_PERFORMANCE_TIPPING_SIZE_DIFF: usize = 16;
 /// [`intersection`]: BTreeSet::intersection
 #[must_use = "this returns the intersection as an iterator, \
               without modifying either input set"]
-#[derive(Default, TryDefault)]
+#[derive(TryClone)]
 pub struct Intersection<'a, T: 'a, A: Allocator = Global> {
     inner: IntersectionInner<'a, T, A>,
 }
 
-#[derive(TryDefault)]
+#[derive(TryClone)]
 enum IntersectionInner<'a, T: 'a, A: Allocator> {
     /// Iterate similarly sized sets jointly, spotting matches along the way
     Stitch { a: Iter<'a, T>, b: Iter<'a, T> },
@@ -50,13 +55,19 @@ enum IntersectionInner<'a, T: 'a, A: Allocator> {
         large_set: &'a BTreeSet<T, A>,
     },
     /// Return a specific element or emptiness
-    #[try_default]
     Answer(Option<&'a T>),
 }
 
-impl<'a, T: 'a, A: Allocator> Default for IntersectionInner<'a, T, A> {
-    fn default() -> Self {
+impl<T, A: Allocator> IntersectionInner<'_, T, A> {
+    fn empty() -> Self {
         Self::Answer(None)
+    }
+}
+
+// TryClone is an infallible perfect macro, but Clone isn't
+impl<T, A: Allocator> Clone for Intersection<'_, T, A> {
+    fn clone(&self) -> Self {
+        TryClone::try_clone(self).expect("should infallibly clone Intersection")
     }
 }
 
@@ -80,8 +91,6 @@ impl<T: Debug, A: Allocator> Debug for IntersectionInner<'_, T, A> {
         }
     }
 }
-
-// ── Iterator ──────────────────────────────────────────────────────────────────
 
 impl<'a, T: Ord, A: Allocator> Iterator for Intersection<'a, T, A> {
     type Item = &'a T;
@@ -166,6 +175,65 @@ impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for Intersection<'a, T, A> {
 
 impl<T: Ord, A: Allocator> FusedIterator for Intersection<'_, T, A> {}
 
+// ── Union ─────────────────────────────────────────────────────────────────────
+
+/// A lazy iterator producing elements in the union of `BTreeSet`s.
+///
+/// This `struct` is created by the [`union`] method on [`BTreeSet`].
+/// See its documentation for more.
+///
+/// [`union`]: BTreeSet::union
+#[must_use = "this returns the union as an iterator, \
+              without modifying either input set"]
+#[derive(TryClone)]
+pub struct Union<'a, T: 'a, A: Allocator = Global> {
+    inner: MergeIterInner<Iter<'a, T>>,
+    _alloc: PhantomData<&'a A>,
+}
+
+impl<'a, T: Ord, A: Allocator> Union<'a, T, A> {
+    pub(super) fn new(a: &'a BTreeSet<T, A>, b: &'a BTreeSet<T, A>) -> Self {
+        let inner = MergeIterInner::new(a.iter(), b.iter());
+        Union {
+            inner,
+            _alloc: PhantomData,
+        }
+    }
+}
+
+impl<T: Debug, A: Allocator> Debug for Union<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Union").field(&self.inner).finish()
+    }
+}
+
+// TryClone is an infallible perfect macro, but Clone isn't
+impl<T, A: Allocator> Clone for Union<'_, T, A> {
+    fn clone(&self) -> Self {
+        TryClone::try_clone(self).expect("should infallibly clone Union")
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> Iterator for Union<'a, T, A> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        let (a_next, b_next) = self.inner.nexts(Self::Item::cmp);
+        a_next.or(b_next)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (a_len, b_len) = self.inner.lens();
+        (core::cmp::max(a_len, b_len), a_len.checked_add(b_len))
+    }
+
+    fn min(mut self) -> Option<&'a T> {
+        self.next()
+    }
+}
+
+impl<T: Ord, A: Allocator> FusedIterator for Union<'_, T, A> {}
+
 // ── BTreeSet methods ──────────────────────────────────────────────────────────
 
 impl<T: Ord, A: Allocator> BTreeSet<T, A> {
@@ -219,6 +287,12 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
                 },
             },
         }
+    }
+
+    /// Returns an iterator over elements in the union of `self` and `other`,
+    /// in ascending order.
+    pub fn union<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Union<'s, T, A> {
+        Union::new(self, other)
     }
 }
 
@@ -380,5 +454,69 @@ mod tests {
         let mut buf = String::new();
         write!(&mut buf, "{:?}", inter.inner).unwrap();
         assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn union_disjoint_sets() {
+        let a = build(&[1, 3, 5]);
+        let b = build(&[2, 4, 6]);
+        let result: Vec<&i32> = a.union(&b).collect();
+        assert_eq!(result, [&1, &2, &3, &4, &5, &6]);
+    }
+
+    #[test]
+    fn union_identical_sets() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let result: Vec<&i32> = a.union(&a).collect();
+        assert_eq!(result, [&1, &2, &3, &4, &5]);
+    }
+
+    #[test]
+    fn union_partial_overlap() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[4, 5, 6, 7]);
+        let result: Vec<&i32> = a.union(&b).collect();
+        assert_eq!(result, [&1, &2, &3, &4, &5, &6, &7]);
+    }
+
+    #[test]
+    fn union_with_empty_set() {
+        let a = build(&[1, 2, 3]);
+        let empty: BTreeSet<i32> = BTreeSet::new();
+        let result: Vec<&i32> = a.union(&empty).collect();
+        assert_eq!(result, [&1, &2, &3]);
+        let result_rev: Vec<&i32> = empty.union(&a).collect();
+        assert_eq!(result_rev, [&1, &2, &3]);
+    }
+
+    #[test]
+    fn union_both_empty() {
+        let a: BTreeSet<i32> = BTreeSet::new();
+        let b: BTreeSet<i32> = BTreeSet::new();
+        let result: Vec<&i32> = a.union(&b).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn union_size_hint_bounds() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let u = a.union(&b);
+        let (low, high) = u.size_hint();
+        assert!(low >= 5);
+        assert_eq!(high, Some(10));
+    }
+
+    #[test]
+    fn union_fused_iterator() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[2, 3, 4]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next(), Some(&1));
+        assert_eq!(u.next(), Some(&2));
+        assert_eq!(u.next(), Some(&3));
+        assert_eq!(u.next(), Some(&4));
+        assert_eq!(u.next(), None);
+        assert_eq!(u.next(), None);
     }
 }
