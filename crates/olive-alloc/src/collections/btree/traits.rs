@@ -180,6 +180,11 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
 impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
     type Error = AllocError;
 
+    /// Attempts to extend the map with key-value pairs from a resumable source.
+    ///
+    /// Returns `Ok(())` on success. On allocation failure, returns the remaining
+    /// items in a [`Resume`] so the caller can retry once memory is available, along 
+    /// with the [`AllocError`].
     fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
     where
         S: ResumableSource<Item = (K, V)>,

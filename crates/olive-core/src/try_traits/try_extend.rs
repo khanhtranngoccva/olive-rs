@@ -5,27 +5,29 @@ use crate::recovery::{ResumableSource, Resume};
 
 /// Fallibly extend a collection from an iterator source.
 ///
-/// This trait is declared **resumable** and **non-atomic**: on failure the error
+/// This trait is **resumable** and **non-atomic**: on failure the error
 /// carries a [`Resume`] wrapping the remainder of the source (plus any
 /// consumed-but-uncommitted element), which can be passed straight back into
-/// another `try_extend` call to retry. Because both plain iterators and
-/// [`Resume`] wrappers implement [`ResumableSource`] with the same inner type,
-/// the error type stays identical across retries — it never grows.
+/// another `try_extend` call to retry.
+///
+/// Because both plain iterators and [`Resume`] wrappers implement
+/// [`ResumableSource`] with the same inner type, the error type stays
+/// identical across retries - it never grows.
 ///
 /// ```rust,ignore
 /// let mut v: Vec<i32> = Vec::new();
 /// let items = 0..10_000;
 ///
-/// // First attempt — fails on OOM.
-/// let remaining = match v.try_extend(items) {
+/// // First attempt - fails on OOM.
+/// let resume = match v.try_extend(items) {
 ///     Ok(()) => return,
-///     Err((resume, _err)) => resume.into_remainder(),
+///     Err((resume, _err)) => resume,
 /// };
 ///
-/// // Retry with the remainder wrapped in a Resume.
-/// let _remaining = match v.try_extend(Resume::from_remainder(remaining)) {
+/// // Retry with the Resume object.
+/// let resume = match v.try_extend(resume) {
 ///     Ok(()) => return,
-///     Err((resume, _err)) => resume.into_remainder(),
+///     Err((resume, _err)) => resume,
 /// };
 /// ```
 pub trait TryExtend<Item>: Sized {
@@ -36,6 +38,8 @@ pub trait TryExtend<Item>: Sized {
     /// Fallibly extend `self` with all items produced by `source`.
     ///
     /// # Errors
+    /// - The accompanying [`Resume`] object containing the stranded element
+    ///   and the iterator.
     /// - The [`Self::Error`] type defined by the implementation.
     fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
     where
@@ -46,7 +50,7 @@ pub trait TryExtend<Item>: Sized {
 ///
 /// On failure the error is a tuple of the **remainder** (the unprocessed tail of
 /// the input slice) and the underlying error. Callers can retry with just the
-/// remainder once memory pressure has eased. A mid-way clone failure does not
+/// remainder once memory pressure has eased. A mid-way failure does not
 /// trigger a rollback.
 pub trait TryExtendFromSlice<Item>: Sized {
     /// The error type accompanying the remainder slice.
@@ -55,6 +59,7 @@ pub trait TryExtendFromSlice<Item>: Sized {
     /// Fallibly extend `self` by cloning each element of `other`.
     ///
     /// # Errors
+    /// - The accompanying slice of unprocessed items in the original slice.
     /// - The [`Self::Error`] type defined by the implementation.
     fn try_extend_from_slice<'s>(
         &mut self,

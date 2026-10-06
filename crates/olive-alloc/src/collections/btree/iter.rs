@@ -48,6 +48,8 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
         self.next_back()
     }
 
+    /// Returns a reference to the key-value pair with the smallest key,
+    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<(&'a K, &'a V)>
     where
         (&'a K, &'a V): Ord,
@@ -55,6 +57,8 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
         self.next()
     }
 
+    /// Returns a reference to the key-value pair with the largest key,
+    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<(&'a K, &'a V)>
     where
         (&'a K, &'a V): Ord,
@@ -135,6 +139,8 @@ impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
         self.next_back()
     }
 
+    /// Returns a reference to the smallest key, consuming the iterator.
+    /// Since BTreeMap is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<&'a K>
     where
         &'a K: Ord,
@@ -142,6 +148,8 @@ impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
         self.next()
     }
 
+    /// Returns a reference to the largest key, consuming the iterator.
+    /// Since BTreeMap is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<&'a K>
     where
         &'a K: Ord,
@@ -293,6 +301,8 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
         self.next_back()
     }
 
+    /// Returns a reference to the key-value pair with the smallest key,
+    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<(&'a K, &'a mut V)>
     where
         (&'a K, &'a mut V): Ord,
@@ -300,6 +310,8 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
         self.next()
     }
 
+    /// Returns a reference to the key-value pair with the largest key,
+    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<(&'a K, &'a mut V)>
     where
         (&'a K, &'a mut V): Ord,

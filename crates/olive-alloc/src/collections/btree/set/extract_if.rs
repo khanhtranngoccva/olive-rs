@@ -1,9 +1,7 @@
 //! Conditional removal for [`BTreeSet`]: `extract_if`.
 //!
 //! Both are thin facades over the underlying [`BTreeMap`] counterparts; each
-//! hides the zero-sized value marker so callers only ever see values. The set
-//! variant of the extractor wraps the map's [`super::super::extract_if::ExtractIfInner`]
-//! and adapts its `(K, SetValZST)` items down to bare `K`s.
+//! hides the zero-sized value marker so callers only ever see values.
 
 use super::super::extract_if::ExtractIfInner;
 use super::super::set_val::SetValZST;

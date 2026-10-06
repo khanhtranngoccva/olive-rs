@@ -32,6 +32,8 @@ impl<'a, T: 'a> Iterator for Iter<'a, T> {
         self.next_back()
     }
 
+    /// Returns a reference to the smallest element in the set,
+    /// consuming the iterator. Since BTreeSet is sorted, this is just `next()`.
     fn min(mut self) -> Option<&'a T>
     where
         &'a T: Ord,
@@ -39,6 +41,8 @@ impl<'a, T: 'a> Iterator for Iter<'a, T> {
         self.next()
     }
 
+    /// Returns a reference to the largest element in the set,
+    /// consuming the iterator. Since BTreeSet is sorted, this is just `next_back()`.
     fn max(mut self) -> Option<&'a T>
     where
         &'a T: Ord,
