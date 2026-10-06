@@ -6,9 +6,11 @@
 //! hashing, and lexicographic ordering.
 
 use super::BTreeSet;
-use crate::alloc::Allocator;
+use crate::alloc::{Allocator, Global};
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
+use olive_core::alloc::AllocError;
+use olive_core::try_traits::TryFromIterator;
 
 // ── Equality ─────────────────────────────────────────────────────────────────
 
@@ -50,6 +52,44 @@ impl<T: Ord, A: Allocator> PartialOrd for BTreeSet<T, A> {
 impl<T: Ord, A: Allocator> Ord for BTreeSet<T, A> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
+    }
+}
+
+// ── TryFromIterator ────────────────────────────────────────────────────────────────────
+
+impl<T: Ord> TryFromIterator<T> for BTreeSet<T, Global> {
+    type Error = AllocError;
+
+    /// Fallibly collect an iterator of values into a [`BTreeSet`] on the
+    /// default [`Global`] allocator. For a custom allocator use
+    /// [`BTreeSet::try_from_iter_in`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if an internal allocation fails during insertion.
+    fn try_from_iter<I: IntoIterator<Item = T>>(iter: I) -> Result<Self, Self::Error> {
+        Self::try_from_iter_in(iter, Global)
+    }
+}
+
+impl<T: Ord, A: Allocator> BTreeSet<T, A> {
+    /// Fallibly collects an iterator of values into a [`BTreeSet`] on the given
+    /// allocator. Duplicate values collapse to a single entry, as with any set
+    /// insertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if reserving capacity for an incoming element
+    /// fails. On failure the partially constructed set is discarded.
+    pub fn try_from_iter_in<I: IntoIterator<Item = T>>(
+        iter: I,
+        alloc: A,
+    ) -> Result<Self, AllocError> {
+        let mut set = Self::new_in(alloc);
+        for value in iter {
+            set.try_insert(value)?;
+        }
+        Ok(set)
     }
 }
 
@@ -200,6 +240,64 @@ mod tests {
         let hi = make_set(&[10, 11, 12]);
         assert!(lo < hi);
         assert!(hi > lo);
+    }
+
+    // --- TryFromIterator -------------------------------------------------------
+
+    #[test]
+    fn try_from_iter_builds_sorted_set() {
+        let set: BTreeSet<i32> = TryFromIterator::try_from_iter((1..=5).rev()).unwrap();
+        assert_eq!(set.len(), 5);
+        assert_eq!(
+            set.iter().copied().collect::<std::vec::Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn try_from_iter_collapses_duplicates() {
+        let values = std::vec![3, 1, 3, 2, 1, 3];
+        let set: BTreeSet<i32> = TryFromIterator::try_from_iter(values).unwrap();
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&1));
+        assert!(set.contains(&2));
+        assert!(set.contains(&3));
+    }
+
+    #[test]
+    fn try_from_iter_empty_is_empty() {
+        let set: BTreeSet<i32> = TryFromIterator::try_from_iter(std::iter::empty::<i32>()).unwrap();
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn try_from_iter_in_budgeted_alloc_succeeds_within_budget() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        // Generous budget: construction must succeed and the set must be
+        // intact. The allocator is consumed by value into the set.
+        let alloc = BudgetedAlloc::new(100);
+        let set = BTreeSet::try_from_iter_in([7, 2, 9, 2], alloc).unwrap();
+        assert_eq!(set.len(), 3);
+        assert_eq!(set.iter().copied().collect::<std::vec::Vec<_>>(), [2, 7, 9]);
+    }
+
+    #[test]
+    fn try_from_iter_in_drained_alloc_fails() {
+        use crate::test_helpers::BudgetedAlloc;
+
+        // Zero budget: the first internal allocation fails, so the whole
+        // fallible collection must report an error rather than panic.
+        let alloc = BudgetedAlloc::new(0);
+        let result = BTreeSet::try_from_iter_in([1, 2, 3], alloc);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn try_from_iter_single_element() {
+        let set: BTreeSet<i32> = TryFromIterator::try_from_iter(std::iter::once(42)).unwrap();
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&42));
     }
 
     // --- Invariants after trait-driven reads ---------------------------------
