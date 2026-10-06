@@ -28,6 +28,7 @@ mod iter;
 mod mutation;
 mod operation;
 mod query;
+mod traits;
 
 /// An ordered set based on a B-tree.
 ///
