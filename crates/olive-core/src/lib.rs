@@ -88,6 +88,9 @@ pub mod alloc;
 pub mod alloc_errors;
 /// Foundational-trait impls for [`core::cell::Cell`] and [`core::cell::RefCell`].
 pub mod cell;
+/// Iterator adaptors layered on top of [`core::iter`], including
+/// [`DoubleEndedPeekable`](iter::DoubleEndedPeekable).
+pub mod iter;
 /// Foundational-trait impls for [`core::marker::PhantomData`].
 pub mod marker;
 /// Foundational-trait impls for the [`core::num`] non-zero integer newtypes.
