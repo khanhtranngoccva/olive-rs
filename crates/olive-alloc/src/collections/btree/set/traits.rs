@@ -1,9 +1,4 @@
 //! Trait implementations for [`BTreeSet`].
-//!
-//! This file hosts every trait impl that does not belong to an inherent-method
-//! category (construction, insertion, query, …). The first batch mirrors the
-//! corresponding [`BTreeMap`](super::super::map::BTreeMap) impls: equality,
-//! hashing, and lexicographic ordering.
 
 use super::BTreeSet;
 use crate::alloc::{Allocator, Global};
@@ -15,6 +10,11 @@ use olive_core::try_traits::TryFromIterator;
 // ── Equality ─────────────────────────────────────────────────────────────────
 
 impl<T: Ord, A: Allocator> PartialEq for BTreeSet<T, A> {
+    /// Reports whether two sets contain exactly the same elements.
+    ///
+    /// Comparison is by membership only; insertion order and history are
+    /// irrelevant. Sets of different lengths are unequal without inspecting
+    /// any element.
     fn eq(&self, other: &Self) -> bool {
         if self.len() != other.len() {
             return false;
@@ -30,10 +30,11 @@ impl<T: Ord, A: Allocator> Eq for BTreeSet<T, A> {}
 // ── Hashing ──────────────────────────────────────────────────────────────────
 
 impl<T: Hash + Ord, A: Allocator> Hash for BTreeSet<T, A> {
+    /// Feeds the set into a hasher.
+    ///
+    /// Equal sets always produce equal digests regardless of the order their
+    /// elements were inserted in.
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Length first, then each element in ascending order. This makes the
-        // digest depend on membership only, never on insertion history, and it
-        // distinguishes multisets-with-duplicates from sets by construction.
         state.write_usize(self.len());
         for value in self.iter() {
             value.hash(state);
@@ -44,12 +45,18 @@ impl<T: Hash + Ord, A: Allocator> Hash for BTreeSet<T, A> {
 // ── Ordering ─────────────────────────────────────────────────────────────────
 
 impl<T: Ord, A: Allocator> PartialOrd for BTreeSet<T, A> {
+    /// Compares two sets lexicographically over their sorted sequences.
+    /// The first mismatched element decides; a shorter prefix sorts before its
+    /// longer extension.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl<T: Ord, A: Allocator> Ord for BTreeSet<T, A> {
+    /// Total-order comparison of two sets, lexicographic over their sorted
+    /// sequences: the first mismatched element decides, and a shorter prefix
+    /// sorts before its longer extension.
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
     }

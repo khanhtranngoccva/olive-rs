@@ -38,6 +38,10 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for BTreeMap<K, V, A
 // ---------------------------------------------------------------------------
 
 impl<K: Ord + PartialEq, V: PartialEq, A: Allocator> PartialEq for BTreeMap<K, V, A> {
+    /// Reports whether two maps contain exactly the same key-value pairs.
+    ///
+    /// Maps of different lengths are unequal without inspecting any entry;
+    /// otherwise entries are compared pairwise in ascending key order.
     fn eq(&self, other: &Self) -> bool {
         if self.len() != other.len() {
             return false;
@@ -56,7 +60,9 @@ impl<K: Ord + Eq, V: Eq, A: Allocator> Eq for BTreeMap<K, V, A> {}
 // PartialOrd / Ord
 // ---------------------------------------------------------------------------
 
-impl<K: Ord + PartialOrd, V: PartialOrd, A: Allocator> PartialOrd for BTreeMap<K, V, A> {
+impl<K: Ord, V: PartialOrd, A: Allocator> PartialOrd for BTreeMap<K, V, A> {
+    /// Compares two maps lexicographically over their `(key, value)` pairs in
+    /// ascending key order. Returns `None` if any compared pair is unordered.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // Lexicographic comparison of (key, value) pairs in ascending key order.
         self.iter().partial_cmp(other.iter())
@@ -64,6 +70,9 @@ impl<K: Ord + PartialOrd, V: PartialOrd, A: Allocator> PartialOrd for BTreeMap<K
 }
 
 impl<K: Ord, V: Ord, A: Allocator> Ord for BTreeMap<K, V, A> {
+    /// Total-order comparison of two maps, lexicographic over their `(key,
+    /// value)` pairs in ascending key order. The first mismatched pair decides;
+    /// a map that is a prefix of another sorts before it.
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
@@ -75,6 +84,12 @@ impl<K: Ord, V: Ord, A: Allocator> Ord for BTreeMap<K, V, A> {
 // ---------------------------------------------------------------------------
 
 impl<K: Ord + Hash, V: Hash, A: Allocator> Hash for BTreeMap<K, V, A> {
+    /// Feeds the map into a hasher: its length first, then each key and value
+    /// in ascending key order.
+    ///
+    /// Equal maps always produce equal digests regardless of insertion order,
+    /// and a map that is a strict prefix of another cannot collide with it
+    /// thanks to the leading length.
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash the length first so that a map which is a strict prefix of
         // another cannot collide with it.
