@@ -1,4 +1,5 @@
-//! Set-algebra iterators for [`BTreeSet`]: `intersection`.
+//! Set-algebra iterators for [`BTreeSet`]: `intersection`, `union`, `difference`
+//! and `symmetric_difference`.
 //!
 //! The intersection of two sorted sets is computed with the same strategy as
 //! std's `BTreeSet::intersection`: when the sets are similarly sized, both are
@@ -294,6 +295,73 @@ impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for Union<'a, T, A> {
 
 impl<T: Ord, A: Allocator> FusedIterator for Union<'_, T, A> {}
 
+// ── Symmetric difference ──────────────────────────────────────────────────────
+
+/// A lazy iterator producing elements in the symmetric difference of `BTreeSet`s.
+///
+/// This `struct` is created by the [`symmetric_difference`] method on [`BTreeSet`].
+/// See its documentation for more.
+///
+/// [`symmetric_difference`]: BTreeSet::symmetric_difference
+#[must_use = "this returns the symmetric difference as an iterator, \
+              without modifying either input set"]
+#[derive(TryClone)]
+pub struct SymmetricDifference<'a, T: 'a, A: Allocator = Global> {
+    inner: MergeIterInner<Iter<'a, T>>,
+    _alloc: PhantomData<&'a A>,
+}
+
+impl<'a, T: Ord, A: Allocator> SymmetricDifference<'a, T, A> {
+    pub(super) fn new(a: &'a BTreeSet<T, A>, b: &'a BTreeSet<T, A>) -> Self {
+        let inner = MergeIterInner::new(a.iter(), b.iter());
+        SymmetricDifference {
+            inner,
+            _alloc: PhantomData,
+        }
+    }
+}
+
+impl<T: Debug, A: Allocator> Debug for SymmetricDifference<'_, T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SymmetricDifference")
+            .field(&self.inner)
+            .finish()
+    }
+}
+
+// TryClone is an infallible perfect macro, but Clone isn't
+impl<T, A: Allocator> Clone for SymmetricDifference<'_, T, A> {
+    fn clone(&self) -> Self {
+        TryClone::try_clone(self).expect("should infallibly clone SymmetricDifference")
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> Iterator for SymmetricDifference<'a, T, A> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        loop {
+            let (a_next, b_next) = self.inner.nexts(Self::Item::cmp);
+            // Some + Some -> proceed to next loop, None + None -> returned None, iteration ends
+            // Otherwise returns the Some item
+            if a_next.and(b_next).is_none() {
+                return a_next.or(b_next);
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (a_len, b_len) = self.inner.lens();
+        (0, a_len.checked_add(b_len))
+    }
+
+    fn min(mut self) -> Option<&'a T> {
+        self.next()
+    }
+}
+
+impl<T: Ord, A: Allocator> FusedIterator for SymmetricDifference<'_, T, A> {}
+
 // ── Difference ────────────────────────────────────────────────────────────────
 
 /// A lazy iterator producing elements in the difference of `BTreeSet`s.
@@ -496,6 +564,9 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
 
     /// Returns an iterator over elements in the union of `self` and `other`,
     /// in ascending order.
+    ///
+    /// The resulting iterator supports reverse iteration via
+    /// [`DoubleEndedIterator::next_back`].
     pub fn union<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Union<'s, T, A> {
         Union::new(self, other)
     }
@@ -504,6 +575,15 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
     /// in ascending order.
     pub fn difference<'s>(&'s self, other: &'s BTreeSet<T, A>) -> Difference<'s, T, A> {
         Difference::new(self, other)
+    }
+
+    /// Returns an iterator over elements in `self` or `other`, but not both,
+    /// in ascending order.
+    pub fn symmetric_difference<'s>(
+        &'s self,
+        other: &'s BTreeSet<T, A>,
+    ) -> SymmetricDifference<'s, T, A> {
+        SymmetricDifference::new(self, other)
     }
 }
 
@@ -994,6 +1074,150 @@ mod tests {
         let rest_from_cloned_commute: Vec<&i32> = cloned_commute.collect();
         assert_eq!(rest_from_u_commute, rest_from_cloned_commute);
         assert_eq!(rest_from_u_commute, [&2, &3, &4, &5, &6]);
+    }
+
+    // ── Symmetric difference tests ──────────────────────────────────────────────
+
+    #[test]
+    fn symmetric_difference_disjoint_sets_returns_all() {
+        let a = build(&[1, 3, 5]);
+        let b = build(&[2, 4, 6]);
+        let got: Vec<&i32> = a.symmetric_difference(&b).collect();
+        assert_eq!(got, [&1, &2, &3, &4, &5, &6]);
+        let got_commute: Vec<&i32> = b.symmetric_difference(&a).collect();
+        assert_eq!(got_commute, got);
+    }
+
+    #[test]
+    fn symmetric_difference_identical_sets_is_empty() {
+        let a = build(&[1, 2, 3, 4]);
+        let b = build(&[1, 2, 3, 4]);
+        assert!(a.symmetric_difference(&b).next().is_none());
+        assert!(b.symmetric_difference(&a).next().is_none());
+    }
+
+    #[test]
+    fn symmetric_difference_partial_overlap_keeps_only_unique() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let got: Vec<&i32> = a.symmetric_difference(&b).collect();
+        assert_eq!(got, [&1, &2, &6, &7]);
+        let got_commute: Vec<&i32> = b.symmetric_difference(&a).collect();
+        assert_eq!(got_commute, got);
+    }
+
+    #[test]
+    fn symmetric_difference_one_subset_of_other() {
+        let small = build(&[2, 4]);
+        let large = build(&[1, 2, 3, 4, 5]);
+        let got: Vec<&i32> = small.symmetric_difference(&large).collect();
+        assert_eq!(got, [&1, &3, &5]);
+        let got_commute: Vec<&i32> = large.symmetric_difference(&small).collect();
+        assert_eq!(got_commute, got);
+    }
+
+    #[test]
+    fn symmetric_difference_with_empty_set_returns_all_self() {
+        let a = build(&[1, 2, 3]);
+        let empty = build(&[]);
+        let got: Vec<&i32> = a.symmetric_difference(&empty).collect();
+        assert_eq!(got, [&1, &2, &3]);
+        let got_commute: Vec<&i32> = empty.symmetric_difference(&a).collect();
+        assert_eq!(got_commute, got);
+    }
+
+    #[test]
+    fn symmetric_difference_interleaved_ordering() {
+        let a = build(&[1, 4, 7]);
+        let b = build(&[2, 4, 8]);
+        let got: Vec<&i32> = a.symmetric_difference(&b).collect();
+        assert_eq!(got, [&1, &2, &7, &8]);
+        let got_commute: Vec<&i32> = b.symmetric_difference(&a).collect();
+        assert_eq!(got_commute, got);
+    }
+
+    #[test]
+    fn symmetric_difference_size_hint_bounds() {
+        let a = build(&[1, 2, 3, 4]);
+        let b = build(&[2, 3, 4, 5]);
+        let sd = a.symmetric_difference(&b);
+        let (lo, hi) = sd.size_hint();
+        assert_eq!(lo, 0);
+        assert_eq!(hi, Some(8));
+        assert_eq!(sd.count(), 2);
+
+        let sd_commute = a.symmetric_difference(&b);
+        let (lo, hi) = sd_commute.size_hint();
+        assert_eq!(lo, 0);
+        assert_eq!(hi, Some(8));
+        assert_eq!(sd_commute.count(), 2);
+    }
+
+    #[test]
+    fn symmetric_difference_size_hint_after_consumption() {
+        let a = build(&[1, 2, 3, 4]);
+        let b = build(&[2, 3, 4, 5]);
+        let mut sd = a.symmetric_difference(&b);
+        assert_eq!(sd.next(), Some(&1));
+        let (lo, hi) = sd.size_hint();
+        assert_eq!(lo, 0);
+        assert_eq!(hi, Some(7));
+
+        let mut sd_commute = b.symmetric_difference(&a);
+        assert_eq!(sd.next(), Some(&1));
+        let (lo, hi) = sd.size_hint();
+        assert_eq!(lo, 0);
+        assert_eq!(hi, Some(7));
+    }
+
+    #[test]
+    fn symmetric_difference_min_yields_smallest() {
+        let a = build(&[3, 5, 7]);
+        let b = build(&[1, 5, 9]);
+        assert_eq!(a.symmetric_difference(&b).min(), Some(&1));
+        assert_eq!(b.symmetric_difference(&a).min(), Some(&1));
+    }
+
+    #[test]
+    fn symmetric_difference_max_yields_largest() {
+        let a = build(&[3, 5, 7]);
+        let b = build(&[1, 5, 9]);
+        assert_eq!(a.symmetric_difference(&b).max(), Some(&9));
+        assert_eq!(b.symmetric_difference(&a).max(), Some(&9));
+    }
+
+    #[test]
+    fn symmetric_difference_fused_iterator() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[2, 3, 4]);
+        let mut sd = a.symmetric_difference(&b);
+        assert_eq!(sd.next(), Some(&1));
+        assert_eq!(sd.next(), Some(&4));
+        assert_eq!(sd.next(), None);
+        assert_eq!(sd.next(), None);
+    }
+
+    #[test]
+    fn symmetric_difference_clone_preserves_position() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut sd = a.symmetric_difference(&b);
+        assert_eq!(sd.next(), Some(&1));
+        assert_eq!(sd.next(), Some(&2));
+        let cloned = sd.clone();
+        let rest_from_sd: Vec<&i32> = sd.collect();
+        let rest_from_cloned: Vec<&i32> = cloned.collect();
+        assert_eq!(rest_from_sd, rest_from_cloned);
+        assert_eq!(rest_from_sd, [&6, &7]);
+
+        let mut sd_commute = b.symmetric_difference(&a);
+        assert_eq!(sd_commute.next(), Some(&1));
+        assert_eq!(sd_commute.next(), Some(&2));
+        let cloned_commute = sd_commute.clone();
+        let rest_commute: Vec<&i32> = sd_commute.collect();
+        let rest_cloned_commute: Vec<&i32> = cloned_commute.collect();
+        assert_eq!(rest_commute, rest_cloned_commute);
+        assert_eq!(rest_commute, [&6, &7]);
     }
 
     // ── Difference tests ────────────────────────────────────────────────────────
