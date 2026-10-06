@@ -532,6 +532,8 @@ mod tests {
         let b = build(&[2, 4, 6]);
         let result: Vec<&i32> = a.intersection(&b).collect();
         assert!(result.is_empty());
+        let result_commute: Vec<&i32> = b.intersection(&a).collect();
+        assert!(result_commute.is_empty());
     }
 
     #[test]
@@ -547,6 +549,8 @@ mod tests {
         let b = build(&[4, 5, 6, 7]);
         let result: Vec<&i32> = a.intersection(&b).collect();
         assert_eq!(result, [&4, &5]);
+        let result_commute: Vec<&i32> = b.intersection(&a).collect();
+        assert_eq!(result_commute, [&4, &5]);
     }
 
     #[test]
@@ -556,8 +560,8 @@ mod tests {
         let result: Vec<&i32> = a.intersection(&empty).collect();
         assert!(result.is_empty());
 
-        let result_rev: Vec<&i32> = empty.intersection(&a).collect();
-        assert!(result_rev.is_empty());
+        let result_commute: Vec<&i32> = empty.intersection(&a).collect();
+        assert!(result_commute.is_empty());
     }
 
     #[test]
@@ -566,10 +570,14 @@ mod tests {
         let large = build(&(0..100).collect::<Vec<i32>>());
         let result: Vec<&i32> = small.intersection(&large).collect();
         assert_eq!(result, [&42]);
+        let result_commute: Vec<&i32> = large.intersection(&small).collect();
+        assert_eq!(result_commute, [&42]);
 
         let missing = build(&[999]);
         let result_missing: Vec<&i32> = missing.intersection(&large).collect();
         assert!(result_missing.is_empty());
+        let result_missing_commute: Vec<&i32> = large.intersection(&missing).collect();
+        assert!(result_missing_commute.is_empty());
     }
 
     #[test]
@@ -578,6 +586,8 @@ mod tests {
         let large = build(&[8, 10, 12, 14]);
         let result: Vec<&i32> = small.intersection(&large).collect();
         assert_eq!(result, [&8]);
+        let result_commute: Vec<&i32> = large.intersection(&small).collect();
+        assert_eq!(result_commute, [&8]);
     }
 
     #[test]
@@ -586,6 +596,8 @@ mod tests {
         let large = build(&(0..100).collect::<Vec<i32>>());
         let result: Vec<&i32> = small.intersection(&large).collect();
         assert_eq!(result, [&2, &4, &6, &8]);
+        let result_commute: Vec<&i32> = large.intersection(&small).collect();
+        assert_eq!(result_commute, [&2, &4, &6, &8]);
     }
 
     #[test]
@@ -594,6 +606,8 @@ mod tests {
         let b = build(&[2, 3, 5, 8, 9, 12]);
         let result: Vec<&i32> = a.intersection(&b).collect();
         assert_eq!(result, [&3, &5, &9]);
+        let result_commute: Vec<&i32> = b.intersection(&a).collect();
+        assert_eq!(result_commute, [&3, &5, &9]);
     }
 
     #[test]
@@ -602,6 +616,8 @@ mod tests {
         let b = build(&[3, 4, 5, 6, 7, 8]);
         let result: Vec<&i32> = a.intersection(&b).rev().collect();
         assert_eq!(result, [&6, &5, &4, &3]);
+        let result_commute: Vec<&i32> = b.intersection(&a).rev().collect();
+        assert_eq!(result_commute, [&6, &5, &4, &3]);
     }
 
     #[test]
@@ -610,6 +626,10 @@ mod tests {
         let b = build(&[3, 4, 5, 6, 7]);
         let inter = a.intersection(&b);
         let (low, high) = inter.size_hint();
+        assert_eq!(high, Some(5));
+        assert!(low == 0);
+        let inter_commute = b.intersection(&a);
+        let (low, high) = inter_commute.size_hint();
         assert_eq!(high, Some(5));
         assert!(low == 0);
     }
@@ -622,6 +642,10 @@ mod tests {
         let (low, high) = inter.size_hint();
         assert_eq!(high, Some(5));
         assert!(low == 0);
+        let inter_commute = b.intersection(&a);
+        let (low, high) = inter_commute.size_hint();
+        assert_eq!(high, Some(5));
+        assert!(low == 0);
     }
 
     #[test]
@@ -632,6 +656,10 @@ mod tests {
         let (low, high) = inter.size_hint();
         assert_eq!(high, Some(1));
         assert!(low == 1);
+        let inter_commute = b.intersection(&a);
+        let (low, high) = inter_commute.size_hint();
+        assert_eq!(high, Some(1));
+        assert!(low == 1);
     }
 
     #[test]
@@ -640,6 +668,10 @@ mod tests {
         let b = build(&[6, 7, 8, 9]);
         let inter = a.intersection(&b);
         let (low, high) = inter.size_hint();
+        assert_eq!(high, Some(0));
+        assert!(low == 0);
+        let inter_commute = b.intersection(&a);
+        let (low, high) = inter_commute.size_hint();
         assert_eq!(high, Some(0));
         assert!(low == 0);
     }
@@ -654,6 +686,11 @@ mod tests {
         assert_eq!(inter.next(), None);
         // Fused: subsequent calls also return None
         assert_eq!(inter.next(), None);
+        let mut inter_commute = b.intersection(&a);
+        assert_eq!(inter_commute.next(), Some(&2));
+        assert_eq!(inter_commute.next(), Some(&3));
+        assert_eq!(inter_commute.next(), None);
+        assert_eq!(inter_commute.next(), None);
     }
 
     #[test]
@@ -677,6 +714,8 @@ mod tests {
         let b = build(&[2, 4, 6]);
         let result: Vec<&i32> = a.union(&b).collect();
         assert_eq!(result, [&1, &2, &3, &4, &5, &6]);
+        let result_commute: Vec<&i32> = b.union(&a).collect();
+        assert_eq!(result_commute, [&1, &2, &3, &4, &5, &6]);
     }
 
     #[test]
@@ -692,6 +731,8 @@ mod tests {
         let b = build(&[4, 5, 6, 7]);
         let result: Vec<&i32> = a.union(&b).collect();
         assert_eq!(result, [&1, &2, &3, &4, &5, &6, &7]);
+        let result_commute: Vec<&i32> = b.union(&a).collect();
+        assert_eq!(result_commute, [&1, &2, &3, &4, &5, &6, &7]);
     }
 
     #[test]
@@ -720,6 +761,10 @@ mod tests {
         let (low, high) = u.size_hint();
         assert_eq!(low, 3);
         assert_eq!(high, Some(6));
+        let u_commute = b.union(&a);
+        let (low, high) = u_commute.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(6));
     }
 
     #[test]
@@ -737,6 +782,10 @@ mod tests {
         let b = build(&[1, 2, 3]);
         let u = a.union(&b);
         let (low, high) = u.size_hint();
+        assert_eq!(low, 3);
+        assert_eq!(high, Some(3));
+        let u_commute = b.union(&a);
+        let (low, high) = u_commute.size_hint();
         assert_eq!(low, 3);
         assert_eq!(high, Some(3));
     }
@@ -760,6 +809,11 @@ mod tests {
         let (low, high) = u.size_hint();
         assert_eq!(low, 5);
         assert_eq!(high, Some(9));
+        let mut u_commute = b.union(&a);
+        assert_eq!(u_commute.next(), Some(&1));
+        let (low, high) = u_commute.size_hint();
+        assert_eq!(low, 5);
+        assert_eq!(high, Some(9));
     }
 
     #[test]
@@ -768,6 +822,10 @@ mod tests {
         let b = build(&[10, 20, 30, 40]);
         let u = a.union(&b);
         let (low, high) = u.size_hint();
+        assert_eq!(low, 4);
+        assert_eq!(high, Some(5));
+        let u_commute = b.union(&a);
+        let (low, high) = u_commute.size_hint();
         assert_eq!(low, 4);
         assert_eq!(high, Some(5));
     }
@@ -784,6 +842,14 @@ mod tests {
         assert_eq!(u.next(), None);
         assert_eq!(u.next(), None);
         assert_eq!(u.next_back(), None);
+        let mut u_commute = b.union(&a);
+        assert_eq!(u_commute.next(), Some(&1));
+        assert_eq!(u_commute.next(), Some(&2));
+        assert_eq!(u_commute.next(), Some(&3));
+        assert_eq!(u_commute.next(), Some(&4));
+        assert_eq!(u_commute.next(), None);
+        assert_eq!(u_commute.next(), None);
+        assert_eq!(u_commute.next_back(), None);
     }
 
     #[test]
@@ -799,8 +865,11 @@ mod tests {
     #[test]
     fn union_reverse_identical_sets() {
         let a = build(&[1, 2, 3, 4, 5]);
-        let result: Vec<&i32> = a.union(&a).rev().collect();
+        let b = build(&[1, 2, 3, 4, 5]);
+        let result: Vec<&i32> = a.union(&b).rev().collect();
         assert_eq!(result, [&5, &4, &3, &2, &1]);
+        let result_commute: Vec<&i32> = b.union(&a).rev().collect();
+        assert_eq!(result_commute, [&5, &4, &3, &2, &1]);
     }
 
     #[test]
@@ -838,7 +907,7 @@ mod tests {
         assert_eq!(u.next_back(), Some(&5));
         assert_eq!(u.next(), None);
         assert_eq!(u.next_back(), None);
-        let mut u_commute = a.union(&b);
+        let mut u_commute = b.union(&a);
         assert_eq!(u_commute.next(), Some(&1));
         assert_eq!(u_commute.next_back(), Some(&8));
         assert_eq!(u_commute.next(), Some(&2));
@@ -896,10 +965,10 @@ mod tests {
         assert_eq!(low, 4);
         assert_eq!(high, Some(8));
 
-        let mut u_commute = a.union(&b);
-        let _ = u_commute.next();
-        let _ = u_commute.next_back();
-        let (low, high) = u.size_hint();
+        let mut u_commute = b.union(&a);
+        assert_eq!(u_commute.next(), Some(&1));
+        assert_eq!(u_commute.next_back(), Some(&7));
+        let (low, high) = u_commute.size_hint();
         assert_eq!(low, 4);
         assert_eq!(high, Some(8));
     }
