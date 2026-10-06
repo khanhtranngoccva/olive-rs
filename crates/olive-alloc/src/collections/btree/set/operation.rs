@@ -358,6 +358,27 @@ impl<'a, T: Ord, A: Allocator> Iterator for SymmetricDifference<'a, T, A> {
     fn min(mut self) -> Option<&'a T> {
         self.next()
     }
+
+    fn max(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+
+    fn last(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for SymmetricDifference<'a, T, A> {
+    fn next_back(&mut self) -> Option<&'a T> {
+        loop {
+            let (a_next_back, b_next_back) = self.inner.nexts_back(Self::Item::cmp);
+            // Some + Some -> proceed to next loop, None + None -> returned None, iteration ends
+            // Otherwise returns the Some item
+            if a_next_back.and(b_next_back).is_none() {
+                return a_next_back.or(b_next_back);
+            }
+        }
+    }
 }
 
 impl<T: Ord, A: Allocator> FusedIterator for SymmetricDifference<'_, T, A> {}
@@ -1164,8 +1185,8 @@ mod tests {
         assert_eq!(hi, Some(7));
 
         let mut sd_commute = b.symmetric_difference(&a);
-        assert_eq!(sd.next(), Some(&1));
-        let (lo, hi) = sd.size_hint();
+        assert_eq!(sd_commute.next(), Some(&1));
+        let (lo, hi) = sd_commute.size_hint();
         assert_eq!(lo, 0);
         assert_eq!(hi, Some(7));
     }
@@ -1218,6 +1239,39 @@ mod tests {
         let rest_cloned_commute: Vec<&i32> = cloned_commute.collect();
         assert_eq!(rest_commute, rest_cloned_commute);
         assert_eq!(rest_commute, [&6, &7]);
+    }
+
+    #[test]
+    fn symmetric_difference_reverse_yields_descending_unique() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut sd = a.symmetric_difference(&b);
+        assert_eq!(sd.next_back(), Some(&7));
+        assert_eq!(sd.next_back(), Some(&6));
+        assert_eq!(sd.next_back(), Some(&2));
+        assert_eq!(sd.next_back(), Some(&1));
+        assert_eq!(sd.next_back(), None);
+        // Commutation: swapping operands gives the same descending sequence.
+        let mut sd_commute = b.symmetric_difference(&a);
+        assert_eq!(sd_commute.next_back(), Some(&7));
+        assert_eq!(sd_commute.next_back(), Some(&6));
+        assert_eq!(sd_commute.next_back(), Some(&2));
+        assert_eq!(sd_commute.next_back(), Some(&1));
+        assert_eq!(sd_commute.next_back(), None);
+    }
+
+    #[test]
+    fn symmetric_difference_mixed_forward_backward_meets_in_middle() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut sd = a.symmetric_difference(&b);
+        // Unique elements are {1, 2, 6, 7}. Pull from both ends.
+        assert_eq!(sd.next(), Some(&1));
+        assert_eq!(sd.next_back(), Some(&7));
+        assert_eq!(sd.next(), Some(&2));
+        assert_eq!(sd.next_back(), Some(&6));
+        assert_eq!(sd.next(), None);
+        assert_eq!(sd.next_back(), None);
     }
 
     // ── Difference tests ────────────────────────────────────────────────────────
