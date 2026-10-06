@@ -1,19 +1,12 @@
 //! Set-algebra iterators for [`BTreeSet`]: `intersection`, `union`, `difference`
 //! and `symmetric_difference`.
-//!
-//! The intersection of two sorted sets is computed with the same strategy as
-//! std's `BTreeSet::intersection`: when the sets are similarly sized, both are
-//! iterated jointly and matches spotted along the way (`Stitch`); when one set
-//! is much smaller, its elements are looked up in the larger one (`Search`).
-//! A degenerate case — one side empty, or exactly one candidate element
-//! survives a length comparison — collapses to a single-element answer
-//! (`Answer`).
 
 use core::cmp::{Ordering, min};
 use core::fmt;
 use core::fmt::Debug;
-use core::iter::{DoubleEndedIterator, FusedIterator, Iterator, Peekable};
+use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::marker::PhantomData;
+use olive_core::iter::DoubleEndedPeekable;
 
 use super::super::merge_iter::MergeIterInner;
 use super::BTreeSet;
@@ -401,7 +394,7 @@ pub struct Difference<'a, T: 'a, A: Allocator = Global> {
 enum DifferenceInner<'a, T: 'a, A: Allocator> {
     Stitch {
         self_iter: Iter<'a, T>,
-        other_iter: Peekable<Iter<'a, T>>,
+        other_iter: DoubleEndedPeekable<Iter<'a, T>>,
     },
     Search {
         self_iter: Iter<'a, T>,
@@ -476,7 +469,7 @@ impl<'a, T: Ord, A: Allocator> Iterator for Difference<'a, T, A> {
                 let mut self_next = self_iter.next()?;
                 loop {
                     match other_iter
-                        .peek()
+                        .peek_front()
                         .map_or(Ordering::Less, |other_next| self_next.cmp(other_next))
                     {
                         Ordering::Less => return Some(self_next),
@@ -522,8 +515,50 @@ impl<'a, T: Ord, A: Allocator> Iterator for Difference<'a, T, A> {
         self.next()
     }
 
-    fn max(self) -> Option<&'a T> {
-        self.last()
+    fn max(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+
+    fn last(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for Difference<'a, T, A> {
+    fn next_back(&mut self) -> Option<&'a T> {
+        match &mut self.inner {
+            DifferenceInner::Stitch {
+                self_iter,
+                other_iter,
+            } => {
+                let mut self_next = self_iter.next_back()?;
+                loop {
+                    match other_iter
+                        .peek_back()
+                        .map_or(Ordering::Greater, |other_next| self_next.cmp(other_next))
+                    {
+                        Ordering::Greater => return Some(self_next),
+                        Ordering::Equal => {
+                            self_next = self_iter.next_back()?;
+                            other_iter.next_back();
+                        }
+                        Ordering::Less => {
+                            other_iter.next_back();
+                        }
+                    }
+                }
+            }
+            DifferenceInner::Search {
+                self_iter,
+                other_set,
+            } => loop {
+                let self_next = self_iter.next_back()?;
+                if !other_set.contains(self_next) {
+                    return Some(self_next);
+                }
+            },
+            DifferenceInner::Iterate(iter) => iter.next_back(),
+        }
     }
 }
 
@@ -564,7 +599,7 @@ impl<'a, T: Ord, A: Allocator> Difference<'a, T, A> {
             }
             _ => DifferenceInner::Stitch {
                 self_iter: self_set.iter(),
-                other_iter: other_set.iter().peekable(),
+                other_iter: DoubleEndedPeekable::new(other_set.iter()),
             },
         };
         Difference { inner }
@@ -1455,5 +1490,40 @@ mod tests {
         let r2: Vec<&i32> = cloned.collect();
         assert_eq!(r1, r2);
         assert_eq!(r1, [&1, &3, &4]);
+    }
+
+    #[test]
+    fn difference_reverse_yields_descending() {
+        // a.difference(b) = {1, 3, 4}; reversed -> [4, 3, 1].
+        let a = build(&[1, 2, 3, 4]);
+        let b = build(&[2]);
+        let mut d = a.difference(&b);
+        assert_eq!(d.next_back(), Some(&4));
+        assert_eq!(d.next_back(), Some(&3));
+        assert_eq!(d.next_back(), Some(&1));
+        assert_eq!(d.next_back(), None);
+    }
+
+    #[test]
+    fn difference_reverse_search_path() {
+        // Small self vs large other exercises the Search strategy in reverse.
+        let small = build(&[1, 5]);
+        let large = build(&(1..100).collect::<Vec<_>>());
+        let mut d = small.difference(&large);
+        // Both 1 and 5 are contained in `large`, so the difference is empty.
+        assert_eq!(d.next_back(), None);
+    }
+
+    #[test]
+    fn difference_reverse_mixed_directions() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[2, 4]);
+        // a.difference(b) = {1, 3, 5}.
+        let mut d = a.difference(&b);
+        assert_eq!(d.next(), Some(&1));
+        assert_eq!(d.next_back(), Some(&5));
+        assert_eq!(d.next(), Some(&3));
+        assert_eq!(d.next(), None);
+        assert_eq!(d.next_back(), None);
     }
 }
