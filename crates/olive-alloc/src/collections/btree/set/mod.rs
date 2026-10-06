@@ -18,6 +18,7 @@ use crate::alloc::{Allocator, Global};
 pub use entry::{Entry, OccupiedEntry, VacantEntry};
 pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, Iter};
+pub use operation::{Difference, Intersection, SymmetricDifference, Union};
 
 mod construction;
 mod entry;

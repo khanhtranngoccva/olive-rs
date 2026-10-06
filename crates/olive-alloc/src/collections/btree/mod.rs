@@ -34,9 +34,11 @@ pub use extract_if::ExtractIf;
 pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
 pub use map::BTreeMap;
 pub use set::{
-    BTreeSet, Entry as BTreeSetEntry, ExtractIf as BTreeSetExtractIf, IntoIter as BTreeSetIntoIter,
-    Iter as BTreeSetIter, OccupiedEntry as BTreeSetOccupiedEntry,
-    VacantEntry as BTreeSetVacantEntry,
+    BTreeSet, Difference as BTreeSetDifference, Entry as BTreeSetEntry,
+    ExtractIf as BTreeSetExtractIf, Intersection as BTreeSetIntersection,
+    IntoIter as BTreeSetIntoIter, Iter as BTreeSetIter,
+    OccupiedEntry as BTreeSetOccupiedEntry, SymmetricDifference as BTreeSetSymmetricDifference,
+    Union as BTreeSetUnion, VacantEntry as BTreeSetVacantEntry,
 };
 
 // ---------------------------------------------------------------------------
