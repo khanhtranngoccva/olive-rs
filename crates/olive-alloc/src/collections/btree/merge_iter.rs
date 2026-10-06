@@ -1,25 +1,17 @@
 use core::cmp::Ordering;
 use core::fmt::{self, Debug};
-use core::iter::FusedIterator;
-use olive_core::TryClone;
+use core::iter::{DoubleEndedIterator, FusedIterator};
+use olive_core::iter::DoubleEndedPeekable;
 use olive_core::try_traits::{TryClone, TryCloneError};
 
 /// Core of an iterator that merges the output of two strictly ascending iterators,
 /// for instance a union or a symmetric difference.
-pub(crate) struct MergeIterInner<I: Iterator> {
-    a: I,
-    b: I,
-    peeked: Option<Peeked<I>>,
+pub(crate) struct MergeIterInner<I: DoubleEndedIterator + FusedIterator> {
+    a: DoubleEndedPeekable<I>,
+    b: DoubleEndedPeekable<I>,
 }
 
-/// Benchmarks faster than wrapping both iterators in a Peekable.
-#[derive(TryClone, Clone, Debug)]
-enum Peeked<I: Iterator> {
-    A(I::Item),
-    B(I::Item),
-}
-
-impl<I: Iterator> Clone for MergeIterInner<I>
+impl<I: DoubleEndedIterator + FusedIterator> Clone for MergeIterInner<I>
 where
     I: Clone,
     I::Item: Clone,
@@ -28,12 +20,11 @@ where
         Self {
             a: self.a.clone(),
             b: self.b.clone(),
-            peeked: self.peeked.clone(),
         }
     }
 }
 
-impl<I: Iterator> TryClone for MergeIterInner<I>
+impl<I: DoubleEndedIterator + FusedIterator> TryClone for MergeIterInner<I>
 where
     I: TryClone,
     I::Item: TryClone,
@@ -42,12 +33,11 @@ where
         Ok(Self {
             a: self.a.try_clone()?,
             b: self.b.try_clone()?,
-            peeked: self.peeked.try_clone()?,
         })
     }
 }
 
-impl<I: Iterator> Debug for MergeIterInner<I>
+impl<I: DoubleEndedIterator + FusedIterator> Debug for MergeIterInner<I>
 where
     I: Debug,
     I::Item: Debug,
@@ -56,15 +46,17 @@ where
         f.debug_tuple("MergeIterInner")
             .field(&self.a)
             .field(&self.b)
-            .field(&self.peeked)
             .finish()
     }
 }
 
-impl<I: Iterator> MergeIterInner<I> {
+impl<I: DoubleEndedIterator + FusedIterator> MergeIterInner<I> {
     /// Creates a new core for an iterator merging a pair of sources.
     pub(crate) fn new(a: I, b: I) -> Self {
-        MergeIterInner { a, b, peeked: None }
+        MergeIterInner {
+            a: DoubleEndedPeekable::new(a),
+            b: DoubleEndedPeekable::new(b),
+        }
     }
 
     /// Returns the next pair of items stemming from the pair of sources
@@ -82,34 +74,48 @@ impl<I: Iterator> MergeIterInner<I> {
     pub(crate) fn nexts<Cmp: Fn(&I::Item, &I::Item) -> Ordering>(
         &mut self,
         cmp: Cmp,
-    ) -> (Option<I::Item>, Option<I::Item>)
-    where
-        I: FusedIterator,
-    {
-        let mut a_next;
-        let mut b_next;
-        match self.peeked.take() {
-            Some(Peeked::A(next)) => {
-                a_next = Some(next);
-                b_next = self.b.next();
-            }
-            Some(Peeked::B(next)) => {
-                b_next = Some(next);
-                a_next = self.a.next();
-            }
-            None => {
-                a_next = self.a.next();
-                b_next = self.b.next();
-            }
-        }
+    ) -> (Option<I::Item>, Option<I::Item>) {
+        let mut a_next = self.a.peek_front();
+        let mut b_next = self.b.peek_front();
         if let (Some(a1), Some(b1)) = (&a_next, &b_next) {
             match cmp(a1, b1) {
-                Ordering::Less => self.peeked = b_next.take().map(Peeked::B),
-                Ordering::Greater => self.peeked = a_next.take().map(Peeked::A),
+                // The smaller head is yielded now; the larger one stays
+                // cached for the next call.
+                Ordering::Less => b_next = None,
+                Ordering::Greater => a_next = None,
                 Ordering::Equal => (),
             }
         }
-        (a_next, b_next)
+        (
+            a_next.is_some().then(|| self.a.next().unwrap()),
+            b_next.is_some().then(|| self.b.next().unwrap()),
+        )
+    }
+
+    /// Returns the next pair of items stemming from the pair of sources
+    /// being merged, advancing them from the back.
+    ///
+    /// Behaves like [`nexts`](Self::nexts) but walks both sources in
+    /// descending order, so it pairs up the largest remaining elements.
+    pub(crate) fn nexts_back<Cmp: Fn(&I::Item, &I::Item) -> Ordering>(
+        &mut self,
+        cmp: Cmp,
+    ) -> (Option<I::Item>, Option<I::Item>) {
+        let mut a_next_back = self.a.peek_back();
+        let mut b_next_back = self.b.peek_back();
+        if let (Some(a1), Some(b1)) = (&a_next_back, &b_next_back) {
+            match cmp(a1, b1) {
+                // The larger tail is yielded now; the smaller one stays
+                // cached for the next call.
+                Ordering::Less => a_next_back = None,
+                Ordering::Greater => b_next_back = None,
+                Ordering::Equal => (),
+            }
+        }
+        (
+            a_next_back.is_some().then(|| self.a.next_back().unwrap()),
+            b_next_back.is_some().then(|| self.b.next_back().unwrap()),
+        )
     }
 
     /// Returns a pair of upper bounds for the `size_hint` of the final iterator.
@@ -117,14 +123,6 @@ impl<I: Iterator> MergeIterInner<I> {
     where
         I: ExactSizeIterator,
     {
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "extra peeked item was taken from the iterators, and first party iterators don't lie"
-        )]
-        match self.peeked {
-            Some(Peeked::A(_)) => (1 + self.a.len(), self.b.len()),
-            Some(Peeked::B(_)) => (self.a.len(), 1 + self.b.len()),
-            _ => (self.a.len(), self.b.len()),
-        }
+        (self.a.len(), self.b.len())
     }
 }

@@ -3,10 +3,9 @@
 //! This module mirrors the layout of [`core::iter`] and re-exports its entire
 //! surface, then adds Olive's own adaptor types on top.
 
-pub use core::iter::*;
-
-use crate::try_traits::try_clone::{TryClone, TryCloneError};
 use core::fmt::{Debug, Formatter};
+pub use core::iter::*;
+use olive_macros::TryClone;
 
 /// A two-way analogue of [`core::iter::Peekable`]: peek at the next element
 /// from either end without consuming it.
@@ -38,6 +37,7 @@ use core::fmt::{Debug, Formatter};
 /// assert_eq!(it.peek_back(), None);
 /// ```
 #[must_use = "adaptors do nothing unless used"]
+#[derive(TryClone)]
 pub struct DoubleEndedPeekable<I: DoubleEndedIterator + FusedIterator> {
     /// The primary iterator.
     iter: I,
@@ -47,17 +47,17 @@ pub struct DoubleEndedPeekable<I: DoubleEndedIterator + FusedIterator> {
     back: Option<I::Item>,
 }
 
-impl<I: DoubleEndedIterator + FusedIterator> TryClone for DoubleEndedPeekable<I>
+impl<I: DoubleEndedIterator + FusedIterator> Clone for DoubleEndedPeekable<I>
 where
-    I: TryClone,
-    I::Item: TryClone,
+    I: Clone,
+    I::Item: Clone,
 {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        Ok(Self {
-            iter: self.iter.try_clone()?,
-            front: self.front.as_ref().map(TryClone::try_clone).transpose()?,
-            back: self.back.as_ref().map(TryClone::try_clone).transpose()?,
-        })
+    fn clone(&self) -> Self {
+        Self {
+            iter: self.iter.clone(),
+            front: self.front.clone(),
+            back: self.back.clone(),
+        }
     }
 }
 

@@ -275,6 +275,21 @@ impl<'a, T: Ord, A: Allocator> Iterator for Union<'a, T, A> {
     fn min(mut self) -> Option<&'a T> {
         self.next()
     }
+
+    fn max(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+
+    fn last(mut self) -> Option<&'a T> {
+        self.next_back()
+    }
+}
+
+impl<'a, T: Ord, A: Allocator> DoubleEndedIterator for Union<'a, T, A> {
+    fn next_back(&mut self) -> Option<&'a T> {
+        let (a_next_back, b_next_back) = self.inner.nexts_back(Self::Item::cmp);
+        a_next_back.or(b_next_back)
+    }
 }
 
 impl<T: Ord, A: Allocator> FusedIterator for Union<'_, T, A> {}
@@ -509,6 +524,8 @@ mod tests {
         s
     }
 
+    // ── Intersection tests ────────────────────────────────────────────────────────
+
     #[test]
     fn intersection_disjoint_sets_is_empty() {
         let a = build(&[1, 3, 5]);
@@ -652,6 +669,8 @@ mod tests {
         assert!(!buf.is_empty());
     }
 
+    // ── Union tests ────────────────────────────────────────────────────────
+
     #[test]
     fn union_disjoint_sets() {
         let a = build(&[1, 3, 5]);
@@ -764,6 +783,148 @@ mod tests {
         assert_eq!(u.next(), Some(&4));
         assert_eq!(u.next(), None);
         assert_eq!(u.next(), None);
+        assert_eq!(u.next_back(), None);
+    }
+
+    #[test]
+    fn union_reverse_disjoint_sets() {
+        let a = build(&[1, 3, 5]);
+        let b = build(&[2, 4, 6]);
+        let result: Vec<&i32> = a.union(&b).rev().collect();
+        assert_eq!(result, [&6, &5, &4, &3, &2, &1]);
+        let result_commute: Vec<&i32> = b.union(&a).rev().collect();
+        assert_eq!(result_commute, [&6, &5, &4, &3, &2, &1]);
+    }
+
+    #[test]
+    fn union_reverse_identical_sets() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let result: Vec<&i32> = a.union(&a).rev().collect();
+        assert_eq!(result, [&5, &4, &3, &2, &1]);
+    }
+
+    #[test]
+    fn union_reverse_partial_overlap() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[4, 5, 6, 7]);
+        let result: Vec<&i32> = a.union(&b).rev().collect();
+        assert_eq!(result, [&7, &6, &5, &4, &3, &2, &1]);
+        let result_commute: Vec<&i32> = b.union(&a).rev().collect();
+        assert_eq!(result_commute, [&7, &6, &5, &4, &3, &2, &1]);
+    }
+
+    #[test]
+    fn union_reverse_with_empty_set() {
+        let a = build(&[1, 2, 3]);
+        let empty: BTreeSet<i32> = BTreeSet::new();
+        let result: Vec<&i32> = a.union(&empty).rev().collect();
+        assert_eq!(result, [&3, &2, &1]);
+        let result_commute: Vec<&i32> = empty.union(&a).rev().collect();
+        assert_eq!(result_commute, [&3, &2, &1]);
+    }
+
+    #[test]
+    fn union_reverse_interleaved_directions_meet_in_middle() {
+        let a = build(&[1, 2, 3, 4, 5, 6]);
+        let b = build(&[3, 4, 5, 6, 7, 8]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next(), Some(&1));
+        assert_eq!(u.next_back(), Some(&8));
+        assert_eq!(u.next(), Some(&2));
+        assert_eq!(u.next_back(), Some(&7));
+        assert_eq!(u.next(), Some(&3));
+        assert_eq!(u.next_back(), Some(&6));
+        assert_eq!(u.next(), Some(&4));
+        assert_eq!(u.next_back(), Some(&5));
+        assert_eq!(u.next(), None);
+        assert_eq!(u.next_back(), None);
+        let mut u_commute = a.union(&b);
+        assert_eq!(u_commute.next(), Some(&1));
+        assert_eq!(u_commute.next_back(), Some(&8));
+        assert_eq!(u_commute.next(), Some(&2));
+        assert_eq!(u_commute.next_back(), Some(&7));
+        assert_eq!(u_commute.next(), Some(&3));
+        assert_eq!(u_commute.next_back(), Some(&6));
+        assert_eq!(u_commute.next(), Some(&4));
+        assert_eq!(u_commute.next_back(), Some(&5));
+        assert_eq!(u_commute.next(), None);
+        assert_eq!(u_commute.next_back(), None);
+    }
+
+    #[test]
+    fn union_reverse_then_forward_exhausted() {
+        let a = build(&[1, 2, 3]);
+        let b = build(&[2, 3, 4]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next_back(), Some(&4));
+        assert_eq!(u.next_back(), Some(&3));
+        assert_eq!(u.next_back(), Some(&2));
+        assert_eq!(u.next_back(), Some(&1));
+        assert_eq!(u.next_back(), None);
+        assert_eq!(u.next(), None);
+        let mut u_commute = b.union(&a);
+        assert_eq!(u_commute.next_back(), Some(&4));
+        assert_eq!(u_commute.next_back(), Some(&3));
+        assert_eq!(u_commute.next_back(), Some(&2));
+        assert_eq!(u_commute.next_back(), Some(&1));
+        assert_eq!(u_commute.next_back(), None);
+        assert_eq!(u_commute.next(), None);
+    }
+
+    #[test]
+    fn union_max_and_last_via_next_back() {
+        let a = build(&[1, 3, 5]);
+        let b = build(&[2, 4, 6]);
+        assert_eq!(a.union(&b).max(), Some(&6));
+        assert_eq!(a.union(&b).last(), Some(&6));
+        assert_eq!(a.union(&b).min(), Some(&1));
+        assert_eq!(b.union(&a).max(), Some(&6));
+        assert_eq!(b.union(&a).last(), Some(&6));
+        assert_eq!(b.union(&a).min(), Some(&1));
+    }
+
+    #[test]
+    fn union_size_hint_after_mixed_consumption() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next(), Some(&1));
+        assert_eq!(u.next_back(), Some(&7));
+        let (low, high) = u.size_hint();
+        // Remaining a=[2..5] (len 4), b=[3..6] (len 4): low=max(4,4)=4;
+        // high is the loose bound len(a)+len(b)=8.
+        assert_eq!(low, 4);
+        assert_eq!(high, Some(8));
+
+        let mut u_commute = a.union(&b);
+        let _ = u_commute.next();
+        let _ = u_commute.next_back();
+        let (low, high) = u.size_hint();
+        assert_eq!(low, 4);
+        assert_eq!(high, Some(8));
+    }
+
+    #[test]
+    fn union_clone_preserves_both_ends() {
+        let a = build(&[1, 2, 3, 4, 5]);
+        let b = build(&[3, 4, 5, 6, 7]);
+        let mut u = a.union(&b);
+        assert_eq!(u.next(), Some(&1));
+        assert_eq!(u.next_back(), Some(&7));
+        let cloned = u.clone();
+        let rest_from_u: Vec<&i32> = u.collect();
+        let rest_from_cloned: Vec<&i32> = cloned.collect();
+        assert_eq!(rest_from_u, rest_from_cloned);
+        assert_eq!(rest_from_u, [&2, &3, &4, &5, &6]);
+
+        let mut u_commute = b.union(&a);
+        assert_eq!(u_commute.next(), Some(&1));
+        assert_eq!(u_commute.next_back(), Some(&7));
+        let cloned_commute = u_commute.clone();
+        let rest_from_u_commute: Vec<&i32> = u_commute.collect();
+        let rest_from_cloned_commute: Vec<&i32> = cloned_commute.collect();
+        assert_eq!(rest_from_u_commute, rest_from_cloned_commute);
+        assert_eq!(rest_from_u_commute, [&2, &3, &4, &5, &6]);
     }
 
     // ── Difference tests ────────────────────────────────────────────────────────
@@ -858,8 +1019,6 @@ mod tests {
         assert!(low <= high.unwrap());
     }
 
-    // ── Difference size_hint bound paths ────────────────────────────────────────
-
     #[test]
     fn difference_size_hint_iterate_exact() {
         // Disjoint ranges → Iterate path: other_len=0, so low=self_len, high=self_len (exact)
@@ -950,5 +1109,4 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, [&1, &3, &4]);
     }
-
 }
