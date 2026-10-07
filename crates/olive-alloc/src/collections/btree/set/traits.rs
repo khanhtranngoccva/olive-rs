@@ -1,11 +1,15 @@
 //! Trait implementations for [`BTreeSet`].
 
+use super::super::TryBTreeSetWithCloneError;
 use super::BTreeSet;
 use crate::alloc::{Allocator, Global};
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
 use olive_core::alloc::AllocError;
+use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::TryFromIterator;
+use olive_core::try_traits::try_clone::TryClone;
+use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 
 // ── Equality ─────────────────────────────────────────────────────────────────
 
@@ -97,6 +101,74 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
             set.try_insert(value)?;
         }
         Ok(set)
+    }
+}
+
+// ── TryExtend / TryExtendFromSlice ───────────────────────────────────────────
+
+impl<T: Ord, A: Allocator> TryExtend<T> for BTreeSet<T, A> {
+    type Error = AllocError;
+
+    /// Attempts to extend the set with elements from a resumable source.
+    ///
+    /// # Errors
+    ///
+    /// On allocation failure, returns the remaining items in a [`Resume`] so
+    /// the caller can retry once memory is available, along with the [`AllocError`].
+    fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
+    where
+        S: ResumableSource<Item = T>,
+    {
+        let (head, mut inner, _hint) = source.decompose_with_size_hint();
+
+        // Insert the stranded head first, if any.
+        if let Some(val) = head {
+            if let Err((val, e)) = self.try_insert_give_back(val) {
+                return Err((Resume::new(val, inner), e));
+            }
+        }
+
+        // Insert the remainder one element at a time. Each insertion is atomic:
+        // on allocation failure the tree is left unmodified and we strand the
+        // current element in a `Resume` for retry.
+        while let Some(val) = inner.next() {
+            if let Err((val, e)) = self.try_insert_give_back(val) {
+                return Err((Resume::new(val, inner), e));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T: Ord + TryClone, A: Allocator> TryExtendFromSlice<T> for BTreeSet<T, A> {
+    type Error = TryBTreeSetWithCloneError;
+
+    /// Extends the set with elements cloned from a slice.
+    ///
+    /// # Errors
+    ///
+    /// On failure, returns the unconsumed tail of the slice together with
+    /// the [`TryBTreeSetWithCloneError`], so the caller can retry from
+    /// where it stopped.
+    fn try_extend_from_slice<'s>(&mut self, other: &'s [T]) -> Result<(), (&'s [T], Self::Error)> {
+        let mut i = 0usize;
+        for val in other {
+            let cloned = val
+                .try_clone()
+                .map_err(|e| (&other[i..], TryBTreeSetWithCloneError::Clone(e)))?;
+            match self.try_insert_give_back(cloned) {
+                Ok(_) => {
+                    #[allow(clippy::arithmetic_side_effects, reason = "asserted i < other.len()")]
+                    {
+                        i += 1;
+                    }
+                }
+                Err(_) => {
+                    return Err((&other[i..], TryBTreeSetWithCloneError::Alloc(AllocError)));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -323,5 +395,149 @@ mod tests {
         assert_eq!(set, other);
         assert!(set <= other);
         check_ascending_keys(&set.map);
+    }
+
+    // --- TryExtend -----------------------------------------------------------
+
+    #[test]
+    fn try_extend_adds_new_elements() {
+        let mut set = make_set(&[1, 3]);
+        set.try_extend([2, 4, 5].into_iter()).expect("extend ok");
+        assert_eq!(set.len(), 5);
+        assert!(set.contains(&2));
+        assert!(set.contains(&4));
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn try_extend_deduplicates_existing() {
+        let mut set = make_set(&[1, 2, 3]);
+        set.try_extend([2, 4].into_iter()).expect("extend ok");
+        assert_eq!(set.len(), 4);
+        assert!(set.contains(&4));
+    }
+
+    #[test]
+    fn try_extend_empty_source_is_noop() {
+        let mut set = make_set(&[1, 2]);
+        set.try_extend(core::iter::empty::<i32>())
+            .expect("extend ok");
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn try_extend_retry_recovers() {
+        use olive_core::recovery::Resume;
+        let start = Resume::new(10i32, [20, 30].into_iter());
+        let mut set = make_set(&[]);
+        set.try_extend(start).expect("retry ok");
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&10));
+        assert!(set.contains(&20));
+        assert!(set.contains(&30));
+    }
+
+    #[test]
+    fn try_extend_oom_strands_element() {
+        use crate::test_helpers::BudgetedAlloc;
+        // Build a populated set under a generous budget, then constrain the
+        // remaining budget so the next insertion that needs a new node OOMs.
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut set: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        for i in 0..40i32 {
+            set.try_insert(i).expect("insert ok");
+        }
+        // Constrain to exactly 1 allocation — enough for one leaf but not
+        // enough for the rebalance, guaranteeing an OOM mid-extend.
+        alloc.set_budget(1);
+        let (resume, _err) = set.try_extend(40..200).expect_err("OOM mid-extend");
+        let (_head, remainder) = resume.into_parts();
+        let count = remainder.count();
+        assert!(count > 0, "something must be stranded");
+    }
+
+    // --- TryExtendFromSlice ----------------------------------------------------
+
+    #[test]
+    fn try_extend_from_slice_adds_elements() {
+        let mut set = make_set(&[1, 3]);
+        let src = [2, 4, 5];
+        set.try_extend_from_slice(&src).expect("extend ok");
+        assert_eq!(set.len(), 5);
+        assert!(set.contains(&2));
+        assert!(set.contains(&4));
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn try_extend_from_slice_deduplicates() {
+        let mut set = make_set(&[1, 2, 3]);
+        let src = [2, 4];
+        set.try_extend_from_slice(&src).expect("extend ok");
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn try_extend_from_slice_empty_is_noop() {
+        let mut set = make_set(&[1]);
+        let src: [i32; 0] = [];
+        set.try_extend_from_slice(&src).expect("extend ok");
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn try_extend_from_slice_clone_failure_returns_tail() {
+        use crate::test_helpers::FlakyClone;
+        let mut set: BTreeSet<FlakyClone> = BTreeSet::new();
+        let src = [FlakyClone::new(0), FlakyClone::new(0)];
+        let (rest, e) = set
+            .try_extend_from_slice(&src)
+            .expect_err("first clone should fail");
+        assert!(matches!(e, TryBTreeSetWithCloneError::Clone(_)));
+        assert!(set.is_empty(), "nothing committed before failed clone");
+        assert_eq!(rest.len(), 2, "whole slice remains unprocessed");
+    }
+
+    #[test]
+    fn try_extend_from_slice_commits_prefix_before_clone_failure() {
+        use crate::test_helpers::FlakyClone;
+        let mut set: BTreeSet<FlakyClone> = BTreeSet::new();
+        let src = [
+            FlakyClone {
+                count: 0,
+                threshold: 5,
+            },
+            FlakyClone {
+                count: 0,
+                threshold: 0,
+            },
+            FlakyClone {
+                count: 0,
+                threshold: 5,
+            },
+        ];
+        let (rest, e) = set
+            .try_extend_from_slice(&src)
+            .expect_err("second clone should fail");
+        assert!(matches!(e, TryBTreeSetWithCloneError::Clone(_)));
+        assert_eq!(set.len(), 1, "only first element committed");
+        assert_eq!(rest.len(), 2, "tail starts at failing element");
+    }
+
+    #[test]
+    fn try_extend_from_slice_oom_returns_tail() {
+        use crate::test_helpers::BudgetedAlloc;
+        // Build a populated set under a generous budget, then constrain the
+        // remaining budget so the next insertion that needs a new node OOMs.
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut set: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        for i in 0..40i32 {
+            set.try_insert(i).expect("insert ok");
+        }
+        alloc.set_budget(1);
+        let src: std::vec::Vec<i32> = (40..200).collect();
+        let (rest, e) = set.try_extend_from_slice(&src).expect_err("OOM mid-extend");
+        assert!(matches!(e, TryBTreeSetWithCloneError::Alloc(_)));
+        assert!(!rest.is_empty(), "tail must carry unprocessed elements");
     }
 }

@@ -385,3 +385,18 @@ impl TryClone for FlakyClone {
         }
     }
 }
+
+impl PartialOrd for FlakyClone {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FlakyClone {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.count
+            .cmp(&other.count)
+            .then_with(|| self.threshold.cmp(&other.threshold))
+    }
+}
+

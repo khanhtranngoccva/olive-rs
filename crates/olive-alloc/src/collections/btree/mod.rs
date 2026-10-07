@@ -100,6 +100,60 @@ impl From<TryCloneError> for TryBTreeMapWithCloneError {
     }
 }
 
+/// Error returned by fallible BTreeSet operations that may both allocate and
+/// clone elements.
+///
+/// Covers any operation whose failure modes are limited to an
+/// allocation ([`AllocError`](crate::alloc::AllocError)) or an element clone
+/// failure ([`TryCloneError`]).
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryBTreeSetWithCloneError {
+    /// An allocation during tree restructuring failed.
+    Alloc(AllocError),
+    /// An element clone failed during a method that requires [`TryClone`].
+    Clone(TryCloneError),
+}
+
+impl fmt::Debug for TryBTreeSetWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Alloc(e) => f
+                .debug_tuple("TryBTreeSetWithCloneError::Alloc")
+                .field(e)
+                .finish(),
+            Self::Clone(e) => f
+                .debug_tuple("TryBTreeSetWithCloneError::Clone")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryBTreeSetWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Alloc(_) => write!(f, "BTreeSet operation failed: memory allocation failed"),
+            Self::Clone(e) => write!(f, "BTreeSet operation failed: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryBTreeSetWithCloneError {}
+
+impl From<AllocError> for TryBTreeSetWithCloneError {
+    #[inline]
+    fn from(err: AllocError) -> Self {
+        Self::Alloc(err)
+    }
+}
+
+impl From<TryCloneError> for TryBTreeSetWithCloneError {
+    #[inline]
+    fn from(err: TryCloneError) -> Self {
+        Self::Clone(err)
+    }
+}
+
 /// Error returned by [`Entry::or_try_default`](entry::Entry::or_try_default).
 ///
 /// The default value may fail to be constructed, or the subsequent insertion
