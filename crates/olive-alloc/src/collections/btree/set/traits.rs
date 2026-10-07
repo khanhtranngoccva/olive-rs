@@ -4,6 +4,7 @@ use super::super::TryBTreeSetWithCloneError;
 use super::BTreeSet;
 use crate::alloc::{Allocator, Global};
 use core::cmp::Ordering;
+use core::convert::TryFrom;
 use core::hash::{Hash, Hasher};
 use olive_core::alloc::AllocError;
 use olive_core::recovery::{ResumableSource, Resume};
@@ -169,6 +170,24 @@ impl<T: Ord + TryClone, A: Allocator> TryExtendFromSlice<T> for BTreeSet<T, A> {
             }
         }
         Ok(())
+    }
+}
+
+// ── TryFrom: arrays and vectors ──────────────────────────────────────────────
+
+impl<T: Ord, const N: usize> TryFrom<[T; N]> for BTreeSet<T> {
+    type Error = AllocError;
+
+    /// Fallibly converts an array into a set on the [`Global`] allocator,
+    /// moving each element without cloning. Duplicate values are removed,
+    /// so the resulting set may hold fewer than `N` elements.
+    ///
+    /// # Errors
+    ///
+    /// On allocation failure every element of the array is dropped and an
+    /// [`AllocError`] is returned.
+    fn try_from(array: [T; N]) -> Result<Self, Self::Error> {
+        Self::try_from_iter_in(array, Global)
     }
 }
 
@@ -539,5 +558,27 @@ mod tests {
         let (rest, e) = set.try_extend_from_slice(&src).expect_err("OOM mid-extend");
         assert!(matches!(e, TryBTreeSetWithCloneError::Alloc(_)));
         assert!(!rest.is_empty(), "tail must carry unprocessed elements");
+    }
+    // --- TryFrom: arrays -------------------------------------------------------
+
+    #[test]
+    fn try_from_array_builds_sorted_set() {
+        let set: BTreeSet<i32> = [5, 1, 3, 2, 4].try_into().expect("array ok");
+        assert_eq!(set.len(), 5);
+        let collected: std::vec::Vec<i32> = set.iter().copied().collect();
+        assert_eq!(collected, std::vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn try_from_array_collapses_duplicates() {
+        let set: BTreeSet<i32> = [7, 7, 7, 7].try_into().expect("array ok");
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&7));
+    }
+
+    #[test]
+    fn try_from_empty_array_is_empty() {
+        let set: BTreeSet<i32> = [].try_into().expect("empty array ok");
+        assert!(set.is_empty());
     }
 }
