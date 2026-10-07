@@ -2,10 +2,12 @@
 
 use super::super::TryBTreeSetWithCloneError;
 use super::BTreeSet;
-use crate::alloc::{Allocator, Global};
+use crate::alloc::{Allocator, AllocatorTryClone, Global};
 use core::cmp::Ordering;
 use core::convert::TryFrom;
+use core::fmt;
 use core::hash::{Hash, Hasher};
+use core::ops::{BitAnd, BitOr, BitXor, Sub};
 use olive_core::alloc::AllocError;
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::TryFromIterator;
@@ -190,6 +192,191 @@ impl<T: Ord, const N: usize> TryFrom<[T; N]> for BTreeSet<T> {
         Self::try_from_iter_in(array, Global)
     }
 }
+
+// ── Set algebra operators: BitAnd / BitOr / BitXor / Sub ─────────────────────
+
+/// The not-yet-materialised result of a set-algebra operation on sets:
+/// `&` for intersection, `|` for union, `^` for symmetric difference and
+/// `-` for difference.
+///
+/// The operators only borrow their operands, so the result is a brand-new
+/// set filled with cloned elements — and both cloning and allocating can
+/// fail.
+///
+/// Instead of returning a `Result` immediately, each operator returns
+/// a `SetOp` that holds either the set built so far or the first error, just
+/// like [`Concat`](crate::string::Concat) does for `+` on strings.
+///
+/// Call [`finish`](Self::finish) to extract the final result item
+/// `Result<BTreeSet, TryBTreeSetWithCloneError>`.
+///
+/// # Example
+///
+/// ```ignore
+/// let a: BTreeSet<i32> = [1, 2, 3].try_into().unwrap();
+/// let b: BTreeSet<i32> = [2, 3, 4].try_into().unwrap();
+///
+/// let shared = (&a & &b).finish()?; // the set {2, 3}
+/// ```
+///
+/// # Chaining
+///
+/// A `SetOp` can itself be an operand of another operation, so
+/// `(&a | &b) & (&c - &d)` builds one set from four sets with a single
+/// `finish()` at the end. If any step fails, the error is kept and every
+/// later step is skipped.
+///
+/// The output set is allocated through a clone of the *left-hand* operand's
+/// allocator.
+#[must_use = "SetOp is the outcome of an operation; call finish() to extract the Result"]
+pub struct SetOp<T, A: Allocator = Global>(
+    pub(crate) Result<BTreeSet<T, A>, TryBTreeSetWithCloneError>,
+);
+
+impl<T, A: Allocator> SetOp<T, A> {
+    /// Obtain the result of the operation.
+    #[must_use = "the result of the set operation must be handled"]
+    pub fn finish(self) -> Result<BTreeSet<T, A>, TryBTreeSetWithCloneError> {
+        self.0
+    }
+
+    /// Returns `true` if the operation has not yet failed.
+    #[must_use]
+    pub fn is_ok(&self) -> bool {
+        self.0.is_ok()
+    }
+
+    /// Returns `true` if the operation has failed.
+    #[must_use]
+    pub fn is_err(&self) -> bool {
+        self.0.is_err()
+    }
+
+    /// Borrows the set built so far, if the operation has not failed.
+    #[must_use]
+    pub fn as_set(&self) -> Option<&BTreeSet<T, A>> {
+        self.0.as_ref().ok()
+    }
+}
+
+impl<T, A: Allocator> fmt::Debug for SetOp<T, A>
+where
+    BTreeSet<T, A>: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SetOp").field(&self.0).finish()
+    }
+}
+
+/// Builds the result of a binary set operation. Duplicate-free
+/// by construction, since every algebra iterator already yields
+/// distinct values.
+fn build_from_refs<'a, T, I, A>(
+    iter: I,
+    alloc: A,
+) -> Result<BTreeSet<T, A>, TryBTreeSetWithCloneError>
+where
+    T: Ord + TryClone + 'a,
+    I: Iterator<Item = &'a T>,
+    A: Allocator,
+{
+    let mut out = BTreeSet::new_in(alloc);
+    for value in iter {
+        let cloned = value
+            .try_clone()
+            .map_err(TryBTreeSetWithCloneError::Clone)?;
+        out.try_insert(cloned)
+            .map_err(TryBTreeSetWithCloneError::Alloc)?;
+    }
+    Ok(out)
+}
+
+/// Implements one set-algebra operator for every way its operands can appear:
+/// either a pair of borrowed sets, or a pair where one or both sides are a
+/// previously built `SetOp`.
+macro_rules! impl_set_op {
+    ($trt:ident, $method:ident, $op:ident, $short:expr, $detail:expr) => {
+        impl<T: Ord + TryClone, A: AllocatorTryClone> $trt<&BTreeSet<T, A>> for &BTreeSet<T, A> {
+            type Output = SetOp<T, A>;
+            #[doc = concat!("Returns a [`SetOp`] holding the ", $short, " of the two sets (", $detail, "). Both operands are only borrowed: every element of the result is cloned into a brand-new set owned by a clone of the left-hand set's allocator.")]
+            fn $method(self, rhs: &BTreeSet<T, A>) -> Self::Output {
+                let alloc = self.allocator().try_clone().map_err(TryBTreeSetWithCloneError::Clone);
+                SetOp(alloc.and_then(|alloc| build_from_refs(self.$op(rhs), alloc)))
+            }
+        }
+
+        impl<T: Ord + TryClone, A: AllocatorTryClone> $trt<&BTreeSet<T, A>> for SetOp<T, A> {
+            type Output = SetOp<T, A>;
+            #[doc = concat!("Takes the set built by an earlier operation and computes its ", $short, " with another set. If the earlier operation already failed, its error is kept and nothing is computed.")]
+            fn $method(self, rhs: &BTreeSet<T, A>) -> Self::Output {
+                match self.0 {
+                    Err(e) => SetOp(Err(e)),
+                    Ok(lhs) => {
+                        let alloc = lhs.allocator().try_clone().map_err(TryBTreeSetWithCloneError::Clone);
+                        SetOp(alloc.and_then(|alloc| build_from_refs(lhs.$op(rhs), alloc)))
+                    }
+                }
+            }
+        }
+
+        impl<T: Ord + TryClone, A: AllocatorTryClone> $trt<SetOp<T, A>> for &BTreeSet<T, A> {
+            type Output = SetOp<T, A>;
+            #[doc = concat!("Computes the ", $short, " of this set and a set built by an earlier operation. If the earlier operation already failed, its error is kept and nothing is computed.")]
+            fn $method(self, rhs: SetOp<T, A>) -> Self::Output {
+                match rhs.0 {
+                    Err(e) => SetOp(Err(e)),
+                    Ok(rhs_set) => {
+                        let alloc = self.allocator().try_clone().map_err(TryBTreeSetWithCloneError::Clone);
+                        SetOp(alloc.and_then(|alloc| build_from_refs(self.$op(&rhs_set), alloc)))
+                    }
+                }
+            }
+        }
+
+        impl<T: Ord + TryClone, A: AllocatorTryClone> $trt for SetOp<T, A> {
+            type Output = SetOp<T, A>;
+            #[doc = concat!("Computes the ", $short, " of two sets built by earlier operations. If either earlier operation already failed, the first error is kept and nothing is computed.")]
+            fn $method(self, rhs: Self) -> Self::Output {
+                let lhs = match self.0 { Ok(s) => s, Err(e) => return SetOp(Err(e)) };
+                let rhs_set = match rhs.0 { Ok(s) => s, Err(e) => return SetOp(Err(e)) };
+                let alloc = lhs.allocator().try_clone().map_err(TryBTreeSetWithCloneError::Clone);
+                SetOp(alloc.and_then(|alloc| build_from_refs(lhs.$op(&rhs_set), alloc)))
+            }
+        }
+    };
+}
+
+impl_set_op!(
+    BitAnd,
+    bitand,
+    intersection,
+    "intersection",
+    "the elements contained in both sets"
+);
+
+impl_set_op!(
+    BitOr,
+    bitor,
+    union,
+    "union",
+    "every element contained in either set"
+);
+
+impl_set_op!(
+    BitXor,
+    bitxor,
+    symmetric_difference,
+    "symmetric difference",
+    "the elements contained in exactly one of the two sets"
+);
+
+impl_set_op!(
+    Sub,
+    sub,
+    difference,
+    "difference",
+    "the elements of the left-hand set that the right-hand set lacks"
+);
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -506,41 +693,32 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_clone_failure_returns_tail() {
-        use crate::test_helpers::FlakyClone;
-        let mut set: BTreeSet<FlakyClone> = BTreeSet::new();
-        let src = [FlakyClone::new(0), FlakyClone::new(0)];
-        let (rest, e) = set
-            .try_extend_from_slice(&src)
-            .expect_err("first clone should fail");
-        assert!(matches!(e, TryBTreeSetWithCloneError::Clone(_)));
-        assert!(set.is_empty(), "nothing committed before failed clone");
-        assert_eq!(rest.len(), 2, "whole slice remains unprocessed");
+        use crate::test_helpers::MaybeUnclonable;
+        let mut set: BTreeSet<MaybeUnclonable<u32>> = BTreeSet::new();
+        let src = [
+            MaybeUnclonable::unclonable(0),
+            MaybeUnclonable::unclonable(1),
+        ];
+        let (tail, err) = set.try_extend_from_slice(&src).expect_err("clone fails");
+        assert!(matches!(err, TryBTreeSetWithCloneError::Clone(_)));
+        assert_eq!(tail.len(), 2); // whole slice still there: first clone failed
+        assert_eq!(set.len(), 0);
     }
 
     #[test]
     fn try_extend_from_slice_commits_prefix_before_clone_failure() {
-        use crate::test_helpers::FlakyClone;
-        let mut set: BTreeSet<FlakyClone> = BTreeSet::new();
+        use crate::test_helpers::MaybeUnclonable;
+        // The first element clones happily, the second one's clone fails.
         let src = [
-            FlakyClone {
-                count: 0,
-                threshold: 5,
-            },
-            FlakyClone {
-                count: 0,
-                threshold: 0,
-            },
-            FlakyClone {
-                count: 0,
-                threshold: 5,
-            },
+            MaybeUnclonable::clonable(1),
+            MaybeUnclonable::unclonable(2),
+            MaybeUnclonable::clonable(3),
         ];
-        let (rest, e) = set
-            .try_extend_from_slice(&src)
-            .expect_err("second clone should fail");
-        assert!(matches!(e, TryBTreeSetWithCloneError::Clone(_)));
-        assert_eq!(set.len(), 1, "only first element committed");
-        assert_eq!(rest.len(), 2, "tail starts at failing element");
+        let mut set: BTreeSet<MaybeUnclonable<u32>> = BTreeSet::new();
+        let (tail, err) = set.try_extend_from_slice(&src).expect_err("clone fails");
+        assert!(matches!(err, TryBTreeSetWithCloneError::Clone(_)));
+        assert_eq!(tail.len(), 2); // 1 was committed, 2 and 3 remain
+        assert_eq!(set.len(), 1);
     }
 
     #[test]
@@ -580,5 +758,141 @@ mod tests {
     fn try_from_empty_array_is_empty() {
         let set: BTreeSet<i32> = [].try_into().expect("empty array ok");
         assert!(set.is_empty());
+    }
+
+    // --- Set algebra operators: BitAnd / BitOr / BitXor / Sub ----------------
+
+    fn iter_of(set: &BTreeSet<i32>) -> std::vec::Vec<i32> {
+        set.iter().copied().collect()
+    }
+
+    #[test]
+    fn bitand_yields_common_elements() {
+        let a = make_set(&[1, 2, 3, 4]);
+        let b = make_set(&[3, 4, 5]);
+        let out = (&a & &b).finish().expect("intersection ok");
+        assert_eq!(iter_of(&out), std::vec![3, 4]);
+    }
+
+    #[test]
+    fn bitor_yields_sorted_union() {
+        let a = make_set(&[3, 1, 4]);
+        let b = make_set(&[4, 5, 2]);
+        let out = (&a | &b).finish().expect("union ok");
+        assert_eq!(iter_of(&out), std::vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn bitxor_yields_symmetric_difference() {
+        let a = make_set(&[1, 2, 3]);
+        let b = make_set(&[2, 3, 4]);
+        let out = (&a ^ &b).finish().expect("xor ok");
+        assert_eq!(iter_of(&out), std::vec![1, 4]);
+    }
+
+    #[test]
+    fn sub_yields_difference() {
+        let a = make_set(&[1, 2, 3, 4]);
+        let b = make_set(&[2, 4, 9]);
+        let out = (&a - &b).finish().expect("difference ok");
+        assert_eq!(iter_of(&out), std::vec![1, 3]);
+    }
+
+    #[test]
+    fn operators_on_empty_operands() {
+        let a = make_set(&[1, 2]);
+        let e = make_set(&[]);
+        assert!((&a & &e).finish().unwrap().is_empty());
+        assert_eq!(iter_of(&(&a | &e).finish().unwrap()), std::vec![1, 2]);
+        assert_eq!(iter_of(&(&a ^ &e).finish().unwrap()), std::vec![1, 2]);
+        assert!((&e - &a).finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn operator_chains_thread_through_setop() {
+        let a = make_set(&[1, 2, 3, 4]);
+        let b = make_set(&[3, 4, 5, 6]);
+        let c = make_set(&[4, 5, 6, 7]);
+        // (a | b) & c — pending result as the left-hand operand.
+        let chained = (&a | &b) & &c;
+        assert!(chained.is_ok());
+        assert_eq!(iter_of(chained.as_set().unwrap()), std::vec![4, 5, 6]);
+        // a & (b ^ c) — pending result as the right-hand operand.
+        let nested = (&a & (&b ^ &c)).finish().expect("nested ok");
+        assert_eq!(iter_of(&nested), std::vec![3]);
+        // (a - b) & (b - a) — two pending results combined.
+        let disjoint = ((&a - &b) & (&b - &a)).finish().expect("both ok");
+        assert!(disjoint.is_empty());
+    }
+
+    #[test]
+    fn operator_error_is_sticky_through_chains() {
+        use crate::test_helpers::BudgetedAlloc;
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut a: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        let mut b: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        for i in 0..40i32 {
+            a.try_insert(i).unwrap();
+            b.try_insert(i + 20).unwrap();
+        }
+        alloc.drain();
+        let failed = &a | &b;
+        assert!(failed.is_err());
+        assert!(failed.as_set().is_none());
+        // A pending error survives being carried on either side of a chain.
+        let again = failed & &b;
+        assert!(again.is_err());
+        let third = &a | again;
+        assert!(matches!(
+            third.finish(),
+            Err(TryBTreeSetWithCloneError::Alloc(_))
+        ));
+    }
+
+    #[test]
+    fn operator_builds_result_with_left_allocator() {
+        use crate::test_helpers::BudgetedAlloc;
+        let left = BudgetedAlloc::new(1 << 20);
+        let right = BudgetedAlloc::new(1 << 20);
+        let mut a: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(left.clone());
+        let mut b: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(right.clone());
+        for i in 0..40i32 {
+            a.try_insert(i).unwrap();
+            b.try_insert(i + 20).unwrap();
+        }
+        left.drain();
+        // The result borrows the left allocator, so an exhausted left side fails.
+        assert!((&a | &b).is_err());
+        // Swapping the operands makes the healthy allocator the left one.
+        let ok = (&b | &a).finish().expect("right allocator has budget");
+        assert_eq!(ok.len(), 60);
+    }
+
+    #[test]
+    fn operator_reports_clone_error() {
+        use crate::test_helpers::MaybeUnclonable;
+        let mut a = BTreeSet::new();
+        let mut b = BTreeSet::new();
+        for inner in [0u32, 1] {
+            a.try_insert(MaybeUnclonable::unclonable(inner)).unwrap();
+            b.try_insert(MaybeUnclonable::unclonable(inner)).unwrap();
+        }
+        let out = &a & &b;
+        assert!(matches!(
+            out.finish(),
+            Err(TryBTreeSetWithCloneError::Clone(_))
+        ));
+    }
+
+    #[test]
+    fn operator_results_satisfy_tree_invariant() {
+        let av: std::vec::Vec<i32> = (0..40).collect();
+        let bv: std::vec::Vec<i32> = (20..60).collect();
+        let a = make_set(&av);
+        let b = make_set(&bv);
+        let u = (&a | &b).finish().unwrap();
+        check_tree_invariant(&u.map);
+        let x = (&a ^ &b).finish().unwrap();
+        check_ascending_keys(&x.map);
     }
 }

@@ -17,7 +17,8 @@ pub mod btree_set {
         BTreeSet, BTreeSetDifference as Difference, BTreeSetEntry as Entry,
         BTreeSetExtractIf as ExtractIf, BTreeSetIntersection as Intersection,
         BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter,
-        BTreeSetOccupiedEntry as OccupiedEntry, BTreeSetSymmetricDifference as SymmetricDifference,
-        BTreeSetUnion as Union, BTreeSetVacantEntry as VacantEntry,
+        BTreeSetOccupiedEntry as OccupiedEntry, BTreeSetOp as SetOp,
+        BTreeSetSymmetricDifference as SymmetricDifference, BTreeSetUnion as Union,
+        BTreeSetVacantEntry as VacantEntry, TryBTreeSetWithCloneError,
     };
 }

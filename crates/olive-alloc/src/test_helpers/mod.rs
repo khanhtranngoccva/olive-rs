@@ -350,6 +350,62 @@ impl TryDefault for BudgetedAlloc {
     }
 }
 
+/// A wrapper around a value whose `try_clone` fails while `cloneable` is
+/// `false`.
+#[derive(Debug, Clone, Copy)]
+pub struct MaybeUnclonable<T> {
+    pub inner: T,
+    pub cloneable: bool,
+}
+
+impl<T> MaybeUnclonable<T> {
+    /// A value that clones itself happily.
+    pub const fn clonable(inner: T) -> Self {
+        Self { inner, cloneable: true }
+    }
+
+    /// A value whose `try_clone` always fails.
+    pub const fn unclonable(inner: T) -> Self {
+        Self {
+            inner,
+            cloneable: false,
+        }
+    }
+}
+
+impl<T: PartialEq> PartialEq for MaybeUnclonable<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<T: Eq> Eq for MaybeUnclonable<T> {}
+
+impl<T: Ord> PartialOrd for MaybeUnclonable<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Ord> Ord for MaybeUnclonable<T> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.inner.cmp(&other.inner)
+    }
+}
+
+impl<T: TryClone> TryClone for MaybeUnclonable<T> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        if self.cloneable {
+            Ok(Self {
+                inner: self.inner.try_clone()?,
+                cloneable: true,
+            })
+        } else {
+            Err(TryCloneError::Other("unclonable"))
+        }
+    }
+}
+
 /// A value whose `try_clone` succeeds while its internal counter is below
 /// `threshold`, incrementing it each successful clone, then fails forever once
 /// the counter reaches `threshold`. Parametrized as `(start, threshold)` so a
@@ -385,18 +441,3 @@ impl TryClone for FlakyClone {
         }
     }
 }
-
-impl PartialOrd for FlakyClone {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for FlakyClone {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.count
-            .cmp(&other.count)
-            .then_with(|| self.threshold.cmp(&other.threshold))
-    }
-}
-
