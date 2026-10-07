@@ -4,9 +4,11 @@
 //! [`PartialOrd`]/[`Ord`], [`Hash`]) and the fallible construction traits from
 //! `olive-core` ([`TryClone`], [`TryDefault`]).
 
+use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
+use core::ops::{Index, IndexMut};
 
 use olive_core::recovery::{ResumableSource, Resume};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -102,6 +104,95 @@ impl<K: Ord + Hash, V: Hash, A: Allocator> Hash for BTreeMap<K, V, A> {
 }
 
 // ---------------------------------------------------------------------------
+// Index
+// ---------------------------------------------------------------------------
+
+impl<'a, Q, K, V, A> Index<&'a Q> for BTreeMap<K, V, A>
+where
+    K: Ord + Borrow<Q>,
+    Q: Ord + ?Sized,
+    A: Allocator,
+{
+    type Output = V;
+
+    /// Retrieves a reference to the value that the key maps to.
+    ///
+    /// # Choosing between `map[&key]` and `get()`
+    ///
+    /// - **Key may or may not be present** — use [`get`](Self::get) and
+    ///   handle the `None` case. Lookups never allocate, so `get`'s `Option`
+    ///   is already the complete answer; a missing key is a normal outcome,
+    ///   not an error.
+    /// - **The key should always be there, but proving it would be awkward**
+    ///   — use `get(&key).expect("why it must be present")`. The `expect`
+    ///   message gives far better diagnostics than a bare index panic.
+    /// - **It is obvious from adjacent code that the key is present** (e.g.
+    ///   right after a `try_insert`, or a map holding an entry for every
+    ///   variant of a small enum) — implicit indexing `map[&key]` is
+    ///   acceptable.
+    ///
+    /// The key is only borrowed for the lookup: `map[&k]` uses
+    /// [`Borrow`], so an owned key can be probed with its borrowed form,
+    /// exactly like [`get`](Self::get).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key is not present in the map. The message cannot name
+    /// the offending key (the impl carries no `Debug` bound), so prefer the
+    /// `expect` style above whenever the reason a key must exist matters.
+    #[inline]
+    fn index(&self, key: &'a Q) -> &V {
+        self.get(key).unwrap_or_else(|| {
+            panic!(
+                "BTreeMap::index: key not found (use get() when the key may be absent, \
+                 or get(&key).expect(..) for a better message)"
+            )
+        })
+    }
+}
+
+impl<'a, Q, K, V, A> IndexMut<&'a Q> for BTreeMap<K, V, A>
+where
+    K: Ord + Borrow<Q>,
+    Q: Ord + ?Sized,
+    A: Allocator,
+{
+    /// Retrieves a mutable reference to the value that the key maps to.
+    ///
+    /// # Choosing between `&mut map[&key]` and `get_mut()`
+    ///
+    /// - **Key may or may not be present** — use [`get_mut`](Self::get_mut)
+    ///   and handle the `None` case, or [`try_insert`](Self::try_insert) when
+    ///   a missing key should create an entry instead.
+    /// - **The key should always be there, but proving it would be awkward**
+    ///   — use `get_mut(&key).expect("why it must be present")`. The `expect`
+    ///   message gives far better diagnostics than a bare index panic.
+    /// - **It is obvious from adjacent code that the key is present** (e.g.
+    ///   right after a `try_insert`) — implicit indexing `&mut map[&key]`, or
+    ///   read-modify-write like `map[&key] += 1`, is acceptable.
+    ///
+    /// As with [`Index`](core::ops::Index) above, the key is only borrowed
+    /// for the lookup, so an owned key can be probed with its borrowed form.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key is not present in the map. 
+    /// 
+    /// The message cannot name the offending key (the impl carries no 
+    /// `Debug` bound), so prefer the `expect` style above whenever the reason 
+    /// a key must exist matters.
+    #[inline]
+    fn index_mut(&mut self, key: &'a Q) -> &mut V {
+        self.get_mut(key).unwrap_or_else(|| {
+            panic!(
+                "BTreeMap::index_mut: key not found (indexing never inserts; use try_insert \
+                 to add a key, or get_mut(&key).expect(..) for a better message)"
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TryClone
 // ---------------------------------------------------------------------------
 
@@ -183,7 +274,7 @@ impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
     /// Attempts to extend the map with key-value pairs from a resumable source.
     ///
     /// Returns `Ok(())` on success. On allocation failure, returns the remaining
-    /// items in a [`Resume`] so the caller can retry once memory is available, along 
+    /// items in a [`Resume`] so the caller can retry once memory is available, along
     /// with the [`AllocError`].
     fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
     where
@@ -917,5 +1008,56 @@ mod tests {
             "double-dropped: {:?}",
             ledger.double_dropped()
         );
+    }
+    
+    // --- Index ---------------------------------------------------------------
+
+    #[test]
+    fn index_returns_value_for_present_key() {
+        let mut map: BTreeMap<i32, &str> = BTreeMap::new_in(Global);
+        map.try_insert(1, "one").unwrap();
+        map.try_insert(2, "two").unwrap();
+        assert_eq!(map[&1], "one");
+        assert_eq!(map[&2], "two");
+    }
+
+    #[test]
+    fn index_accepts_borrowed_key_form() {
+        // The impl is generic over `Q`, so an array-keyed map can be indexed
+        // through a slice borrow, mirroring `get`.
+        let mut map: BTreeMap<[u8; 2], u32> = BTreeMap::new_in(Global);
+        map.try_insert([1, 2], 42).unwrap();
+        assert_eq!(map[&[1u8, 2u8][..]], 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "key not found")]
+    fn index_panics_for_missing_key() {
+        let map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        let _ = map[&7];
+    }
+
+    #[test]
+    fn index_mut_overwrites_existing_value() {
+        let mut map: BTreeMap<i32, &str> = BTreeMap::new_in(Global);
+        map.try_insert(1, "one").unwrap();
+        map[&1] = "uno";
+        assert_eq!(map[&1], "uno");
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn index_mut_supports_read_modify_write() {
+        let mut map: BTreeMap<i32, u32> = BTreeMap::new_in(Global);
+        map.try_insert(7, 1).unwrap();
+        map[&7] += 41;
+        assert_eq!(map[&7], 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "indexing never inserts")]
+    fn index_mut_panics_for_missing_key_and_never_inserts() {
+        let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        map[&7] = 1;
     }
 }
