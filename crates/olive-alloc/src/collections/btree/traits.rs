@@ -265,6 +265,27 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
 }
 
 // ---------------------------------------------------------------------------
+// TryFrom
+// ---------------------------------------------------------------------------
+
+impl<K: Ord, V, const N: usize> TryFrom<[(K, V); N]> for BTreeMap<K, V> {
+    type Error = AllocError;
+
+    /// Fallibly converts an array of key-value pairs into a map on the
+    /// [`Global`] allocator, moving each pair in without cloning. Keys that
+    /// appear more than once end up mapped to the last value seen, like
+    /// [`try_insert`](Self::try_insert).
+    ///
+    /// # Errors
+    ///
+    /// On allocation failure every element of the array is dropped and an
+    /// [`AllocError`] is returned.
+    fn try_from(array: [(K, V); N]) -> Result<Self, Self::Error> {
+        Self::try_from_iter_in(array, Global)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TryExtend / TryExtendFromSlice
 // ---------------------------------------------------------------------------
 
@@ -1189,5 +1210,28 @@ mod tests {
     fn index_mut_panics_for_missing_key_and_never_inserts() {
         let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         map[&7] = 1;
+    }
+
+    // --- TryFrom from arrays ---
+
+    #[test]
+    fn try_from_array_builds_map() {
+        let map: BTreeMap<u32, u32> = [(3, 30), (1, 10), (2, 20)].try_into().unwrap();
+        let pairs: std::vec::Vec<_> = map.into_iter().collect();
+        assert_eq!(pairs, [(1, 10), (2, 20), (3, 30)]);
+    }
+
+    #[test]
+    fn try_from_array_last_value_wins_for_duplicate_keys() {
+        let map: BTreeMap<u32, u32> = [(1, 10), (1, 11)].try_into().unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[&1], 11);
+    }
+
+    #[test]
+    fn try_from_empty_array_yields_empty_map() {
+        let src: [(u32, u32); 0] = [];
+        let map = BTreeMap::try_from(src).unwrap();
+        assert!(map.is_empty());
     }
 }
