@@ -143,6 +143,45 @@ impl<T: Ord, A: Allocator> TryExtend<T> for BTreeSet<T, A> {
     }
 }
 
+impl<'a, T: Ord + TryClone, A: Allocator> TryExtend<&'a T> for BTreeSet<T, A> {
+    type Error = TryBTreeSetWithCloneError;
+
+    /// Attempts to extend the set with borrowed references from a resumable
+    /// source, cloning each element into the set. Elements already present
+    /// are ignored, like [`try_insert`](Self::try_insert).
+    ///
+    /// Only references pass through the source, so the stranded element in
+    /// the [`Resume`] is a reference: retrying clones it again.
+    ///
+    /// # Errors
+    ///
+    /// On failure, returns the remaining elements in a [`Resume`] together
+    /// with a [`TryBTreeSetWithCloneError`] naming the cause, either a failed
+    /// element clone or an allocation failure, so the caller can retry from
+    /// where it stopped.
+    fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
+    where
+        S: ResumableSource<Item = &'a T>,
+    {
+        let (head, mut inner, _hint) = source.decompose_with_size_hint();
+
+        let mut pending = head.or_else(|| inner.next());
+        while let Some(val) = pending {
+            let cloned = match val.try_clone() {
+                Ok(cloned) => cloned,
+                Err(e) => {
+                    return Err((Resume::new(val, inner), TryBTreeSetWithCloneError::Clone(e)));
+                }
+            };
+            if let Err((_cloned, e)) = self.try_insert_give_back(cloned) {
+                return Err((Resume::new(val, inner), TryBTreeSetWithCloneError::Alloc(e)));
+            }
+            pending = inner.next();
+        }
+        Ok(())
+    }
+}
+
 impl<T: Ord + TryClone, A: Allocator> TryExtendFromSlice<T> for BTreeSet<T, A> {
     type Error = TryBTreeSetWithCloneError;
 
@@ -660,6 +699,68 @@ mod tests {
         let (_head, remainder) = resume.into_parts();
         let count = remainder.count();
         assert!(count > 0, "something must be stranded");
+    }
+
+    // --- TryExtend from references -------------------------------------------
+
+    #[test]
+    fn try_extend_from_refs_adds_cloned_elements() {
+        let mut set = make_set(&[1, 3]);
+        let src = [2, 4, 5];
+        set.try_extend(src.iter()).expect("extend ok");
+        assert_eq!(set.len(), 5);
+        assert!(set.contains(&2));
+        assert!(set.contains(&4));
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn try_extend_from_refs_deduplicates() {
+        let mut set = make_set(&[1, 2, 3]);
+        let src = [2, 4];
+        set.try_extend(src.iter()).expect("extend ok");
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn try_extend_from_refs_clone_failure_strands_the_reference() {
+        use crate::test_helpers::MaybeUnclonable;
+        let src = [
+            MaybeUnclonable::clonable(1),
+            MaybeUnclonable::unclonable(2),
+            MaybeUnclonable::clonable(3),
+        ];
+        let mut set: BTreeSet<MaybeUnclonable<u32>> = BTreeSet::new();
+        let (resume, err) = set.try_extend(src.iter()).expect_err("clone fails");
+        assert!(matches!(err, TryBTreeSetWithCloneError::Clone(_)));
+        assert_eq!(set.len(), 1, "the clonable prefix is committed");
+        let (head, remainder) = resume.into_parts();
+        assert_eq!(head.expect("stranded reference").inner, 2);
+        assert_eq!(remainder.count(), 1, "only the last element is left");
+    }
+
+    #[test]
+    fn try_extend_from_refs_empty_source_is_noop() {
+        let mut set = make_set(&[1, 2]);
+        let src: [i32; 0] = [];
+        set.try_extend(src.iter()).expect("extend ok");
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn try_extend_from_refs_oom_is_reported() {
+        use crate::test_helpers::FailAlloc;
+        let mut set: BTreeSet<i32, FailAlloc> = BTreeSet::new_in(FailAlloc);
+        let src = [1, 2, 3];
+        let (resume, err) = set.try_extend(src.iter()).expect_err("OOM");
+        assert!(matches!(err, TryBTreeSetWithCloneError::Alloc(_)));
+        assert!(
+            set.is_empty(),
+            "the failure should occur at the first element"
+        );
+        let (head, remainder) = resume.into_parts();
+        assert_eq!(*head.expect("first element stranded"), 1);
+        assert_eq!(remainder.count(), 2);
     }
 
     // --- TryExtendFromSlice ----------------------------------------------------

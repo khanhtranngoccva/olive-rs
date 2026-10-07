@@ -176,10 +176,10 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if the key is not present in the map. 
-    /// 
-    /// The message cannot name the offending key (the impl carries no 
-    /// `Debug` bound), so prefer the `expect` style above whenever the reason 
+    /// Panics if the key is not present in the map.
+    ///
+    /// The message cannot name the offending key (the impl carries no
+    /// `Debug` bound), so prefer the `expect` style above whenever the reason
     /// a key must exist matters.
     #[inline]
     fn index_mut(&mut self, key: &'a Q) -> &mut V {
@@ -296,6 +296,63 @@ impl<K: Ord, V, A: Allocator> TryExtend<(K, V)> for BTreeMap<K, V, A> {
             if let Err((k, v, _e)) = self.try_insert_give_back(k, v) {
                 return Err((Resume::new((k, v), inner), AllocError));
             }
+        }
+        Ok(())
+    }
+}
+
+impl<'a, K: Ord + TryClone, V: TryClone, A: Allocator> TryExtend<(&'a K, &'a V)>
+    for BTreeMap<K, V, A>
+{
+    type Error = TryBTreeMapWithCloneError;
+
+    /// Attempts to extend the map with pairs of key-value references from a
+    /// resumable source, cloning each key and value into the map. Pairs
+    /// whose key is already present overwrite its value, like
+    /// [`try_insert`](Self::try_insert).
+    ///
+    /// Only references pass through the source, so the stranded pair in the
+    /// [`Resume`] is a pair of references: retrying simply clones it again.
+    ///
+    /// # Errors
+    ///
+    /// On failure, returns the remaining pairs in a [`Resume`] together with
+    /// a [`TryBTreeMapWithCloneError`] naming the cause, either a failed key
+    /// or value clone or an allocation failure, so the caller can retry from
+    /// where it stopped.
+    fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
+    where
+        S: ResumableSource<Item = (&'a K, &'a V)>,
+    {
+        let (head, mut inner, _hint) = source.decompose_with_size_hint();
+
+        let mut pending = head.or_else(|| inner.next());
+        while let Some((k, v)) = pending {
+            let key = match k.try_clone() {
+                Ok(key) => key,
+                Err(e) => {
+                    return Err((
+                        Resume::new((k, v), inner),
+                        TryBTreeMapWithCloneError::Clone(e),
+                    ));
+                }
+            };
+            let value = match v.try_clone() {
+                Ok(value) => value,
+                Err(e) => {
+                    return Err((
+                        Resume::new((k, v), inner),
+                        TryBTreeMapWithCloneError::Clone(e),
+                    ));
+                }
+            };
+            if let Err((_k, _v, e)) = self.try_insert_give_back(key, value) {
+                return Err((
+                    Resume::new((k, v), inner),
+                    TryBTreeMapWithCloneError::Alloc(e),
+                ));
+            }
+            pending = inner.next();
         }
         Ok(())
     }
@@ -839,6 +896,79 @@ mod tests {
         );
     }
 
+    // --- TryExtend from references -------------------------------------------
+
+    #[test]
+    fn try_extend_from_refs_merges_and_overwrites() {
+        let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+        map.try_insert(1, 100).unwrap();
+        map.try_insert(2, 200).unwrap();
+        let src: [(&u32, &u32); 2] = [(&2, &201), (&3, &300)];
+        map.try_extend(src.into_iter()).expect("extend ok");
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get(&1), Some(&100));
+        assert_eq!(map.get(&2), Some(&201), "existing key must be overwritten");
+        assert_eq!(map.get(&3), Some(&300));
+    }
+
+    #[test]
+    fn try_extend_from_refs_retry_recovers() {
+        let start = Resume::new((&1u32, &10u32), [(&2, &20), (&3, &30)].into_iter());
+        let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+        map.try_extend(start).expect("retry ok");
+        assert_eq!(map.len(), 3);
+        for (k, v) in map.iter() {
+            assert_eq!(*v, *k * 10);
+        }
+    }
+
+    #[test]
+    fn try_extend_from_refs_clone_failure_strands_the_pair() {
+        use crate::test_helpers::{BudgetedAlloc, MaybeUnclonable};
+        // A generous budget keeps this test about cloning, not memory.
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<u32, MaybeUnclonable<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        map.try_insert(1, MaybeUnclonable::clonable(10))
+            .expect("insert ok");
+        let keys = [2u32, 3, 4];
+        let vals = [
+            MaybeUnclonable::clonable(20),
+            MaybeUnclonable::unclonable(30),
+            MaybeUnclonable::clonable(40),
+        ];
+        let (resume, err) = map
+            .try_extend(keys.iter().zip(vals.iter()))
+            .expect_err("clone fails");
+        assert!(matches!(err, TryBTreeMapWithCloneError::Clone(_)));
+        assert_eq!(map.len(), 2, "the clonable prefix is committed");
+        let (head, remainder) = resume.into_parts();
+        let (k, v) = head.expect("stranded pair");
+        assert_eq!(*k, 3);
+        assert_eq!(v.inner, 30);
+        assert_eq!(remainder.count(), 1, "only the last pair is left");
+    }
+
+    #[test]
+    fn try_extend_from_refs_oom_is_reported() {
+        use crate::test_helpers::FailAlloc;
+
+        let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
+        let src: [(&u32, &u32); 3] = [(&1, &10), (&2, &20), (&3, &30)];
+        let (resume, err) = map.try_extend(src.into_iter()).expect_err("OOM");
+
+        assert!(matches!(err, TryBTreeMapWithCloneError::Alloc(_)));
+        assert!(
+            map.is_empty(),
+            "the first entry cannot be inserted because the map has no nodes"
+        );
+
+        let (head, remainder) = resume.into_parts();
+        let (k, _) = head.expect("first pair stranded");
+        assert_eq!(*k, 1);
+        assert_eq!(remainder.count(), 2);
+    }
+
     // --- TryExtendFromSlice ---------------------------------------------------
 
     #[test]
@@ -1009,7 +1139,7 @@ mod tests {
             ledger.double_dropped()
         );
     }
-    
+
     // --- Index ---------------------------------------------------------------
 
     #[test]
