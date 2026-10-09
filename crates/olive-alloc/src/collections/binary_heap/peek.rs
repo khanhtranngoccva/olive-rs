@@ -1,5 +1,6 @@
 //! Mutable access to the maximum, with the re-sift deferred until the guard
 //! drops.
+use core::fmt;
 use core::ops::{Deref, DerefMut};
 
 use super::BinaryHeap;
@@ -27,8 +28,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     pub fn peek_mut(&mut self) -> Option<PeekMut<'_, T, A>> {
         self.assume_unpoisoned();
         (!self.is_empty()).then(|| PeekMut {
-            orig_len: self.len(),
             heap: self,
+            original_len: None,
         })
     }
 }
@@ -48,11 +49,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 pub struct PeekMut<'a, T: Ord, A: Allocator = crate::alloc::Global> {
     /// The borrowed heap.
     heap: &'a mut BinaryHeap<T, A>,
-    /// The length the buffer had at creation. If [`DerefMut`] is called,
-    /// the heap's length is set to 1, and this indicates a leak.
-    ///
-    /// If this field is 1, dropping the peek is trivial.
-    orig_len: usize,
+    /// `Some(len)` while a leak amplification is active.
+    original_len: Option<usize>,
 }
 
 impl<T: Ord, A: Allocator> Deref for PeekMut<'_, T, A> {
@@ -61,6 +59,7 @@ impl<T: Ord, A: Allocator> Deref for PeekMut<'_, T, A> {
     #[inline]
     fn deref(&self) -> &T {
         // We do nothing - the element is not mutated.
+        self.heap.assume_unpoisoned();
         self.heap
             .data
             .as_slice()
@@ -76,7 +75,8 @@ impl<T: Ord, A: Allocator> DerefMut for PeekMut<'_, T, A> {
         // being modified followed by PeekMut being forgotten, which
         // breaks invariants without ever being able to trigger the
         // poison flag.
-        unsafe { self.heap.data.set_len(1) };
+        self.heap.assume_unpoisoned();
+        self.leak();
         self.heap
             .data
             .as_mut_slice()
@@ -85,26 +85,126 @@ impl<T: Ord, A: Allocator> DerefMut for PeekMut<'_, T, A> {
     }
 }
 
+impl<T: Ord, A: Allocator> PeekMut<'_, T, A> {
+    /// Re-establishes the heap order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Ord implementation panics. In this case, the heap will be poisoned.
+    fn restore(&mut self) -> bool {
+        let mut quarantine = PoisonOnUnwind::new(&mut *self.heap);
+        let new_pos = unsafe { quarantine.sift_down(0) };
+        // Defuse the quarantine.
+        core::mem::forget(quarantine);
+        new_pos != 0
+    }
+
+    /// Leaks the tail.
+    fn leak(&mut self) {
+        if self.original_len.is_none() {
+            let original_len = self.heap.len();
+            unsafe { self.heap.data.set_len(1) };
+            self.original_len = Some(original_len);
+        }
+    }
+
+    /// Unleaks the leaked tail by restoring the length.
+    /// The operation must do it first.
+    ///
+    /// Returns `true` if the leak was in place, implying the
+    /// element was modified.
+    fn unleak(&mut self) -> bool {
+        if let Some(original_len) = self.original_len.take() {
+            unsafe { self.heap.data.set_len(original_len) };
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Removes the guarded element from the heap and returns it.
+    ///
+    /// The value returned is the one currently at the root, which
+    /// includes any mutation made through [`DerefMut`].
+    ///
+    /// # Panics
+    ///
+    /// If a comparison panics during the re-sift, the heap is
+    /// poisoned; [`rebuild`] recovers it.
+    ///
+    /// [`rebuild`]: BinaryHeap::rebuild
+    #[inline]
+    #[must_use]
+    pub fn pop(mut this: Self) -> T {
+        let modified = this.unleak();
+        this.heap.assume_unpoisoned();
+        if modified {
+            let mut quarantine = PoisonOnUnwind::new(&mut *this.heap);
+            // We are interested in the first element.
+            // On the happy path, the first element is removed
+            // regardless of state, and the swapped element is sifted down.
+            // On the panic path, the first element is put back in, and
+            // because it has changed, the heap is poisoned.
+            let res = quarantine
+                .pop()
+                .expect("a PeekMut always guards a non-empty heap");
+            core::mem::forget(quarantine);
+            res
+        } else {
+            this.heap
+                .pop()
+                .expect("a PeekMut always guards a non-empty heap")
+        }
+    }
+
+    /// Refresh the binary heap after an in-place mutation of the top element.
+    /// The guard continue to sits at the top of the heap, viewing the largest
+    /// element.
+    ///
+    /// Returns `true` if the element moved, `false` otherwise.
+    ///
+    /// # Panics
+    ///
+    /// If a comparison panics, the heap is poisoned.
+    #[inline]
+    #[must_use]
+    pub fn refresh(&mut self) -> bool {
+        let modified = self.unleak();
+        self.heap.assume_unpoisoned();
+        if modified { self.restore() } else { false }
+    }
+}
+
+impl<T: Ord + fmt::Debug, A: Allocator> fmt::Debug for PeekMut<'_, T, A> {
+    /// Formats the guarded element.
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.heap.poisoned {
+            return f.write_str("PeekMut(<poisoned>)");
+        }
+        f.debug_tuple("PeekMut")
+            .field(
+                self.heap
+                    .data
+                    .as_slice()
+                    .first()
+                    .expect("a PeekMut always guards a non-empty heap"),
+            )
+            .finish()
+    }
+}
+
 impl<T: Ord, A: Allocator> Drop for PeekMut<'_, T, A> {
     #[inline]
     fn drop(&mut self) {
-        // `DerefMut` is the only operation that may hide the tail, so a buffer
-        // still at its original length means the root was never handed out
-        // mutably and the invariant never moved. (A one-element heap that
-        // *was* mutated also matches here, and skipping the sift is sound:
-        // a single root is always a valid heap.)
-        if self.heap.len() == self.orig_len {
+        let modified = self.unleak();
+        // This prevents panicking twice.
+        if self.heap.poisoned {
             return;
         }
-
-        let mut quarantine = PoisonOnUnwind::new(self.heap);
-        // SAFETY: the heap originally had the exact length.
-        unsafe { quarantine.data.set_len(self.orig_len) };
-        // SAFETY: the restored length is at least 1, so the guarded root at
-        // index 0 is live.
-        unsafe { quarantine.sift_down(0) };
-        quarantine.poisoned = false;
-        core::mem::forget(quarantine);
+        if modified {
+            self.restore();
+        }
     }
 }
 
@@ -112,6 +212,7 @@ impl<T: Ord, A: Allocator> Drop for PeekMut<'_, T, A> {
 mod tests {
     extern crate std;
 
+    use super::PeekMut;
     use crate::collections::binary_heap::BinaryHeap;
     use crate::test_helpers::{PanicArmer, PanickyOrd};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
@@ -220,5 +321,108 @@ mod tests {
             popped.push(top.value);
         }
         assert_eq!(popped, vec![8, 7, 0]);
+    }
+
+    #[test]
+    fn pop_without_mutation_removes_the_maximum() {
+        let mut heap = heap_of([5, 4, 3]);
+        let peek = heap.peek_mut().expect("non-empty heap");
+        assert_eq!(PeekMut::pop(peek), 5);
+        assert_eq!(drain_heap(&mut heap), vec![4, 3]);
+        assert!(!heap.is_poisoned());
+    }
+
+    #[test]
+    fn pop_after_mutation_removes_the_mutated_root() {
+        let mut heap = heap_of([9, 8, 7, 6]);
+        let mut peek = heap.peek_mut().expect("non-empty heap");
+        *peek += 6;
+        assert_eq!(PeekMut::pop(peek), 15);
+        assert_eq!(drain_heap(&mut heap), vec![8, 7, 6]);
+        assert!(!heap.is_poisoned());
+    }
+
+    #[test]
+    fn pop_on_a_single_element_empties_the_heap() {
+        let mut heap = heap_of([7]);
+        let mut peek = heap.peek_mut().expect("non-empty heap");
+        *peek = 1;
+        assert_eq!(PeekMut::pop(peek), 1);
+        assert!(heap.is_empty());
+    }
+
+    #[test]
+    fn refresh_of_an_untouched_root_reports_no_movement() {
+        let mut heap = heap_of([9, 8, 7, 6]);
+        let mut guard = heap.peek_mut().expect("non-empty heap");
+        assert!(!guard.refresh(), "the untouched root has nothing to sift");
+        assert_eq!(*guard, 9);
+        drop(guard);
+        assert_eq!(drain_heap(&mut heap), vec![9, 8, 7, 6]);
+        assert!(!heap.is_poisoned());
+    }
+
+    #[test]
+    fn refresh_clamps_every_element_at_the_bound() {
+        // std's doc example for `PeekMut::refresh`: keep overwriting the
+        // top and re-sifting until nothing moves, which clamps the whole
+        // heap at the bound.
+        let mut heap = heap_of(0..128);
+        let mut guard = heap.peek_mut().expect("non-empty heap");
+        while {
+            *guard = 99;
+            guard.refresh()
+        } {}
+        assert_eq!(*guard, 99);
+        drop(guard);
+        assert_eq!(heap.peek(), Some(&99));
+        let drained = drain_heap(&mut heap);
+        assert!(drained.iter().all(|&value| value <= 99));
+        assert_eq!(drained.len(), 128);
+    }
+
+    #[test]
+    fn panicking_refresh_poisons_and_the_guard_lifts_cleanly() {
+        let armer = Arc::new(PanicArmer::new());
+        let mut heap: BinaryHeap<PanickyOrd<i32>> = BinaryHeap::try_from_iter(
+            [9, 8, 7].map(|value| PanickyOrd::new(value, Arc::clone(&armer))),
+        )
+        .expect("allocation ok");
+        {
+            let mut peek = heap.peek_mut().expect("non-empty heap");
+            peek.value = 0;
+            armer.arm();
+            let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| peek.refresh()));
+            assert!(outcome.is_err());
+            // The guard is still live while poisoned; dropping it must
+            // restore the hidden tail without panicking a second time.
+        }
+        assert!(heap.is_poisoned());
+
+        armer.disarm();
+        heap.rebuild();
+        let mut values = Vec::new();
+        while let Some(top) = heap.pop() {
+            values.push(top.value);
+        }
+        assert_eq!(values, vec![8, 7, 0]);
+    }
+
+    #[test]
+    fn peek_mut_debug_shows_the_root_or_the_borrow() {
+        let mut heap = heap_of([9, 8, 7]);
+        let guard = heap.peek_mut().expect("non-empty heap");
+        assert_eq!(std::format!("{guard:?}"), "PeekMut(9)");
+        let mut guard = guard;
+        *guard = 5;
+        assert_eq!(std::format!("{guard:?}"), "PeekMut(5)");
+    }
+
+    #[test]
+    fn poisoned_heap_peek_mut_debug_says_so() {
+        let mut heap = heap_of([1]);
+        let guard = heap.peek_mut().expect("non-empty heap");
+        guard.heap.poisoned = true;
+        assert_eq!(std::format!("{guard:?}"), "PeekMut(<poisoned>)");
     }
 }

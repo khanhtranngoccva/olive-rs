@@ -13,6 +13,12 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for BinaryHeap<T, A> {
     /// Formats the heap as a list of its elements in arbirary order (level order
     /// on clean heaps, arbitrary order on poisoned heaps), *not* in sorted order.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Poisoned: the level order is not even a heap any more, so
+        // listing it would mislead. std has no poison state and no
+        // equivalent branch.
+        if self.poisoned {
+            return f.write_str("<poisoned>");
+        }
         f.debug_list().entries(self.data.iter()).finish()
     }
 }
