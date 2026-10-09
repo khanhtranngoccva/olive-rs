@@ -338,7 +338,7 @@ mod tests {
     }
 
     // A heap whose comparisons panic once `armer` is armed, so the test
-    // can poison it on purpose through the guarded fast append.
+    // can poison it on purpose through the guarded append.
     fn panicky_heap_of(
         items: impl IntoIterator<Item = i32>,
         armer: &Arc<PanicArmer>,
@@ -361,7 +361,7 @@ mod tests {
             BinaryHeap::try_from_iter([PanickyOrd::new(9, Arc::clone(&armer))])
                 .expect("allocation ok");
         armer.arm();
-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append_fast(&mut other)));
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append(&mut other)));
         assert!(heap.is_poisoned());
         let count = heap.into_iter().count();
         assert_eq!(count, 4, "draining a quarantined heap yields everything");
@@ -401,7 +401,7 @@ mod tests {
         let mut other: BinaryHeap<PanickyOrd<i32>> =
             BinaryHeap::try_from_iter([PanickyOrd::calm(9)]).expect("allocation ok");
         armer.arm();
-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append_fast(&mut other)));
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append(&mut other)));
         assert!(heap.is_poisoned());
         let mut values: Vec<i32> = heap.iter().map(|item| item.value).collect();
         values.sort_unstable();

@@ -331,8 +331,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             //  self.len() == 0, but it's ruled out by the loop condition.
             unsafe { quarantine.sift_down(n) };
         }
-        quarantine.defuse();
         quarantine.poisoned = false;
+        core::mem::forget(quarantine);
     }
 }
 

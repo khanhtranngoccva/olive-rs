@@ -63,7 +63,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// Consumes the binary heap, returning the underlying vector.
     ///
     /// The elements are returned in their internal level-order arrangement
-    /// and are *not* sorted. A poisoned heap can be converted into the 
+    /// and are *not* sorted. A poisoned heap can be converted into the
     /// vector.
     #[must_use]
     #[inline]
@@ -223,7 +223,7 @@ mod tests {
             BinaryHeap::try_from_iter([PanickyOrd::new(2, Arc::clone(&armer))])
                 .expect("allocation ok");
         armer.arm();
-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append_fast(&mut other)));
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| heap.try_append(&mut other)));
         assert!(heap.is_poisoned());
         heap.clear();
         assert!(!heap.is_poisoned());

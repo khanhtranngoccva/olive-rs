@@ -1,7 +1,5 @@
 //! Growth operations: pushing elements and merging iterators or heaps.
 
-use core::ops::{Deref, DerefMut};
-
 use super::BinaryHeap;
 use super::poison::PoisonOnUnwind;
 use crate::alloc::Allocator;
@@ -9,13 +7,14 @@ use olive_core::alloc_errors::TryReserveError;
 
 impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// Attempts to insert an item into the binary heap, returning an error on
-    /// failure. The element is dropped on error or panic.
+    /// failure. The element is dropped on error - use
+    /// [`try_push_give_back`](Self::try_push_give_back) to keep it.
     ///
     /// # Panics
     ///
-    /// If the `Ord` comparison panics during the insertion, the buffer is
-    /// truncated back over to restore the original state, and the element is
-    /// lost.
+    /// If the `Ord` comparison panics during the insertion, the element stays
+    /// in the heap and the heap is poisoned. [`rebuild`](Self::rebuild) needs
+    /// to be called to recover the heap.
     ///
     /// # Errors
     ///
@@ -37,9 +36,9 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// Panics if the heap is poisoned ([`is_poisoned`](Self::is_poisoned)),
     /// in this case one must restore with [`rebuild`](Self::rebuild) first.
     ///
-    /// If the `Ord` comparison panics during the insertion, the buffer is
-    /// truncated back over to restore the original state, and the element is
-    /// lost.
+    /// If the `Ord` comparison panics during the insertion, the element stays
+    /// in the heap and the heap is poisoned. [`rebuild`](Self::rebuild) needs
+    /// to be called to recover the heap.
     ///
     /// # Errors
     ///
@@ -53,11 +52,10 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             return Err((item, error));
         }
 
-        let mut guard = TruncateOnUnwind::new(self, origin);
+        let mut guard = PoisonOnUnwind::new(self);
         // SAFETY: `origin` is the index the element was just written to, so
         // `origin < self.data.len()`.
         unsafe { guard.sift_up(0, origin) };
-        // Disable the guard.
         core::mem::forget(guard);
 
         Ok(())
@@ -65,45 +63,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 
     /// Moves all elements from `other` into `self`, leaving `other` empty.
     ///
-    /// # Errors
-    ///
-    /// Returns the [`TryReserveError`] if space for `other.len()` elements
-    /// could not be reserved. In this case, both heaps are intact.
-    ///
-    /// # Panics
-    ///
-    /// Panics if either heap is poisoned or if the [`Ord`] implementation panics.
-    /// However, panicking does not break invariants.
-    ///
-    /// # Atomicity and performance
-    ///
-    /// This method does not have full atomicity - it is guaranteed on errors, but not
-    /// on panics. However, this method does not poison either heap, for the method uses
-    /// the *slow* algorithm that is resilient to poisoning on panics.
-    ///
-    /// To improve performance, you may use [`try_append_fast`](Self::try_append_fast),
-    /// which partially sacrifices panic safety (but may poison the heap).
-    pub fn try_append(&mut self, other: &mut Self) -> Result<(), TryReserveError> {
-        self.assume_unpoisoned();
-        other.assume_unpoisoned();
-        if self.is_empty() {
-            core::mem::swap(self, other);
-            return Ok(());
-        }
-        if other.is_empty() {
-            return Ok(());
-        }
-        self.data.try_reserve_adaptive(other.len())?;
-        while let Some(item) = other.pop() {
-            self.try_push(item)
-                .expect("capacity should already be reserved");
-        }
-        Ok(())
-    }
-
-    /// Moves all elements from `other` into `self`, leaving `other` empty. This is
-    /// a faster implementation (taken from std) that sacrifices panic safety
-    /// (may leave the heap poisoned).
+    /// The elements cross as one comparison-free buffer move and the combined
+    /// heap is then repaired by a single O(n) rebuild.
     ///
     /// # Errors
     ///
@@ -115,8 +76,9 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// Panics if either heap is poisoned or if the [`Ord`] implementation panics.
     ///
     /// If the `Ord` comparison panics during the rebuild, `self` is poisoned.
-    /// [`rebuild`](Self::rebuild) must be called.
-    pub fn try_append_fast(&mut self, other: &mut Self) -> Result<(), TryReserveError> {
+    /// Every element is already inside `self` - nothing is lost - and
+    /// [`rebuild`](Self::rebuild) must be called to restore the invariant.
+    pub fn try_append(&mut self, other: &mut Self) -> Result<(), TryReserveError> {
         self.assume_unpoisoned();
         other.assume_unpoisoned();
         if self.is_empty() {
@@ -135,45 +97,8 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         // section starts semantically right here.
         let mut quarantine = PoisonOnUnwind::new(self);
         quarantine.rebuild_tail(old_len);
-        quarantine.defuse();
+        core::mem::forget(quarantine);
         Ok(())
-    }
-}
-
-/// Guard that truncates a vector back to a recorded length if the region it
-/// guards unwinds.
-///
-/// The guard is trivial and can be defused with `mem::forget`.
-struct TruncateOnUnwind<'a, T, A: Allocator> {
-    heap: &'a mut BinaryHeap<T, A>,
-    keep: usize,
-}
-
-impl<'a, T, A: Allocator> TruncateOnUnwind<'a, T, A> {
-    #[inline]
-    const fn new(heap: &'a mut BinaryHeap<T, A>, keep: usize) -> Self {
-        Self { heap, keep }
-    }
-}
-
-impl<T, A: Allocator> Deref for TruncateOnUnwind<'_, T, A> {
-    type Target = BinaryHeap<T, A>;
-
-    fn deref(&self) -> &Self::Target {
-        self.heap
-    }
-}
-
-impl<T, A: Allocator> DerefMut for TruncateOnUnwind<'_, T, A> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.heap
-    }
-}
-
-impl<T, A: Allocator> Drop for TruncateOnUnwind<'_, T, A> {
-    #[inline]
-    fn drop(&mut self) {
-        self.heap.data.truncate(self.keep);
     }
 }
 
@@ -182,11 +107,13 @@ mod tests {
     extern crate std;
 
     use super::BinaryHeap;
-    use crate::test_helpers::BudgetedAlloc;
+    use crate::test_helpers::{BudgetedAlloc, PanicArmer, PanickyOrd};
     use core::sync::atomic::Ordering;
     use olive_core::{
         alloc_errors::TryReserveError, try_traits::try_from_iterator::TryFromIterator,
     };
+    use std::panic;
+    use std::sync::Arc;
     use std::vec;
     use std::vec::Vec;
 
@@ -284,26 +211,69 @@ mod tests {
         assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
     }
 
+    fn armed_heap(values: &[i32], armer: &Arc<PanicArmer>) -> BinaryHeap<PanickyOrd<i32>> {
+        BinaryHeap::try_from_iter(
+            values
+                .iter()
+                .map(|value| PanickyOrd::new(*value, Arc::clone(armer))),
+        )
+        .expect("allocation ok")
+    }
+
+    #[test]
+    fn try_push_honors_the_element_when_the_comparison_panics() {
+        let armer = Arc::new(PanicArmer::new());
+        let mut heap = armed_heap(&[1, 0], &armer);
+        armer.arm();
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            heap.try_push(PanickyOrd::calm(2))
+        }));
+        assert!(
+            heap.is_poisoned(),
+            "the failed insertion must quarantine the heap loudly"
+        );
+        assert_eq!(heap.len(), 3, "the element is honored, not discarded");
+        // With the fault withdrawn, the poisoned heap is fully repairable.
+        armer.disarm();
+        heap.rebuild();
+        assert!(!heap.is_poisoned());
+        assert_eq!(heap.peek().map(|item| item.value), Some(2));
+    }
+
+    #[test]
+    fn try_push_give_back_honors_the_element_when_the_comparison_panics() {
+        let armer = Arc::new(PanicArmer::new());
+        let mut heap = armed_heap(&[1, 0], &armer);
+        armer.arm();
+        let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            heap.try_push_give_back(PanickyOrd::calm(2))
+        }));
+        assert!(
+            outcome.is_err(),
+            "the armed comparison must detonate the sift"
+        );
+        assert!(
+            heap.is_poisoned(),
+            "the failed insertion must quarantine the heap loudly"
+        );
+        assert_eq!(heap.len(), 3, "the element is honored, not discarded");
+        armer.disarm();
+        heap.rebuild();
+        assert!(!heap.is_poisoned());
+        assert_eq!(heap.peek().map(|item| item.value), Some(2));
+    }
+
     #[test]
     fn try_append_merges_two_heaps() {
-        // Slow variant
         let mut left = heap_of(vec![9, 5, 1]);
         let mut right = heap_of(vec![8, 7, 6, 2]);
         left.try_append(&mut right).expect("reserve succeeds");
-        assert!(right.is_empty());
-        assert_eq!(drain_i32(&mut left), vec![9, 8, 7, 6, 5, 2, 1]);
-
-        // Fast variant
-        let mut left = heap_of(vec![9, 5, 1]);
-        let mut right = heap_of(vec![8, 7, 6, 2]);
-        left.try_append_fast(&mut right).expect("reserve succeeds");
         assert!(right.is_empty());
         assert_eq!(drain_i32(&mut left), vec![9, 8, 7, 6, 5, 2, 1]);
     }
 
     #[test]
     fn try_append_failure_leaves_both_heaps_intact() {
-        // Slow variant
         let alloc = BudgetedAlloc::new(8);
         // Fill the left heap to capacity so the merge genuinely needs a
         // new block: an append that fits in reserved capacity must not,
@@ -320,26 +290,10 @@ mod tests {
         assert_eq!(right.len(), 2, "the right heap must have kept its data");
         assert_eq!(drain_i32_budgeted(&mut left), vec![9, 8, 7, 1]);
         assert_eq!(drain_i32_budgeted(&mut right), vec![6, 5]);
-
-        // Fast variant
-        let alloc = BudgetedAlloc::new(8);
-        let mut left = budgeted_heap(&[9, 8, 7, 1], alloc.clone());
-        let mut right = budgeted_heap(&[6, 5], alloc.clone());
-        alloc.drain();
-
-        let error: TryReserveError = left
-            .try_append_fast(&mut right)
-            .expect_err("an exhausted budget must refuse the merge");
-        assert!(error.is_alloc(), "{error:?}");
-        assert_eq!(left.len(), 4, "the left heap must not have moved");
-        assert_eq!(right.len(), 2, "the right heap must have kept its data");
-        assert_eq!(drain_i32_budgeted(&mut left), vec![9, 8, 7, 1]);
-        assert_eq!(drain_i32_budgeted(&mut right), vec![6, 5]);
     }
 
     #[test]
     fn try_append_of_empty_is_free() {
-        // Slow variant
         let alloc = BudgetedAlloc::new(8);
         let mut left = budgeted_heap(&[3, 1, 2], alloc.clone());
         let mut right: BinaryHeap<i32, _> = BinaryHeap::new_in(alloc.clone());
@@ -348,19 +302,6 @@ mod tests {
             .expect("empty appends are trivial");
         right
             .try_append(&mut left)
-            .expect("empty appends are trivial");
-        assert_eq!(drain_i32_budgeted(&mut right), vec![3, 2, 1]);
-        assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
-
-        // Fast variant
-        let alloc = BudgetedAlloc::new(8);
-        let mut left = budgeted_heap(&[3, 1, 2], alloc.clone());
-        let mut right: BinaryHeap<i32, _> = BinaryHeap::new_in(alloc.clone());
-        alloc.drain();
-        left.try_append_fast(&mut right)
-            .expect("empty appends are trivial");
-        right
-            .try_append_fast(&mut left)
             .expect("empty appends are trivial");
         assert_eq!(drain_i32_budgeted(&mut right), vec![3, 2, 1]);
         assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);

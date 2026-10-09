@@ -18,7 +18,7 @@ pub use iter::{IntoIter, Iter};
 ///
 /// Every operation that may grow or shrink the buffer comes with fallibility
 /// ([`try_with_capacity_in`], [`try_push`], [`try_push_give_back`],
-/// [`try_append`], [`try_append_fast`]). These operations report
+/// [`try_append`]). These operations report
 /// an [`olive_core::alloc_errors::TryReserveError`] on failure instead
 /// of aborting.
 ///
@@ -28,8 +28,8 @@ pub use iter::{IntoIter, Iter};
 ///
 /// # Atomicity
 ///
-/// There are a few atomicity aspects for the BinaryHeap. It is usually not possible to
-/// satisfy all of them.
+/// There are a few atomicity aspects for the BinaryHeap, and they usually
+/// cannot all be satisfied at once.
 ///
 /// - Atomicity on errors - demonstrated on normal errors during algorithm execution.
 /// - Atomicity on panics - demonstrated on a panic.
@@ -37,22 +37,22 @@ pub use iter::{IntoIter, Iter};
 ///   This aspect is irrelevant to tree invariants - a panic may break invariant and poison
 ///   the heap, but appended elements may not be lost.
 /// - Invariant atomicity - whether the binary tree invariants for the heap are satisfied.
-///   This is applicable only on panics.
+///   This is applicable only on panics. When invariants break, the heap will be poisoned.
 ///
 /// For example:
-/// - [`try_append`] and [`try_append_fast`] offer both data and invariant atomicity
-///   on errors. On panics, [`try_append_fast`] satisfies data atomicity but not invariant
-///   atomicity (if the [`Ord`] implementation panics, the data stays but the invariant breaks),
-///   while [`try_append`] satisfies invariant atomicity, but data atomicity breaks during a
-///   panic.
-/// - [`try_push`], [`try_push_give_back`] also offer data and invariant atomicity
-///   on errors. However, on a panic, both of them satisfy invariant atomicity, but
-///   not data atomicity.
+/// - [`pop`] is fully-atomic: its sifting plan is computed before the sift initiates,
+///   and `PopRollback` restores the heap bit-for-bit, so a panic in the middle of a pop
+///   breaks neither data nor invariant and poisons nothing.
+/// - [`try_append`] offers both data and invariant atomicity on errors. On a
+///   panic, it loses no data: a panicking [`Ord`] implementation leaves every
+///   element inside `self` but breaks the invariant, so `self` ends up poisoned.
+/// - [`try_push`] and [`try_push_give_back`] also offer data and invariant
+///   atomicity on errors. On a panic, the pushed element stays in the heap
+///   (data atomicity holds) and the heap is poisoned (invariant atomicity
+///   breaks).
 ///
-/// It is recommended to focus on error atomicity and not panic atomicity - panic
-/// denotes an unrecoverable error and should warrant a fix.
-///
-/// These quirks are being worked through and are subject to change.
+/// It is recommended to focus on error and data atomicity and not panic atomicity - 
+/// panic denotes an unrecoverable error and should warrant a fix.
 ///
 /// # Panic safety and poisoning
 ///
@@ -67,7 +67,7 @@ pub use iter::{IntoIter, Iter};
 /// [`try_push`]: BinaryHeap::try_push
 /// [`try_push_give_back`]: BinaryHeap::try_push_give_back
 /// [`try_append`]: BinaryHeap::try_append
-/// [`try_append_fast`]: BinaryHeap::try_append_fast
+/// [`pop`]: BinaryHeap::pop
 /// [`rebuild`]: BinaryHeap::rebuild
 pub struct BinaryHeap<T, A: Allocator = crate::alloc::Global> {
     data: Vec<T, A>,
