@@ -120,8 +120,8 @@ impl<K, V> Root<K, V> {
     /// only appear when left sibling nodes are already full.
     ///
     /// Note: std's `append` walks the right border linearly (pre-allocating
-    /// replacement nodes) which trades extra allocations for lower time complexity. 
-    /// 
+    /// replacement nodes) which trades extra allocations for lower time complexity.
+    ///
     /// Revisit when implementing an optimized `append` (i.e. try_append_fast).
     #[expect(unused, reason = "only used during std append")]
     pub fn fix_right_border_of_plentiful(&mut self) {

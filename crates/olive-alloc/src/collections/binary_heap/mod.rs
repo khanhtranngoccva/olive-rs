@@ -3,6 +3,7 @@ mod allocation;
 mod construction;
 mod iter;
 mod mutation;
+mod peek;
 mod poison;
 mod query;
 mod sifting;
@@ -11,6 +12,7 @@ mod traits;
 use crate::alloc::Allocator;
 use crate::vec::Vec;
 pub use iter::{IntoIter, Iter};
+pub use peek::PeekMut;
 
 /// A max-heap binary tree stored in a growable [`Vec`].
 ///
@@ -51,7 +53,7 @@ pub use iter::{IntoIter, Iter};
 ///   (data atomicity holds) and the heap is poisoned (invariant atomicity
 ///   breaks).
 ///
-/// It is recommended to focus on error and data atomicity and not panic atomicity - 
+/// It is recommended to focus on error and data atomicity and not panic atomicity -
 /// panic denotes an unrecoverable error and should warrant a fix.
 ///
 /// # Panic safety and poisoning

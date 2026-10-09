@@ -2709,7 +2709,7 @@ fn vec_partial_ord_less_than_by_prefix_then_length() {
 
 #[test]
 fn vec_ord_less_than_by_prefix_then_length() {
-    use core::cmp::{Ordering, Ord};
+    use core::cmp::{Ord, Ordering};
     let a = mk_vec(&[1, 2]);
     let b = mk_vec(&[1, 2, 3]);
     assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
@@ -2727,7 +2727,7 @@ fn vec_partial_ord_lexicographic() {
 
 #[test]
 fn vec_ord_lexicographic() {
-    use core::cmp::{Ordering, Ord};
+    use core::cmp::{Ord, Ordering};
     let a = mk_vec(&[1, 2, 3]);
     let b = mk_vec(&[1, 3, 2]);
     assert_eq!(Ord::cmp(&a, &b), Ordering::Less);

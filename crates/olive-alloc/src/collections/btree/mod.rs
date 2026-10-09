@@ -16,6 +16,7 @@ mod invariant;
 mod iter;
 mod map;
 mod mem;
+mod merge_iter;
 mod mutation;
 mod navigate;
 mod node;
@@ -27,7 +28,6 @@ mod set;
 mod set_val;
 mod split;
 mod traits;
-mod merge_iter;
 
 pub use entry::Entry;
 pub use extract_if::ExtractIf;
@@ -36,9 +36,8 @@ pub use map::BTreeMap;
 pub use set::{
     BTreeSet, Difference as BTreeSetDifference, Entry as BTreeSetEntry,
     ExtractIf as BTreeSetExtractIf, Intersection as BTreeSetIntersection,
-    IntoIter as BTreeSetIntoIter, Iter as BTreeSetIter,
-    OccupiedEntry as BTreeSetOccupiedEntry, SetOp as BTreeSetOp,
-    SymmetricDifference as BTreeSetSymmetricDifference,
+    IntoIter as BTreeSetIntoIter, Iter as BTreeSetIter, OccupiedEntry as BTreeSetOccupiedEntry,
+    SetOp as BTreeSetOp, SymmetricDifference as BTreeSetSymmetricDifference,
     Union as BTreeSetUnion, VacantEntry as BTreeSetVacantEntry,
 };
 
