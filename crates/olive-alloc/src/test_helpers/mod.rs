@@ -9,6 +9,7 @@ pub mod allocators;
 pub mod counters;
 pub mod default;
 pub mod ledger;
+pub mod panicky_ops;
 pub mod rng;
 // `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
 // exported so future tests can instantiate it with other clone policies (e.g.
@@ -19,6 +20,7 @@ pub use counters::CloneCounter;
 pub use default::NoDefault;
 #[allow(unused_imports)]
 pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
+pub use panicky_ops::PanickyOrd;
 pub use rng::TestRng;
 
 extern crate std;
@@ -361,7 +363,10 @@ pub struct MaybeUnclonable<T> {
 impl<T> MaybeUnclonable<T> {
     /// A value that clones itself happily.
     pub const fn clonable(inner: T) -> Self {
-        Self { inner, cloneable: true }
+        Self {
+            inner,
+            cloneable: true,
+        }
     }
 
     /// A value whose `try_clone` always fails.

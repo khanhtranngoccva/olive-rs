@@ -1,4 +1,5 @@
 //! Fallible ports of the `alloc` crate's collection types.
+pub mod binary_heap;
 mod btree;
 pub mod vec_deque;
 
@@ -16,9 +17,8 @@ pub mod btree_set {
     pub use super::btree::{
         BTreeSet, BTreeSetDifference as Difference, BTreeSetEntry as Entry,
         BTreeSetExtractIf as ExtractIf, BTreeSetIntersection as Intersection,
-        BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter,
-        BTreeSetOccupiedEntry as OccupiedEntry, BTreeSetOp as SetOp,
-        BTreeSetSymmetricDifference as SymmetricDifference, BTreeSetUnion as Union,
-        BTreeSetVacantEntry as VacantEntry, TryBTreeSetWithCloneError,
+        BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter, BTreeSetOccupiedEntry as OccupiedEntry,
+        BTreeSetOp as SetOp, BTreeSetSymmetricDifference as SymmetricDifference,
+        BTreeSetUnion as Union, BTreeSetVacantEntry as VacantEntry, TryBTreeSetWithCloneError,
     };
 }
