@@ -1,6 +1,7 @@
 //! A binary max-heap - a complete binary tree packed into a vector.
 mod allocation;
 mod construction;
+mod drain;
 mod iter;
 pub(super) mod mutation;
 mod peek;
@@ -13,6 +14,7 @@ use crate::alloc::Allocator;
 use crate::vec::TryVecWithCloneError;
 use crate::vec::Vec;
 use core::fmt;
+pub use drain::Drain;
 pub use iter::{IntoIter, Iter};
 use olive_core::alloc_errors::TryReserveError;
 use olive_core::try_traits::try_clone::TryCloneError;

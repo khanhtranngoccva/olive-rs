@@ -6,9 +6,13 @@ use super::mutation::RebuildTailOnDrop;
 use crate::{alloc::Global, vec::Vec};
 use core::fmt;
 use olive_core::recovery::{ResumableSource, Resume};
-use olive_core::try_traits::try_clone::TryClone;
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
-use olive_core::{alloc::Allocator, alloc_errors::TryReserveError, try_traits::TryFromIterator};
+use olive_core::{
+    alloc::{Allocator, AllocatorTryClone},
+    alloc_errors::TryReserveError,
+    try_traits::TryFromIterator,
+};
 
 // ---------------------------------------------------------------------------
 // Debug
@@ -25,6 +29,33 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for BinaryHeap<T, A> {
             return f.write_str("<poisoned>");
         }
         f.debug_list().entries(self.data.iter()).finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cloning
+// ---------------------------------------------------------------------------
+
+impl<T: TryClone, A: AllocatorTryClone> TryClone for BinaryHeap<T, A> {
+    /// Fallibly clones the heap, element by element, onto a freshly cloned
+    /// allocator.
+    ///
+    /// The backing buffer is copied verbatim. The poisoned flag is
+    /// carried across unchanged — cloning a poisoned heap yields a poisoned
+    /// heap, which stays unusable for order-dependent operations until
+    /// [`rebuild`](BinaryHeap::rebuild).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError`] if the allocator or a capacity reservation
+    /// fails, or if any element's [`try_clone`](TryClone::try_clone) fails. On
+    /// failure the partially built copy (elements included) is dropped and
+    /// `self` is left untouched.
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            data: self.data.try_clone()?,
+            poisoned: self.poisoned,
+        })
     }
 }
 
@@ -218,6 +249,92 @@ mod tests {
             "should render as a list: {text}"
         );
         assert!(text.contains("100"), "root should be shown: {text}");
+    }
+
+    // --- TryClone ------------------------------------------------------------
+
+    #[test]
+    fn try_clone_copies_the_elements_and_the_peek() {
+        let mut heap: BinaryHeap<i32> =
+            TryFromIterator::try_from_iter([5, 11, 3, 8, 1]).expect("allocation ok");
+        let mut clone = heap.try_clone().expect("cloning i32 cannot fail");
+
+        assert_eq!(clone.len(), heap.len());
+        assert_eq!(clone.peek(), heap.peek());
+
+        // The copy is independent of the source: mutating the original
+        // leaves the clone's contents and ordering intact.
+        assert_eq!(heap.pop(), Some(11));
+        assert_eq!(clone.len(), 5, "the clone is unaffected by the source");
+        assert!(!clone.is_poisoned());
+        assert_eq!(drain(&mut clone), std::vec![11, 8, 5, 3, 1]);
+    }
+
+    #[test]
+    fn try_clone_preserves_the_poison_flag() {
+        // Poison a heap through an armed comparison, then clone it.
+        let armer = Arc::new(PanicArmer::new());
+        let mut heap: BinaryHeap<PanickyOrd<i32>> = TryFromIterator::try_from_iter(
+            [3, 1, 2]
+                .iter()
+                .map(|value| PanickyOrd::new(*value, armer.clone())),
+        )
+        .expect("allocation ok");
+
+        armer.arm();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.try_extend([10, 20, 30].iter().map(|value| PanickyOrd::calm(*value)))
+                .expect("allocation succeeds; the detonation comes from the rebuild");
+        }));
+        assert!(outcome.is_err(), "the armed rebuild must detonate");
+        assert!(heap.is_poisoned(), "the heap is quarantined");
+        armer.disarm();
+
+        let mut clone = heap.try_clone().expect("cloning runs no comparison");
+        assert!(clone.is_poisoned(), "the quarantine is carried across");
+        assert_eq!(clone.len(), heap.len());
+
+        // Both copies recover through rebuild and drain the same multiset.
+        heap.rebuild();
+        clone.rebuild();
+        assert!(!heap.is_poisoned() && !clone.is_poisoned());
+
+        let mut expected = std::vec::Vec::new();
+        while let Some(item) = heap.pop() {
+            expected.push(item.value);
+        }
+        let mut actual = std::vec::Vec::new();
+        while let Some(item) = clone.pop() {
+            actual.push(item.value);
+        }
+        assert_eq!(expected, std::vec![30, 20, 10, 3, 2, 1]);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn try_clone_failure_leaves_the_source_untouched() {
+        use crate::test_helpers::MaybeUnclonable;
+        let mut heap: BinaryHeap<MaybeUnclonable<i32>> = TryFromIterator::try_from_iter([
+            MaybeUnclonable::clonable(3),
+            MaybeUnclonable::unclonable(9),
+            MaybeUnclonable::clonable(1),
+        ])
+        .expect("allocation ok");
+
+        let error = heap
+            .try_clone()
+            .expect_err("the unclonable element fails the clone");
+        assert!(matches!(error, TryCloneError::Other(_)));
+
+        // `self` survives the failed clone intact and usable.
+        assert_eq!(heap.len(), 3, "no element was consumed");
+        assert_eq!(heap.peek().map(|item| item.inner), Some(9));
+        assert!(!heap.is_poisoned());
+        let mut actual = std::vec::Vec::new();
+        while let Some(item) = heap.pop() {
+            actual.push(item.inner);
+        }
+        assert_eq!(actual, [9i32, 3, 1]);
     }
 
     // --- TryFromIterator -------------------------------------------------------

@@ -4,6 +4,7 @@ extern crate std;
 
 use crate::test_helpers::PanicArmer;
 use core::ops::{Deref, DerefMut};
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use std::sync::Arc;
 
 /// An ordered newtype over `T` whose comparisons panic while an attached
@@ -70,5 +71,14 @@ impl<T> Deref for PanickyOrd<T> {
 impl<T> DerefMut for PanickyOrd<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.value
+    }
+}
+
+impl<T: TryClone> TryClone for PanickyOrd<T> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            value: self.value.try_clone()?,
+            armer: self.armer.clone(),
+        })
     }
 }
