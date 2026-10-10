@@ -2,7 +2,7 @@
 mod allocation;
 mod construction;
 mod iter;
-mod mutation;
+pub(super) mod mutation;
 mod peek;
 mod poison;
 mod query;
@@ -10,8 +10,12 @@ mod sifting;
 mod traits;
 
 use crate::alloc::Allocator;
+use crate::vec::TryVecWithCloneError;
 use crate::vec::Vec;
+use core::fmt;
 pub use iter::{IntoIter, Iter};
+use olive_core::alloc_errors::TryReserveError;
+use olive_core::try_traits::try_clone::TryCloneError;
 pub use peek::PeekMut;
 
 /// A max-heap binary tree stored in a growable [`Vec`].
@@ -90,6 +94,71 @@ impl<T, A: Allocator> BinaryHeap<T, A> {
         Self {
             data,
             poisoned: false,
+        }
+    }
+}
+
+/// Error type for binary-heap operations that can fail either for lack of
+/// memory or for a failed element clone.
+///
+/// Covers `try_extend` over borrowed elements and `try_extend_from_slice`
+/// — or any operation whose failure modes are limited to a capacity
+/// reservation ([`TryReserveError`]) or an element clone failure
+/// ([`TryCloneError`]).
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryBinaryHeapWithCloneError {
+    /// A capacity reservation on the backing vector failed (overflow or OOM).
+    Reserve(TryReserveError),
+    /// An element clone failed during a method that requires `TryClone`.
+    Clone(TryCloneError),
+}
+
+impl fmt::Debug for TryBinaryHeapWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reserve(e) => f
+                .debug_tuple("TryBinaryHeapWithCloneError::Reserve")
+                .field(e)
+                .finish(),
+            Self::Clone(e) => f
+                .debug_tuple("TryBinaryHeapWithCloneError::Clone")
+                .field(e)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryBinaryHeapWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reserve(e) => write!(f, "binary heap operation failed: {e}"),
+            Self::Clone(e) => write!(f, "binary heap operation failed: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryBinaryHeapWithCloneError {}
+
+impl From<TryReserveError> for TryBinaryHeapWithCloneError {
+    #[inline]
+    fn from(err: TryReserveError) -> Self {
+        Self::Reserve(err)
+    }
+}
+
+impl From<TryCloneError> for TryBinaryHeapWithCloneError {
+    #[inline]
+    fn from(err: TryCloneError) -> Self {
+        Self::Clone(err)
+    }
+}
+
+impl From<TryVecWithCloneError> for TryBinaryHeapWithCloneError {
+    #[inline]
+    fn from(err: TryVecWithCloneError) -> Self {
+        match err {
+            TryVecWithCloneError::Reserve(e) => Self::Reserve(e),
+            TryVecWithCloneError::Clone(e) => Self::Clone(e),
         }
     }
 }

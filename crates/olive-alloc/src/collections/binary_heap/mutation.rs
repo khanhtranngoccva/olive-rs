@@ -18,6 +18,7 @@
 use core::ops::{Deref, DerefMut};
 
 use super::BinaryHeap;
+use super::poison::PoisonOnUnwind;
 use crate::alloc::Allocator;
 use crate::vec::Vec;
 
@@ -69,6 +70,62 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     #[inline]
     pub fn into_vec(self) -> Vec<T, A> {
         self.data
+    }
+
+    /// Retains only the elements the predicate accepts.
+    ///
+    /// In other words, removes all elements `e` for which `f(&e)` returns
+    /// `false`, dropping the displaced values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the heap is poisoned. If an `Ord` comparison panics
+    /// during the closing rebuild, the heap is poisoned with every
+    /// surviving element still present; [`rebuild`](BinaryHeap::rebuild)
+    /// restores the invariant.
+    ///
+    /// A panicking *predicate* does not poison the heap, for the tail
+    /// behind the first element will always be rebuilt.
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.assume_unpoisoned();
+        let mut guard = RebuildTailOnDrop::new(self, self.len());
+        let mut i = 0usize;
+        // The closure may only narrow the window to the first removed
+        // slot; the prefix before it was never touched and is still a
+        // proper heap.
+        guard.heap.data.retain(|e| {
+            let keep = f(e);
+            if !keep && i < guard.start {
+                guard.start = i;
+            }
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "one step per element of a finite slice"
+            )]
+            {
+                i += 1;
+            }
+            keep
+        });
+    }
+
+    /// Removes and returns the largest item, but only if the predicate
+    /// accepts it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the heap is poisoned, or if an `Ord` comparison panics
+    /// while popping — [`pop`](BinaryHeap::pop)'s rollback restores the
+    /// heap without triggering the poison flag.
+    pub fn pop_if<F>(&mut self, mut predicate: F) -> Option<T>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let first = self.peek()?;
+        if predicate(first) { self.pop() } else { None }
     }
 }
 
@@ -128,6 +185,50 @@ impl<T, A: Allocator> Drop for PopRollback<'_, T, A> {
     }
 }
 
+/// Critical section shared by [`retain`](BinaryHeap::retain) and the
+/// [`try_extend`](olive_core::try_traits::TryExtend::try_extend) family:
+/// it owns the heap for as long as `data[start..]` is
+/// known not to be a proper heap, and its `Drop` closes the window by
+/// rebuilding the tail.
+pub(super) struct RebuildTailOnDrop<'a, T: Ord, A: Allocator> {
+    /// First index whose heap property is no longer guaranteed.
+    start: usize,
+    heap: &'a mut BinaryHeap<T, A>,
+}
+
+impl<'a, T: Ord, A: Allocator> RebuildTailOnDrop<'a, T, A> {
+    /// Opens a rebuild window over `data[start..]` for the lifetime of the
+    /// returned guard. `start` must not exceed the heap's length.
+    pub(super) fn new(heap: &'a mut BinaryHeap<T, A>, start: usize) -> Self {
+        Self { start, heap }
+    }
+}
+
+impl<T: Ord, A: Allocator> Deref for RebuildTailOnDrop<'_, T, A> {
+    type Target = BinaryHeap<T, A>;
+
+    fn deref(&self) -> &Self::Target {
+        self.heap
+    }
+}
+
+impl<T: Ord, A: Allocator> DerefMut for RebuildTailOnDrop<'_, T, A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.heap
+    }
+}
+
+impl<T: Ord, A: Allocator> Drop for RebuildTailOnDrop<'_, T, A> {
+    fn drop(&mut self) {
+        // The window may only cover a tail of the current view. The caller may then lower
+        // `start` or increase the number of actual elements, as long as this invariant still holds.
+        debug_assert!(self.start <= self.heap.data.len());
+        let mut quarantine = PoisonOnUnwind::new(&mut *self.heap);
+        quarantine.rebuild_tail(self.start);
+        core::mem::forget(quarantine);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -139,6 +240,7 @@ mod tests {
     use std::panic;
     use std::sync::Arc;
     use std::vec;
+    use std::vec::Vec;
 
     fn heap_of<I: IntoIterator<Item = i32>>(items: I) -> BinaryHeap<i32> {
         BinaryHeap::try_from_iter(items).expect("allocation ok")
@@ -228,5 +330,103 @@ mod tests {
         heap.clear();
         assert!(!heap.is_poisoned());
         assert!(heap.pop().is_none());
+    }
+
+    // --- retain --------------------------------------------------------------
+
+    #[test]
+    fn retain_keeps_exactly_the_matching_multiset() {
+        let mut heap = heap_of([9, 5, 1, 7, 3, 8, 2, 4]);
+        heap.retain(|value| *value >= 5);
+        let mut out = Vec::new();
+        while let Some(item) = heap.pop() {
+            out.push(item);
+        }
+        assert_eq!(out, std::vec![9, 8, 7, 5]);
+        assert!(!heap.is_poisoned());
+    }
+
+    #[test]
+    fn retain_never_and_always_stay_valid() {
+        let mut heap = heap_of([3, 1, 2]);
+        heap.retain(|_| true);
+        let mut out = Vec::new();
+        while let Some(item) = heap.pop() {
+            out.push(item);
+        }
+        assert_eq!(out, std::vec![3, 2, 1]);
+
+        let mut heap = heap_of([3, 1, 2]);
+        heap.retain(|_| false);
+        assert!(heap.is_empty());
+        assert!(!heap.is_poisoned());
+        // The emptied heap stays usable.
+        heap.try_push(7).expect("the heap is usable after emptying");
+        assert_eq!(heap.peek(), Some(&7));
+    }
+
+    #[test]
+    fn retain_poisons_when_the_closing_rebuild_detonates() {
+        let armer = Arc::new(PanicArmer::new());
+        let mut heap = BinaryHeap::try_from_iter(
+            [7, 6, 5, 4, 3, 2, 1]
+                .iter()
+                .map(|value| PanickyOrd::new(*value, Arc::clone(&armer))),
+        )
+        .expect("allocation ok");
+
+        // Removing the root forces the closing rebuild to compare.
+        armer.arm();
+        let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            heap.retain(|&PanickyOrd { value, .. }| value != 7);
+        }));
+        assert!(outcome.is_err(), "the armed rebuild must detonate");
+        assert!(heap.is_poisoned(), "the window quarantines the heap");
+        assert_eq!(heap.len(), 6, "survivors are honored, not discarded");
+
+        armer.disarm();
+        heap.rebuild();
+        assert!(!heap.is_poisoned());
+        let mut out = Vec::new();
+        while let Some(item) = heap.pop() {
+            out.push(item.value);
+        }
+        assert_eq!(out, std::vec![6, 5, 4, 3, 2, 1]);
+    }
+
+    // --- pop_if --------------------------------------------------------------
+
+    #[test]
+    fn pop_if_takes_the_head_when_the_predicate_agrees() {
+        let mut heap = heap_of([9, 5, 7]);
+        assert_eq!(heap.pop_if(|value| *value > 8), Some(9));
+        assert_eq!(heap.peek(), Some(&7));
+        let mut out = Vec::new();
+        while let Some(item) = heap.pop() {
+            out.push(item);
+        }
+        assert_eq!(out, std::vec![7, 5]);
+    }
+
+    #[test]
+    fn pop_if_leaves_the_heap_untouched_when_the_predicate_does_not_match() {
+        let mut heap = heap_of([9, 5, 7]);
+        assert_eq!(heap.pop_if(|value| *value > 100), None);
+        assert_eq!(heap.len(), 3);
+        assert_eq!(heap.peek(), Some(&9));
+    }
+
+    #[test]
+    fn pop_if_on_an_empty_heap_never_asks_the_predicate() {
+        let mut heap: BinaryHeap<i32> = BinaryHeap::new();
+        let mut calls = 0usize;
+        assert_eq!(
+            heap.pop_if(|_| {
+                calls += 1;
+                true
+            }),
+            None
+        );
+        assert_eq!(calls, 0);
     }
 }

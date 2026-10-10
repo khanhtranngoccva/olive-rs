@@ -376,6 +376,11 @@ impl<T> MaybeUnclonable<T> {
             cloneable: false,
         }
     }
+
+    /// Set whether the element is clonable or not.
+    pub const fn set_clonable(&mut self, clonable: bool) {
+        self.cloneable = clonable;
+    }
 }
 
 impl<T: PartialEq> PartialEq for MaybeUnclonable<T> {

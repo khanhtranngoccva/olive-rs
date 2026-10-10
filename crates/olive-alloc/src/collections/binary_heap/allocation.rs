@@ -100,6 +100,88 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         core::mem::forget(quarantine);
         Ok(())
     }
+
+    /// Attempts to reserve capacity for at least `additional` more elements.
+    ///
+    /// The collection may grow beyond `additional`, mirroring
+    /// [`Vec::try_reserve`]'s amortized growth.
+    ///
+    /// [`Vec::try_reserve`]: crate::vec::Vec::try_reserve
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if growing the buffer fails or the
+    /// capacity computation overflows. The heap is unchanged in both cases.
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.data.try_reserve(additional)
+    }
+
+    /// Attempts to reserve the exact capacity for `additional` more
+    /// elements.
+    ///
+    /// Prefer [`try_reserve`](Self::try_reserve) unless the exact element
+    /// count is already known: an exact reservation defeats the amortized
+    /// doubling and can make repeated growth quadratic.
+    ///
+    /// Like [`try_reserve`](Self::try_reserve), this runs no comparisons
+    /// and leaves the poison flag alone.
+    ///
+    /// [`Vec::try_reserve_exact`]: crate::vec::Vec::try_reserve_exact
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if growing the buffer fails or the
+    /// capacity computation overflows. The heap is unchanged in both cases.
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.data.try_reserve_exact(additional)
+    }
+
+    /// Attempts to reserve capacity for at least `additional` more
+    /// elements: amortized growth first, falling back to an exact
+    /// reservation when the amortized one fails, mirroring
+    /// [`Vec::try_reserve_adaptive`].
+    ///
+    /// Like [`try_reserve`](Self::try_reserve), this runs no comparisons
+    /// and leaves the poison flag alone.
+    ///
+    /// [`Vec::try_reserve_adaptive`]: crate::vec::Vec::try_reserve_adaptive
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if both the amortized and the exact
+    /// reservation fail. The heap is unchanged in that case.
+    pub fn try_reserve_adaptive(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.data.try_reserve_adaptive(additional)
+    }
+
+    /// Attempts to shrink the capacity as much as possible while still
+    /// holding `min_capacity` elements, mirroring [`Vec::try_shrink_to`].
+    ///
+    /// A `min_capacity` below the current length is treated as the
+    /// length.
+    ///
+    /// [`Vec::try_shrink_to`]: crate::vec::Vec::try_shrink_to
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the shrink cannot reallocate. The
+    /// heap keeps its old buffer and capacity in that case.
+    pub fn try_shrink_to(&mut self, min_capacity: usize) -> Result<(), TryReserveError> {
+        self.data.try_shrink_to(min_capacity)
+    }
+
+    /// Attempts to shrink the capacity down to the element count,
+    /// releasing every unused slot, mirroring [`Vec::try_shrink_to_fit`].
+    ///
+    /// [`Vec::try_shrink_to_fit`]: crate::vec::Vec::try_shrink_to_fit
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the shrink cannot reallocate. The
+    /// heap keeps its old buffer and capacity in that case.
+    pub fn try_shrink_to_fit(&mut self) -> Result<(), TryReserveError> {
+        self.data.try_shrink_to_fit()
+    }
 }
 
 #[cfg(test)]
@@ -305,5 +387,112 @@ mod tests {
             .expect("empty appends are trivial");
         assert_eq!(drain_i32_budgeted(&mut right), vec![3, 2, 1]);
         assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
+    }
+
+    // --- Capacity operations -------------------------------------------------
+
+    #[test]
+    fn try_reserve_satisfies_the_request_without_disturbing_the_heap() {
+        let mut heap = heap_of([5, 1, 9, 9, 0]);
+        heap.try_reserve(64).expect("global allocator has room");
+        assert!(
+            heap.capacity() >= heap.len() + 64,
+            "the request must be met"
+        );
+        assert!(!heap.is_poisoned());
+        assert_eq!(drain_i32(&mut heap), vec![9, 9, 5, 1, 0]);
+    }
+
+    #[test]
+    fn try_reserve_zero_never_asks_the_allocator() {
+        let alloc = BudgetedAlloc::new(8);
+        let mut heap = budgeted_heap(&[3, 1, 2], alloc.clone());
+        alloc.drain();
+        heap.try_reserve(0).expect("no room is needed");
+        heap.try_reserve_exact(0).expect("no room is needed");
+        heap.try_reserve_adaptive(0).expect("no room is needed");
+        assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
+        assert_eq!(drain_i32_budgeted(&mut heap), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn try_reserve_reports_an_exhausted_budget_intact() {
+        let alloc = BudgetedAlloc::new(8);
+        let mut heap = budgeted_heap(&[9, 5, 1], alloc.clone());
+        alloc.drain();
+        let error = heap.try_reserve(1024).expect_err("the budget is spent");
+        assert!(error.is_alloc(), "{error:?}");
+        assert_eq!(heap.len(), 3, "a refused reservation must not do anything else");
+        assert_eq!(drain_i32_budgeted(&mut heap), vec![9, 5, 1]);
+    }
+
+    #[test]
+    fn capacity_overflow_is_reported_as_such_by_every_reserve_flavor() {
+        let mut heap: BinaryHeap<i32> = BinaryHeap::new();
+        let error = heap.try_reserve(usize::MAX).expect_err("overflow");
+        assert!(error.is_capacity_overflow(), "{error:?}");
+        let error = heap.try_reserve_exact(usize::MAX).expect_err("overflow");
+        assert!(error.is_capacity_overflow(), "{error:?}");
+        let error = heap.try_reserve_adaptive(usize::MAX).expect_err("overflow");
+        assert!(error.is_capacity_overflow(), "{error:?}");
+        assert!(heap.is_empty());
+    }
+
+    #[test]
+    fn try_reserve_exact_grows_to_exactly_the_need() {
+        let mut heap: BinaryHeap<i32> = BinaryHeap::new();
+        for value in [1, 2, 3, 4, 5] {
+            heap.try_push(value).expect("infallible on this budget");
+        }
+        // One slot beyond the current capacity forces the exact path to
+        // reallocate; unlike the amortized path it lands on the need.
+        let need = heap.capacity() - heap.len() + 1;
+        heap.try_reserve_exact(need)
+            .expect("global allocator has room");
+        assert_eq!(heap.capacity(), heap.len() + need);
+        assert_eq!(drain_i32(&mut heap), vec![5, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn try_reserve_adaptive_satisfies_the_request() {
+        let mut heap = heap_of([4, 2]);
+        heap.try_reserve_adaptive(32)
+            .expect("global allocator has room");
+        assert!(
+            heap.capacity() >= heap.len() + 32,
+            "the request must be met"
+        );
+        assert_eq!(drain_i32(&mut heap), vec![4, 2]);
+    }
+
+    #[test]
+    fn try_shrink_to_fit_leaves_just_enough_room() {
+        let mut heap = heap_of([9, 8, 7, 6, 5, 4, 3, 2, 1]);
+        heap.try_reserve(32).expect("global allocator has room");
+        assert!(heap.capacity() > 9, "the fixture must carry slack");
+        heap.try_shrink_to_fit()
+            .expect("realloc to the live length");
+        assert_eq!(heap.capacity(), heap.len());
+        assert_eq!(
+            drain_i32(&mut heap),
+            vec![9, 8, 7, 6, 5, 4, 3, 2, 1],
+            "shrinking must preserve every element"
+        );
+    }
+
+    #[test]
+    fn try_shrink_to_honors_the_bound_and_treats_small_bounds_as_the_length() {
+        let mut heap = heap_of([9, 7, 5, 3, 1]);
+        heap.try_reserve(32).expect("global allocator has room");
+        // A bound far above the capacity is a no-op.
+        heap.try_shrink_to(usize::MAX / 2)
+            .expect("no work is required");
+        // A real bound trims to max(bound, len).
+        heap.try_shrink_to(8).expect("realloc to the bound");
+        assert_eq!(heap.capacity(), 8);
+        // A bound below the length is treated as the length.
+        heap.try_shrink_to(0).expect("the floor is the live length");
+        assert_eq!(heap.capacity(), heap.len());
+        assert_eq!(drain_i32(&mut heap), vec![9, 7, 5, 3, 1]);
     }
 }
