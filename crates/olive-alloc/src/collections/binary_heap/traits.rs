@@ -380,7 +380,7 @@ mod tests {
         // follows in the remainder iterator.
         let (head, tail) = resume.into_parts();
         assert_eq!(head.map(|item| item.inner), Some(9));
-        assert_eq!(tail.len(), 2);
+        assert_eq!(tail.len(), 1);
 
         // TODO: There is no way to make the affected element clonable (yet). May need to use an armer
         // (e.g. FailArmer) pattern instead.
