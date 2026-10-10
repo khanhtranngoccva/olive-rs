@@ -944,7 +944,7 @@ impl<A: Allocator> String<A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryStringExtendFromWithinError::OutOfBounds`] if the resolved
+    /// Returns [`TryStringExtendFromWithinError::InvalidRange`] if the resolved
     /// range exceeds the string's length, or
     /// [`TryStringExtendFromWithinError::Reserve`] if reserving room for the
     /// extra bytes fails.
@@ -1740,7 +1740,7 @@ impl Debug for TryStringExtendFromWithinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRange { start, end, len } => f
-                .debug_struct("TryStringExtendFromWithinError::OutOfBounds")
+                .debug_struct("TryStringExtendFromWithinError::InvalidRange")
                 .field("start", start)
                 .field("end", end)
                 .field("len", len)
@@ -1750,7 +1750,7 @@ impl Debug for TryStringExtendFromWithinError {
                 .field(e)
                 .finish(),
             Self::RangeOverflow => f
-                .debug_tuple("TryStringExtendFromWithinError::CapacityOverflow")
+                .debug_tuple("TryStringExtendFromWithinError::RangeOverflow")
                 .finish(),
         }
     }
