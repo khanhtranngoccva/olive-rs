@@ -971,10 +971,10 @@ impl<A: Allocator> String<A> {
         let start = r.start;
         let end = r.end;
         if !self.is_char_boundary(start) {
-            return Err(TryStringExtendFromWithinError::NotCharBoundary { index: start, len });
+            return Err(TryStringExtendFromWithinError::InvalidRange { start, end, len });
         }
         if !self.is_char_boundary(end) {
-            return Err(TryStringExtendFromWithinError::NotCharBoundary { index: end, len });
+            return Err(TryStringExtendFromWithinError::InvalidRange { start, end, len });
         }
         #[allow(
             clippy::arithmetic_side_effects,
@@ -1729,20 +1729,13 @@ impl core::error::Error for TryStringTruncateError {}
 /// Error returned by [`String::try_extend_from_within`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TryStringExtendFromWithinError {
-    /// The resolved range exceeded the string's length.
+    /// The resolved range exceeded the string's length, invalid,
+    /// or otherwise not on the character boundary of the string.
     InvalidRange {
         /// The computed start of the range.
         start: usize,
         /// The computed end of the range (noninclusive).
         end: usize,
-        /// The string's current length.
-        len: usize,
-    },
-    /// A range endpoint does not lie on a `char` boundary.
-    NotCharBoundary {
-        /// The first offending endpoint (`start`, or `end` if only `end` is
-        /// misaligned).
-        index: usize,
         /// The string's current length.
         len: usize,
     },
@@ -1761,11 +1754,6 @@ impl Debug for TryStringExtendFromWithinError {
                 .field("end", end)
                 .field("len", len)
                 .finish(),
-            Self::NotCharBoundary { index, len } => f
-                .debug_struct("TryStringExtendFromWithinError::NotCharBoundary")
-                .field("index", index)
-                .field("len", len)
-                .finish(),
             Self::Reserve(e) => f
                 .debug_tuple("TryStringExtendFromWithinError::Reserve")
                 .field(e)
@@ -1782,11 +1770,7 @@ impl Display for TryStringExtendFromWithinError {
         match self {
             Self::InvalidRange { start, end, len } => write!(
                 f,
-                "range [{start}, {end}) is out of bounds for string of length {len}"
-            ),
-            Self::NotCharBoundary { index, len } => write!(
-                f,
-                "endpoint {index} does not lie on a character boundary of a string of length {len}"
+                "range [{start}, {end}) is out of bounds, not on char boundaries, or otherwise invalid for string of length {len}"
             ),
             Self::Reserve(e) => write!(f, "{e}"),
             Self::RangeOverflow => write!(f, "arithmetic overflow while resolving range bounds"),
@@ -2674,7 +2658,11 @@ mod tests {
         let err = s.try_extend_from_within(1..3).unwrap_err();
         assert_eq!(
             err,
-            TryStringExtendFromWithinError::NotCharBoundary { index: 1, len: 3 }
+            TryStringExtendFromWithinError::InvalidRange {
+                start: 1,
+                end: 3,
+                len: 3
+            }
         );
         assert_eq!(s.deref(), "éa");
     }
@@ -2686,7 +2674,11 @@ mod tests {
         let err = s.try_extend_from_within(0..1).unwrap_err();
         assert_eq!(
             err,
-            TryStringExtendFromWithinError::NotCharBoundary { index: 1, len: 3 }
+            TryStringExtendFromWithinError::InvalidRange {
+                start: 0,
+                end: 1,
+                len: 3
+            }
         );
         assert_eq!(s.deref(), "éa");
     }
