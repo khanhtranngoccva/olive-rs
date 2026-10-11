@@ -948,6 +948,8 @@ impl<A: Allocator> String<A> {
     /// range exceeds the string's length, or
     /// [`TryStringExtendFromWithinError::Reserve`] if reserving room for the
     /// extra bytes fails.
+    /// Returns [`TryStringExtendFromWithinError::NotCharBoundary`] if either
+    /// endpoint falls inside a multi-byte `char`.
     pub fn try_extend_from_within<R: core::ops::RangeBounds<usize>>(
         &mut self,
         indices: R,
@@ -968,6 +970,12 @@ impl<A: Allocator> String<A> {
         })?;
         let start = r.start;
         let end = r.end;
+        if !self.is_char_boundary(start) {
+            return Err(TryStringExtendFromWithinError::NotCharBoundary { index: start, len });
+        }
+        if !self.is_char_boundary(end) {
+            return Err(TryStringExtendFromWithinError::NotCharBoundary { index: end, len });
+        }
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "start <= end (guaranteed by try_range)"
@@ -1721,12 +1729,20 @@ impl core::error::Error for TryStringTruncateError {}
 /// Error returned by [`String::try_extend_from_within`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TryStringExtendFromWithinError {
-    /// The resolved range exceeded the string's length, .
+    /// The resolved range exceeded the string's length.
     InvalidRange {
         /// The computed start of the range.
         start: usize,
         /// The computed end of the range (noninclusive).
         end: usize,
+        /// The string's current length.
+        len: usize,
+    },
+    /// A range endpoint does not lie on a `char` boundary.
+    NotCharBoundary {
+        /// The first offending endpoint (`start`, or `end` if only `end` is
+        /// misaligned).
+        index: usize,
         /// The string's current length.
         len: usize,
     },
@@ -1743,6 +1759,11 @@ impl Debug for TryStringExtendFromWithinError {
                 .debug_struct("TryStringExtendFromWithinError::InvalidRange")
                 .field("start", start)
                 .field("end", end)
+                .field("len", len)
+                .finish(),
+            Self::NotCharBoundary { index, len } => f
+                .debug_struct("TryStringExtendFromWithinError::NotCharBoundary")
+                .field("index", index)
                 .field("len", len)
                 .finish(),
             Self::Reserve(e) => f
@@ -1762,6 +1783,10 @@ impl Display for TryStringExtendFromWithinError {
             Self::InvalidRange { start, end, len } => write!(
                 f,
                 "range [{start}, {end}) is out of bounds for string of length {len}"
+            ),
+            Self::NotCharBoundary { index, len } => write!(
+                f,
+                "endpoint {index} does not lie on a character boundary of a string of length {len}"
             ),
             Self::Reserve(e) => write!(f, "{e}"),
             Self::RangeOverflow => write!(f, "arithmetic overflow while resolving range bounds"),
@@ -2638,6 +2663,32 @@ mod tests {
         let mut s = mk("ab");
         s.try_extend_from_within(1..1).unwrap();
         assert_eq!(s.deref(), "ab");
+    }
+
+    /// Regression: a range whose start splits a multi-byte `char` used to be
+    /// copied byte-for-byte, producing invalid UTF-8 (UB once exposed through
+    /// `Deref`'s `from_utf8_unchecked`). It must be rejected instead.
+    #[test]
+    fn extend_from_within_rejects_non_char_boundary_start() {
+        let mut s = mk("éa"); // 'é' occupies bytes 0..2; byte 1 is inside it.
+        let err = s.try_extend_from_within(1..3).unwrap_err();
+        assert_eq!(
+            err,
+            TryStringExtendFromWithinError::NotCharBoundary { index: 1, len: 3 }
+        );
+        assert_eq!(s.deref(), "éa");
+    }
+
+    /// Regression: the same check must also guard the range's end endpoint.
+    #[test]
+    fn extend_from_within_rejects_non_char_boundary_end() {
+        let mut s = mk("éa");
+        let err = s.try_extend_from_within(0..1).unwrap_err();
+        assert_eq!(
+            err,
+            TryStringExtendFromWithinError::NotCharBoundary { index: 1, len: 3 }
+        );
+        assert_eq!(s.deref(), "éa");
     }
 
     // ── try_replace_range ─────────────────────────────────────────────────────

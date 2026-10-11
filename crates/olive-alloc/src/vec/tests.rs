@@ -1770,6 +1770,48 @@ fn drain_zst() {
     assert_eq!(v.len(), 3);
 }
 
+/// Regression: `Drain::drop` used to skip the step-1 destruction of the
+/// unconsumed remainder whenever `size_of::<T>() == 0`, so a partially
+/// consumed drain over a ZST with a `Drop` impl leaked destructor calls.
+/// A ZST still owns a logical value, and every unconsumed element must run
+/// its destructor exactly once.
+#[test]
+fn drain_partial_consume_of_zst_runs_destructors() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread_local;
+
+    thread_local! {
+        static DROPS: Cell<usize> = Cell::new(0);
+    }
+
+    struct ZstWithDrop;
+    impl Drop for ZstWithDrop {
+        fn drop(&mut self) {
+            DROPS.set(DROPS.get() + 1);
+        }
+    }
+
+    let mut v: Vec<ZstWithDrop> = Vec::new();
+    for _ in 0..5 {
+        v.try_push(ZstWithDrop).unwrap();
+    }
+
+    let mut d = v.try_drain(1..3).unwrap();
+    // Consume exactly one of the two drained elements.
+    let taken = d.next().expect("drained element");
+    drop(taken);
+    // Dropping the drain must destroy the one unconsumed element.
+    drop(d);
+
+    // Both elements of the drained range have now been destroyed.
+    assert_eq!(DROPS.get(), 2);
+    // The three survivors are untouched.
+    assert_eq!(v.len(), 3);
+    drop(v);
+    assert_eq!(DROPS.get(), 5);
+}
+
 #[test]
 fn drain_out_of_bounds_errors() {
     let mut v = Vec::new();

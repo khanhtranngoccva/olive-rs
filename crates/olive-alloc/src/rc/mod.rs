@@ -2117,8 +2117,13 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = A::try_clone(&self.alloc)?;
-        // SAFETY: bumping the weak count keeps the allocation alive for the new
-        // handle; no allocation is involved.
+        if is_dangling_weak(self.ptr.as_ptr()) {
+            return Ok(Weak {
+                ptr: self.ptr,
+                alloc,
+                _marker: PhantomData,
+            });
+        }
         unsafe {
             let inner = self.ptr.as_ptr();
             (*inner)
@@ -2550,6 +2555,18 @@ mod tests {
         // And the fallible twin agrees.
         let c: Weak<i32> = TryDefault::try_default().unwrap();
         assert!(c.try_upgrade().unwrap().is_none());
+    }
+
+    /// Regression: cloning a dangling `Weak` (from `Weak::new`) must not
+    /// dereference the sentinel address. The clone must behave as another
+    /// dangling weak — it upgrades to `None` and compares pointer-equal —
+    /// and dropping both must remain a no-op.
+    #[test]
+    fn weak_new_try_clone_stays_dangling() {
+        let w: Weak<i32> = Weak::new();
+        let c = w.try_clone().unwrap();
+        assert!(c.try_upgrade().unwrap().is_none());
+        assert!(w.ptr_eq(&c));
     }
 
     // -----------------------------------------------------------------------

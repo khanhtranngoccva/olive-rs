@@ -326,7 +326,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         };
 
         // Step 1: destroy the unconsumed remainder of the drain range.
-        if remaining > 0 && size_of::<T>() != 0 {
+        if remaining > 0 {
             #[allow(clippy::arithmetic_side_effects, reason = "consumed <= original_count")]
             let hole_offset = original_start + consumed;
             unsafe {
