@@ -11,7 +11,7 @@ operation that can fail — above all, any heap allocation — returns a `Result
 instead of panicking, so out-of-memory becomes recoverable rather than fatal.
 Allocation failure is *never* fatal; that is the invariant the whole crate is
 built on, and it constrains design choices (it is why, e.g., a fallible `Splice`
-was skipped outright — see [`TODO.md`](./TODO.md)).
+was skipped outright — see [`TODO.md`](./scratch/TODO.md)).
 
 Three crates, mirroring the standard library's own layering:
 

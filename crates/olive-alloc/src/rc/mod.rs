@@ -1733,11 +1733,6 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Rc<T, A> {
 impl<T: ?Sized, A: Allocator> Drop for Rc<T, A> {
     #[inline]
     fn drop(&mut self) {
-        // Decrement the strong count through an exclusive `&mut` re-borrow
-        // (`inner_mut`) rather than aliasing a shared borrow against the write,
-        // which Stacked Borrows would reject. The helper reports out-of-bounds
-        // conditions, which are unreachable here: we own a live strong
-        // reference, so the count is at least one and cannot underflow.
         let inner = Rc::inner(self);
         inner.dec_strong().expect("strong count underflow");
         if is_last_strong(inner.strong()) {

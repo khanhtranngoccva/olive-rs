@@ -13,6 +13,13 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use super::Box;
 
 // ---------------------------------------------------------------------------
+// Send / Sync
+// ---------------------------------------------------------------------------
+
+unsafe impl<T: ?Sized + Send, A: Allocator + Send> Send for Box<T, A> {}
+unsafe impl<T: ?Sized + Sync, A: Allocator + Sync> Sync for Box<T, A> {}
+
+// ---------------------------------------------------------------------------
 // Deref / DerefMut
 // ---------------------------------------------------------------------------
 

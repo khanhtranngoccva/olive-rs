@@ -455,14 +455,22 @@ impl<K, V, A: Allocator> ExactSizeIterator for IntoIter<K, V, A> {
 
 impl<K, V, A: Allocator> Drop for IntoIter<K, V, A> {
     fn drop(&mut self) {
-        // Exhaust the remaining entries, dropping each key/value in place and deallocating
-        // every node as we climb back up to the root. The walk is panic-free — `dying_next`
-        // is guarded by the `length` counter and `deallocating_end` only fires once it hits
-        // zero — so no unwind guard is needed. Unlike std's `BTreeMap` drop, we never read the
-        // reserve stack here: it is provably empty (see `move_fields_to_iterator`).
+        struct DropGuard<'a, K, V, A: Allocator>(&'a mut IntoIter<K, V, A>);
+
+        impl<K, V, A: Allocator> Drop for DropGuard<'_, K, V, A> {
+            fn drop(&mut self) {
+                while let Some(kv) = self.0.dying_next() {
+                    // SAFETY: we consume the dying handle immediately and don't touch the tree first.
+                    unsafe { kv.drop_key_val() };
+                }
+            }
+        }
+
         while let Some(kv) = self.dying_next() {
+            let guard = DropGuard(self);
             // SAFETY: we consume the dying handle immediately and don't touch the tree first.
             unsafe { kv.drop_key_val() };
+            core::mem::forget(guard);
         }
     }
 }
@@ -1489,5 +1497,46 @@ mod tests {
             ledger.double_dropped()
         );
         assert_eq!(ledger.total_allocated(), 400);
+    }
+
+    #[test]
+    fn into_iter_drop_drops_remaining_entries_when_one_destructor_panics() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct MaybePanic {
+            armed: Arc<AtomicBool>,
+            counter: Arc<crate::test_helpers::DropCounter>,
+        }
+        impl Drop for MaybePanic {
+            fn drop(&mut self) {
+                self.counter.record_drop();
+                if self.armed.swap(false, Ordering::SeqCst) {
+                    panic!("boom during IntoIter drop");
+                }
+            }
+        }
+
+        let armed = Arc::new(AtomicBool::new(true));
+        let counter = Arc::new(crate::test_helpers::DropCounter::new());
+        let mut map: BTreeMap<u32, MaybePanic> = BTreeMap::new_in(Global);
+        for i in 0..8u32 {
+            map.try_insert(
+                i,
+                MaybePanic {
+                    armed: armed.clone(),
+                    counter: counter.clone(),
+                },
+            )
+            .unwrap();
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(move || drop(map)));
+        assert!(result.is_err(), "the destructor should have unwound");
+        assert_eq!(
+            counter.get(),
+            8,
+            "all values must still be dropped when one destructor panics"
+        );
     }
 }

@@ -226,10 +226,8 @@ impl<T, A: Allocator> Drop for IntoIter<T, A> {
 
 impl<T: Debug, A: Allocator> Debug for IntoIter<T, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debugger = f.debug_list();
-        if self.remaining() > 0 {
-            debugger.entries(self.as_slice());
-        }
-        debugger.finish()
+        // Match std: the remaining elements are wrapped in an `IntoIter(...)`
+        // tuple, not printed as a bare list.
+        f.debug_tuple("IntoIter").field(&self.as_slice()).finish()
     }
 }

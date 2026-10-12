@@ -491,3 +491,15 @@ fn test_box_pinned_panic_on_drop_frees_allocation() {
         "Pin<Box> must free its allocation even when the pointee's drop panics"
     );
 }
+
+#[test]
+fn box_send_sync_bounds_hold() {
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    assert_send::<Box<i32, Global>>();
+    assert_sync::<Box<i32, Global>>();
+    assert_send::<Box<str, Global>>();
+    assert_sync::<Box<str, Global>>();
+    assert_send::<Box<dyn Send, Global>>();
+    assert_sync::<Box<dyn Sync, Global>>();
+}

@@ -190,7 +190,11 @@ mod tests {
         let mut taken = Vec::new();
         let mut from_front = true;
         loop {
-            let item = if from_front { it.next() } else { it.next_back() };
+            let item = if from_front {
+                it.next()
+            } else {
+                it.next_back()
+            };
             from_front = !from_front;
             match item {
                 Some(item) => taken.push(item),

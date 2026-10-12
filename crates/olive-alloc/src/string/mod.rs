@@ -40,6 +40,7 @@ use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{self, Debug, Display, Write};
 use core::hash::Hash;
 use core::hash::Hasher;
+use core::iter::FusedIterator;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 pub use into_chars::IntoChars;
@@ -173,7 +174,7 @@ impl String {
     ///
     /// # Errors
     ///
-    /// Returns [`TryFromUtf16Error`] if reserving the buffer fails.
+    /// Returns [`TryReserveError`] if reserving the buffer fails.
     pub fn try_from_utf16_lossy(input: &[u16]) -> Result<Self, TryReserveError> {
         Self::try_from_utf16_lossy_in(input, Global)
     }
@@ -186,7 +187,7 @@ impl String {
     ///
     /// # Errors
     ///
-    /// Returns [`TryFromUtf16Error`] if reserving the buffer fails.
+    /// Returns [`TryReserveError`] if reserving the buffer fails.
     pub fn try_from_utf16be_lossy(input: &[u8]) -> Result<Self, TryReserveError> {
         Self::try_from_utf16be_lossy_in(input, Global)
     }
@@ -199,7 +200,7 @@ impl String {
     ///
     /// # Errors
     ///
-    /// Returns [`TryFromUtf16Error`] if reserving the buffer fails.
+    /// Returns [`TryReserveError`] if reserving the buffer fails.
     pub fn try_from_utf16le_lossy(input: &[u8]) -> Result<Self, TryReserveError> {
         Self::try_from_utf16le_lossy_in(input, Global)
     }
@@ -1038,8 +1039,8 @@ impl<A: Allocator> String<A> {
             TrySliceRangeError::StartExceedsEnd { start, end, .. } => {
                 TryStringReplaceRangeError::InvalidRange { start, end, len }
             }
-            TrySliceRangeError::EndExceedsBound { end, .. } => {
-                TryStringReplaceRangeError::InvalidRange { start: 0, end, len }
+            TrySliceRangeError::EndExceedsBound { start, end, .. } => {
+                TryStringReplaceRangeError::InvalidRange { start, end, len }
             }
         })?;
         let start = r.start;
@@ -1181,7 +1182,7 @@ impl<A: Allocator> String<A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryFromUtf16Error`] if reserving the buffer fails.
+    /// Returns [`TryReserveError`] if reserving the buffer fails.
     #[allow(clippy::arithmetic_side_effects)]
     pub fn try_from_utf16_lossy_in(input: &[u16], alloc: A) -> Result<Self, TryReserveError> {
         Self::try_from_codeunits_lossy_in(input.iter().cloned(), input.len(), alloc)
@@ -1270,6 +1271,7 @@ impl<A: Allocator> String<A> {
     ) -> Result<Self, TryFromUtf16Error>
     where
         I: IntoIterator<Item = u16>,
+        I::IntoIter: FusedIterator,
     {
         // Reserve ahead of time
         let cap = count
@@ -1281,25 +1283,34 @@ impl<A: Allocator> String<A> {
             kind: TryFromUtf16ErrorKind::Reserve(e),
         })?;
 
-        // Wrap the iterator so that each unit pulled increments a counter.
         // When `char::decode_utf16` reports an error, the counter tells us
-        // how many units were consumed up to (and including) the offending one.
+        // how many units were consumed up to (and including) the offending one,
+        // and whether the iterator has stopped.
         let units_consumed = core::cell::Cell::new(0usize);
-        let counting_iter = input.into_iter().inspect(|_| {
-            let prev = units_consumed.get();
-            #[allow(clippy::arithmetic_side_effects, reason = "bounded by count")]
-            {
-                units_consumed.set(prev + 1);
-            }
-        });
+        let terminated = core::cell::Cell::new(false);
+        let hooked_iter = input
+            .into_iter()
+            .inspect(|_| {
+                let prev = units_consumed.get();
+                #[allow(clippy::arithmetic_side_effects, reason = "bounded by count")]
+                {
+                    units_consumed.set(prev + 1);
+                }
+            })
+            .chain(core::iter::from_fn(|| {
+                terminated.set(true);
+                None
+            }));
 
-        for decoded in char::decode_utf16(counting_iter) {
+        for decoded in char::decode_utf16(hooked_iter) {
             let ch = decoded.map_err(|_| {
-                // `units_consumed` now points past the lone surrogate (it was
-                // the last unit pulled). The offending unit is at index
-                // `units_consumed - 1`.
-                #[allow(clippy::arithmetic_side_effects, reason = "at least one unit consumed")]
-                let pos = units_consumed.get() - 1;
+                // There are two scenarios:
+                // - The lone surrogate does not have anything following it
+                // (terminated = true), in which case subtracting 1 codeunit is correct.
+                // - The lone surrogate has something following it
+                // (terminated = false), so one must subtract 2 codeunits.
+                let deducted = if terminated.get() { 1 } else { 2 };
+                let pos = units_consumed.get().saturating_sub(deducted);
                 TryFromUtf16Error {
                     kind: TryFromUtf16ErrorKind::LoneSurrogate(pos),
                 }
@@ -1340,7 +1351,7 @@ impl<A: Allocator> String<A> {
 /// function usable in lossless implementations.
 fn convert_slice_to_u16_le_iter(
     input: &[u8],
-) -> Result<(impl Iterator<Item = u16>, usize), TryReserveError> {
+) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
     // If `even_bytes` is false, then the last chunk is odd and malformed, and input.len() / 2
     // will round down, so adding 1 is necessary.
     let even_bytes = input.len() & 1 == 0;
@@ -1363,7 +1374,7 @@ fn convert_slice_to_u16_le_iter(
 /// function usable in lossless implementations.
 fn convert_slice_to_u16_be_iter(
     input: &[u8],
-) -> Result<(impl Iterator<Item = u16>, usize), TryReserveError> {
+) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
     // If `even_bytes` is false, then the last chunk is odd and malformed, and input.len() / 2
     // will round down, so adding 1 is necessary.
     let even_bytes = input.len() & 1 == 0;
@@ -2470,6 +2481,27 @@ mod tests {
         assert!(matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate(0)));
     }
 
+    /// Regression: a lone high surrogate followed by a non-low-surrogate unit
+    /// must report the *high* surrogate's index, not the follower's.
+    #[test]
+    fn utf16_lone_high_surrogate_follower_index() {
+        let units: &[u16] = &[0xD800, 0x0041];
+        let err = String::try_from_utf16(units).unwrap_err();
+        assert!(
+            matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate(0)),
+            "got {:?}",
+            err.kind
+        );
+        // The logical index must hold for the LE byte-slice entry point too.
+        let bytes: &[u8] = &[0x00, 0xD8, 0x41, 0x00];
+        let err = String::try_from_utf16le(bytes).unwrap_err();
+        assert!(
+            matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate(0)),
+            "got {:?}",
+            err.kind
+        );
+    }
+
     #[test]
     fn utf16_le_odd_bytes_rejected() {
         let bytes: &[u8] = &[0x68, 0x00, 0x69];
@@ -2732,6 +2764,22 @@ mod tests {
         // Construct an out-of-order range without triggering clippy::reversed_empty_ranges.
         let r = core::ops::Range { start: 2, end: 1 };
         assert!(s.try_replace_range(r, "x").is_err());
+    }
+
+    /// Regression: an out-of-bounds `end` must preserve the computed `start`
+    /// in the reported error, not flatten it to 0.
+    #[test]
+    fn replace_range_end_oob_reports_start() {
+        let mut s = mk("abcde");
+        let err = s.try_replace_range(2..10, "x").unwrap_err();
+        assert!(matches!(
+            err,
+            TryStringReplaceRangeError::InvalidRange {
+                start: 2,
+                end: 10,
+                len: 5,
+            }
+        ));
     }
 
     // ── cross-type comparison & AsMut<str> ────────────────────────────────────

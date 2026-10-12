@@ -335,8 +335,8 @@ impl<I: DoubleEndedIterator + FusedIterator + ?Sized> DoubleEndedPeekableExt for
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use crate::prelude::TryClone;
     use super::*;
+    use crate::prelude::TryClone;
 
     #[test]
     fn basic_two_way_peek() {

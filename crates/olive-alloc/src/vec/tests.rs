@@ -1778,11 +1778,10 @@ fn drain_zst() {
 #[test]
 fn drain_partial_consume_of_zst_runs_destructors() {
     use std::cell::Cell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread_local;
 
     thread_local! {
-        static DROPS: Cell<usize> = Cell::new(0);
+        static DROPS: Cell<usize> = const { Cell::new(0) };
     }
 
     struct ZstWithDrop;
@@ -2728,6 +2727,30 @@ fn vec_partial_eq_cross_type_vs_slice() {
     let s_mut: &mut [i32] = &mut [1, 2, 3];
     assert_eq!(v, s);
     assert_eq!(v, s_mut);
+    assert_eq!(v, *s);
+
+    let ne = mk_vec(&[1, 2, 4]);
+    assert_ne!(ne, s);
+    assert_ne!(ne, s_mut);
+    assert_ne!(ne, *s);
+}
+
+#[test]
+fn vec_partial_eq_reverse_vs_slice() {
+    let v = mk_vec(&[1, 2, 3]);
+    let s: &[i32] = &[1, 2, 3];
+    let s_mut: &mut [i32] = &mut [1, 2, 3];
+
+    assert_eq!(s, v);
+    assert_eq!(s_mut, v);
+    assert_eq!(*s, v);
+
+    let ne: &[i32] = &[1, 2, 4];
+    let ne_mut: &mut [i32] = &mut [1, 2, 4];
+
+    assert_ne!(ne, v);
+    assert_ne!(ne_mut, v);
+    assert_ne!(*ne, v);
 }
 
 #[test]
@@ -2737,6 +2760,110 @@ fn vec_partial_eq_cross_type_vs_array() {
     assert_eq!(v, a);
     assert_eq!(v, &a);
     assert_eq!(v, &mut a);
+
+    let ne = mk_vec(&[1, 2, 4]);
+    assert_ne!(ne, a);
+    assert_ne!(ne, &a);
+    assert_ne!(ne, &mut a);
+}
+
+#[test]
+fn vec_partial_eq_reverse_vs_array() {
+    let v = mk_vec(&[1, 2, 3]);
+    let mut a: [i32; 3] = [1, 2, 3];
+    assert_eq!(a, v);
+    assert_eq!(&a, v);
+    assert_eq!(&mut a, v);
+
+    let mut ne: [i32; 3] = [1, 2, 4];
+    assert_ne!(ne, v);
+    assert_ne!(&ne, v);
+    assert_ne!(&mut ne, v);
+
+    // Length and element mismatches compare unequal.
+    assert_ne!(a, mk_vec(&[1, 2, 4]));
+    assert_ne!(a, mk_vec(&[1, 2]));
+}
+
+#[test]
+fn vec_partial_eq_cross_allocator() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+
+    let a = mk_vec(&[1, 2, 3]);
+    let mut b: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+    for x in [1, 2, 3] {
+        b.try_push(x).unwrap();
+    }
+    assert_eq!(a, b);
+    assert_eq!(b, a);
+
+    let mut c: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+    for x in [1, 2, 4] {
+        c.try_push(x).unwrap();
+    }
+    assert_ne!(a, c);
+}
+
+#[test]
+fn vec_partial_ord_cross_allocator() {
+    use crate::test_helpers::allocators::ByteCapAlloc;
+    use core::cmp::{Ordering, PartialOrd};
+
+    let a = mk_vec(&[1, 2]);
+    let mut b: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+    for x in [1, 2, 3] {
+        b.try_push(x).unwrap();
+    }
+    assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+    assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
+
+    let mut equal: Vec<i32, ByteCapAlloc> =
+        Vec::try_with_capacity_in(2, ByteCapAlloc::new(64)).expect("should create vector");
+    for x in [1, 2] {
+        equal.try_push(x).unwrap();
+    }
+    assert_eq!(PartialOrd::partial_cmp(&a, &equal), Some(Ordering::Equal));
+}
+
+#[test]
+fn cow_slice_eq_vec_and_slices() {
+    let src: &[i32] = &[1, 2, 3];
+
+    let owned: Cow<'_, [i32]> = Cow::Owned(mk_vec(&[1, 2, 3]));
+    let borrowed: Cow<'_, [i32]> = Cow::Borrowed(src);
+
+    let v = mk_vec(&[1, 2, 3]);
+    assert_eq!(borrowed, v);
+    assert_eq!(v, borrowed);
+
+    let other: &[i32] = &[1, 2, 3];
+    assert_eq!(borrowed, other);
+    assert_eq!(other, borrowed);
+    assert_eq!(owned, other);
+    assert_eq!(other, owned);
+    let other_mut: &mut [i32] = &mut [1, 2, 3];
+    assert_eq!(borrowed, other_mut);
+    assert_eq!(other_mut, borrowed);
+    assert_eq!(owned, other_mut);
+    assert_eq!(other_mut, owned);
+    let other_arr: [i32; 3] = [1, 2, 3];
+    assert_eq!(borrowed, other_arr);
+    assert_eq!(other_arr, borrowed);
+    assert_eq!(owned, other_arr);
+    assert_eq!(other_arr, owned);
+
+    // Length and element mismatches compare unequal.
+    assert_ne!(borrowed, mk_vec(&[1, 2]));
+    assert_ne!(borrowed, mk_vec(&[1, 2, 4]));
+    assert_ne!(owned, mk_vec(&[1, 2]));
+    assert_ne!(owned, mk_vec(&[1, 2, 4]));
+    assert_ne!(mk_vec(&[1, 2]), borrowed);
+    assert_ne!(mk_vec(&[1, 2, 4]), borrowed);
+    assert_ne!(mk_vec(&[1, 2]), owned);
+    assert_ne!(mk_vec(&[1, 2, 4]), owned);
 }
 
 #[test]
@@ -2804,4 +2931,21 @@ fn vec_hash_differs_for_different_vectors() {
     a.hash(&mut ha);
     b.hash(&mut hb);
     assert_ne!(ha.finish(), hb.finish());
+}
+
+/// Regression test: `Debug for IntoIter` must match std's format, which wraps
+/// the not-yet-yielded elements in an `IntoIter(...)` tuple rather than printing
+/// a bare list. Before the fix the impl printed `[0, 1, 2]`.
+#[test]
+fn into_iter_debug_matches_std_format() {
+    let mut v = Vec::new();
+    for i in 0..3 {
+        v.try_push(i).unwrap();
+    }
+    let mut it = v.into_iter();
+    assert_eq!(std::format!("{it:?}"), "IntoIter([0, 1, 2])");
+    let _ = it.next();
+    assert_eq!(std::format!("{it:?}"), "IntoIter([1, 2])");
+    let _ = it.next_back();
+    assert_eq!(std::format!("{it:?}"), "IntoIter([1])");
 }

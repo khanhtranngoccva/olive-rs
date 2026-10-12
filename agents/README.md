@@ -16,7 +16,7 @@ Two other files live here too:
 - [`BUGBOT.md`](./BUGBOT.md) — the bug *classes* that have historically bitten this
   project. Read it before touching a known-buggy area; its regressions are why
   `TESTING.md` leans so hard on invariants.
-- [`TODO.md`](./TODO.md) — open items and deferred decisions. Check it before
+- [`TODO.md`](./scratch/TODO.md) — open items and deferred decisions. Check it before
   starting work that may already be tracked, and add notes for gaps you discover
   (including the `Drop` coverage holes flagged during incremental landing).
 

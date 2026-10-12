@@ -42,8 +42,8 @@ pub(crate) fn build_where_clauses(
 }
 
 /// Same as [`build_where_clauses`] but only field types for which `keep`
-/// returns `true` get a bound. 
-/// 
+/// returns `true` get a bound.
+///
 /// Used by `derive(TryDefault)` on enums so that
 /// only the `#[try_default]`-marked variant's fields are constrained — other
 /// variants may hold types that do not implement the trait.

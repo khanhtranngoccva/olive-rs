@@ -25,7 +25,7 @@ For any container or iterator you touch, the tests should cover:
   fallible iterator that means a stalled/resumed iteration loses no elements and
   drops none twice. Assert the invariant directly, not just the returned value.
 - **OOM and clone-failure paths.** Use the shared harness in
-  [`test_helpers.rs`](../crates/olive-alloc/src/test_helpers.rs): `FailAlloc` to
+  [`test_helpers`](../crates/olive-alloc/src/test_helpers/): `FailAlloc` to
   force every allocation to fail, `FlakyClone` / `BudgetedFlaky` to place a
   `try_clone` failure at a deterministic point inside a long operation, and
   `DropCountingAlloc` to watch the allocator instance itself. Failure-in-the-middle

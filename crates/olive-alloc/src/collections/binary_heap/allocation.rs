@@ -422,7 +422,11 @@ mod tests {
         alloc.drain();
         let error = heap.try_reserve(1024).expect_err("the budget is spent");
         assert!(error.is_alloc(), "{error:?}");
-        assert_eq!(heap.len(), 3, "a refused reservation must not do anything else");
+        assert_eq!(
+            heap.len(),
+            3,
+            "a refused reservation must not do anything else"
+        );
         assert_eq!(drain_i32_budgeted(&mut heap), vec![9, 5, 1]);
     }
 

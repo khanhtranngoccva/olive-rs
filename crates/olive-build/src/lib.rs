@@ -62,7 +62,7 @@ pub fn is_nightly() -> bool {
 /// unstable features for the current crate.
 ///
 /// `RUSTC_BOOTSTRAP` can take three forms:
-/// - `1` (or any non-numeric value): applies to all crates.
+/// - `1`: applies to all crates.
 /// - A crate name: applies only to that specific crate.
 /// - `-1`: explicitly disables bootstrap (acts as stable even on nightly).
 ///
