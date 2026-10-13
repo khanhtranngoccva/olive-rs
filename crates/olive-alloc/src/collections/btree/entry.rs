@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn or_try_default_propagates_construction_failure() {
-        let mut map: BTreeMap<i32, NoDefault> = BTreeMap::new_in(Global);
+        let mut map: BTreeMap<i32, NoDefault<u64>> = BTreeMap::new_in(Global);
         let err = map.entry(1).or_try_default().unwrap_err();
         assert!(matches!(err, TryBTreeMapEntryWithDefaultError::Default(_)));
         assert!(map.is_empty());

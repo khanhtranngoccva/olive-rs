@@ -10,7 +10,9 @@ extern crate std;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod maybe_unclonable;
+pub mod no_default;
 pub use maybe_unclonable::MaybeUnclonable;
+pub use no_default::NoDefault;
 
 /// An atomically-toggled switch controlling whether the elements holding
 /// it will fail their fallible operation.

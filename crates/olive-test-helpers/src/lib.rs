@@ -2,9 +2,6 @@
 
 pub mod allocators;
 pub mod counters;
-/// Value types whose `TryDefault` always fails, for exercising
-/// default-construction failure paths.
-pub mod default;
 pub mod fallible_ops;
 pub mod ledger;
 pub mod panicky_ops;
@@ -12,8 +9,7 @@ pub mod rng;
 
 pub use allocators::CountingAllocator;
 pub use counters::Counter;
-pub use default::NoDefault;
-pub use fallible_ops::{FailArmer, MaybeUnclonable};
+pub use fallible_ops::{FailArmer, MaybeUnclonable, NoDefault};
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
 pub use panicky_ops::PanickyOrd;
