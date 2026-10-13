@@ -5,6 +5,7 @@ pub mod counters;
 /// Value types whose `TryDefault` always fails, for exercising
 /// default-construction failure paths.
 pub mod default;
+pub mod fallible_ops;
 pub mod ledger;
 pub mod panicky_ops;
 pub mod rng;
@@ -12,6 +13,7 @@ pub mod rng;
 pub use allocators::CountingAllocator;
 pub use counters::Counter;
 pub use default::NoDefault;
+pub use fallible_ops::{FailArmer, MaybeUnclonable};
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
 pub use panicky_ops::PanickyOrd;
@@ -323,74 +325,6 @@ impl TryDefault for BudgetedAlloc {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(Self::new(0))
-    }
-}
-
-/// A wrapper around a value whose `try_clone` fails while `cloneable` is
-/// `false`.
-#[derive(Debug, Clone, Copy)]
-pub struct MaybeUnclonable<T> {
-    /// The wrapped payload.
-    pub inner: T,
-    /// Whether `try_clone` should succeed. Toggle with
-    /// [`MaybeUnclonable::set_clonable`] to flip an element's clone behaviour
-    /// mid-test.
-    pub cloneable: bool,
-}
-
-impl<T> MaybeUnclonable<T> {
-    /// A value that clones itself happily.
-    pub const fn clonable(inner: T) -> Self {
-        Self {
-            inner,
-            cloneable: true,
-        }
-    }
-
-    /// A value whose `try_clone` always fails.
-    pub const fn unclonable(inner: T) -> Self {
-        Self {
-            inner,
-            cloneable: false,
-        }
-    }
-
-    /// Set whether the element is clonable or not.
-    pub const fn set_clonable(&mut self, clonable: bool) {
-        self.cloneable = clonable;
-    }
-}
-
-impl<T: PartialEq> PartialEq for MaybeUnclonable<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl<T: Eq> Eq for MaybeUnclonable<T> {}
-
-impl<T: Ord> PartialOrd for MaybeUnclonable<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T: Ord> Ord for MaybeUnclonable<T> {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.inner.cmp(&other.inner)
-    }
-}
-
-impl<T: TryClone> TryClone for MaybeUnclonable<T> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        if self.cloneable {
-            Ok(Self {
-                inner: self.inner.try_clone()?,
-                cloneable: true,
-            })
-        } else {
-            Err(TryCloneError::Other("unclonable"))
-        }
     }
 }
 

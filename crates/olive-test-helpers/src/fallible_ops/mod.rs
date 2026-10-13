@@ -1,0 +1,51 @@
+//! Newtypes whose trait operations *fail on command* — returning `Err` rather
+//! than panicking — for tests that must break an algorithm mid-flight and check
+//! the recovery path.
+//!
+//! This is different from [`panicky_ops`](crate::panicky_ops), whose operations blow up
+//! with a panic.
+
+extern crate std;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub mod maybe_unclonable;
+pub use maybe_unclonable::MaybeUnclonable;
+
+/// An atomically-toggled switch controlling whether the elements holding
+/// it will fail their fallible operation.
+///
+/// To make it shared, wrap it in an Arc.
+#[derive(Debug, Default)]
+pub struct FailArmer {
+    armed: AtomicBool,
+}
+
+impl FailArmer {
+    /// Creates an armer in the disarmed state (the operation is allowed).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates an armer in the armed state (the operation fails).
+    pub fn armed() -> Self {
+        let armer = Self::default();
+        armer.arm();
+        armer
+    }
+
+    /// Arms the armer, so the operation on every element holding it fails.
+    pub fn arm(&self) {
+        self.armed.store(true, Ordering::Relaxed);
+    }
+
+    /// Disarms the armer, so the operation on every element holding it succeeds.
+    pub fn disarm(&self) {
+        self.armed.store(false, Ordering::Relaxed);
+    }
+
+    /// Whether the armer is currently armed.
+    pub fn is_armed(&self) -> bool {
+        self.armed.load(Ordering::Relaxed)
+    }
+}

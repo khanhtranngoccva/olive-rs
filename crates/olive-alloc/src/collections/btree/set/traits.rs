@@ -733,7 +733,9 @@ mod tests {
         assert_eq!(set.len(), 1, "the clonable prefix is committed");
         let (head, remainder) = resume.into_parts();
         assert_eq!(head.expect("stranded reference").inner, 2);
-        assert_eq!(remainder.count(), 1, "only the last element is left");
+        head.expect("stranded reference").armer.disarm();
+        set.try_extend(Resume::compose(head, remainder))
+            .expect("extending should now succeed");
     }
 
     #[test]
