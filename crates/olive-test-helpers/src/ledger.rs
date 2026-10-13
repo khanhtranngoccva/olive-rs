@@ -19,8 +19,11 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 /// individually, catching leaks, double-frees, and wrong totals rather than mere
 /// aggregate counts.
 pub struct TrackedItem<C> {
+    /// This item's unique ledger id.
     pub id: u32,
+    /// The ledger this item registers its drops with.
     pub ledger: Arc<Ledger>,
+    /// The wrapped payload.
     pub inner: C,
 }
 
@@ -118,7 +121,7 @@ impl<C: Ord> Ord for TrackedItem<C> {
 /// observes the same remaining budget). A test can therefore place a
 /// deterministic clone failure at a known point across a whole collection.
 /// Retained as an alias so current call sites keep their familiar shape.
-pub type FlakyTrackedItem = TrackedItem<CloneBudget>;
+pub type FlakyCloneTrackedItem = TrackedItem<CloneBudget>;
 
 /// A per-test ledger tracking individual payload ids by count. On construction
 /// an id is registered as "live" (`live[id] == true`); on drop its count is
@@ -145,6 +148,7 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// Creates an empty ledger with no ids allocated.
     pub fn new() -> Self {
         Self {
             live: RwLock::new(HashSet::new()),
@@ -202,7 +206,9 @@ impl Ledger {
     }
 
     /// Ids that were allocated but never dropped (a subset of the live set,
-    /// excluding any that also dropped). Empty ⇒ no leaks.
+    /// excluding any that also dropped). Empty ⇒ no leaks. Should be checked
+    /// at the end of the test case and not when elements are still supposed to
+    /// be alive.
     pub fn leaked_ids(&self) -> Vec<u32> {
         self.live_ids()
     }
@@ -236,5 +242,11 @@ impl Ledger {
             }
         }
         true
+    }
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -890,7 +890,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::collections::vec_deque::TryVecDequeWithCloneError;
-    use crate::test_helpers::{BudgetedAlloc, FailAlloc};
+    use olive_test_helpers::{BudgetedAlloc, FailAlloc};
     use core::mem::size_of;
     use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
@@ -2041,7 +2041,7 @@ mod tests {
     // Panic-safety regression tests
     // -----------------------------------------------------------------------
 
-    use crate::test_helpers::{CloneBudget, Ledger, PanicArmer};
+    use olive_test_helpers::{CloneBudget, Ledger, PanicArmer};
     use std::sync::Arc;
 
     /// A tracked item whose `try_clone` is gated by a shared [`CloneBudget`]
@@ -2140,7 +2140,7 @@ mod tests {
     /// to its original length.
     #[test]
     fn try_resize_with_closure_panic_is_safe() {
-        use crate::test_helpers::TrackedItem;
+        use olive_test_helpers::TrackedItem;
 
         let ledger = Arc::new(Ledger::new());
 
@@ -2192,7 +2192,7 @@ mod tests {
     /// itself fails, the guard restores a consistent layout via `abort_shrink`.
     #[test]
     fn try_shrink_to_fit_failure_restores_wrapped_state() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
 
         // Budget of 1: the single `try_reserve` below consumes it to create
         // the initial buffer. All subsequent pushes/pops fit within that

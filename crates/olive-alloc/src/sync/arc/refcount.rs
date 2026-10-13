@@ -192,7 +192,7 @@ impl<T: ?Sized> Arc<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::test_helpers::DropCountingAlloc;
+    use olive_test_helpers::DropCountingAlloc;
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc as StdArc;
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn generic_forms_match_global_behaviour() {
         let drops = Rc::new(Cell::new(0));
-        let alloc_counter = StdArc::new(crate::test_helpers::DropCounter::new());
+        let alloc_counter = StdArc::new(olive_test_helpers::DropCounter::new());
         let alloc = DropCountingAlloc::new(alloc_counter);
         let arc = Arc::try_new_in(DropRecorder::new(drops.clone()), alloc).unwrap();
 

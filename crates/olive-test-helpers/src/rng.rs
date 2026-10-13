@@ -54,7 +54,7 @@ impl TestRng {
     where
         R: IntoIterator<Item = u32>,
     {
-        let mut v: std::vec::Vec<u32> = range.into_iter().collect();
+        let mut v: Vec<u32> = range.into_iter().collect();
         self.shuffle_in_place(&mut v);
         v.into_iter()
     }
@@ -122,30 +122,30 @@ mod tests {
     #[test]
     fn permuted_yields_full_permutation() {
         let rng = TestRng::new(7);
-        let collected: std::vec::Vec<u32> = rng.permuted(0..30).collect();
+        let collected: Vec<u32> = rng.permuted(0..30).collect();
         assert_eq!(collected.len(), 30);
         let mut sorted = collected.clone();
         sorted.sort();
-        assert_eq!(sorted, (0..30).collect::<std::vec::Vec<_>>());
+        assert_eq!(sorted, (0..30).collect::<Vec<_>>());
     }
 
     #[test]
     fn permuted_accepts_any_into_iterator() {
         let rng = TestRng::new(42);
         // Works with a non-zero-based range.
-        let collected: std::vec::Vec<u32> = rng.permuted(10..25).collect();
+        let collected: Vec<u32> = rng.permuted(10..25).collect();
         assert_eq!(collected.len(), 15);
         let mut sorted = collected.clone();
         sorted.sort();
-        assert_eq!(sorted, (10..25).collect::<std::vec::Vec<_>>());
+        assert_eq!(sorted, (10..25).collect::<Vec<_>>());
     }
 
     #[test]
     fn permuted_deterministic_for_same_seed() {
         let a = TestRng::new(999);
         let b = TestRng::new(999);
-        let seq_a: std::vec::Vec<u32> = a.permuted(0..20).collect();
-        let seq_b: std::vec::Vec<u32> = b.permuted(0..20).collect();
+        let seq_a: Vec<u32> = a.permuted(0..20).collect();
+        let seq_b: Vec<u32> = b.permuted(0..20).collect();
         assert_eq!(seq_a, seq_b);
     }
 

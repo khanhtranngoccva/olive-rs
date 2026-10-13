@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn try_clone_fails_when_allocator_clone_exhausted() {
-        use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
+        use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
 
         let budget = Arc::new(CloneBudget::new(0));
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn try_clone_fails_midway_on_allocation_error() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
 
         // Strategy: build a multi-entry map under a BudgetedAlloc with enough
         // budget to construct it, then drain the remaining budget before
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn try_clone_preserves_original_on_failure() {
-        use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
+        use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
 
         // Build a map under a flaky allocator with enough budget for inserts,
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn try_from_iterator_alloc_failure_leaves_nothing_behind() {
-        use crate::test_helpers::FailAlloc;
+        use olive_test_helpers::FailAlloc;
 
         let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
         let (resume, _err) = map
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn try_extend_partial_commit_then_oom_strands_one_pair() {
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
         // Build a populated map under a shared budget, then drain it so the next
         // insertion OOMs mid-extend. Because `try_extend` commits each successful
@@ -945,7 +945,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_refs_clone_failure_strands_the_pair() {
-        use crate::test_helpers::{BudgetedAlloc, MaybeUnclonable};
+        use olive_test_helpers::{BudgetedAlloc, MaybeUnclonable};
         // A generous budget keeps this test about cloning, not memory.
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<u32, MaybeUnclonable<u32>, BudgetedAlloc> =
@@ -972,7 +972,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_refs_oom_is_reported() {
-        use crate::test_helpers::FailAlloc;
+        use olive_test_helpers::FailAlloc;
 
         let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
         let src: [(&u32, &u32); 3] = [(&1, &10), (&2, &20), (&3, &30)];
@@ -1013,7 +1013,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_first_alloc_failure_carries_whole_tail() {
-        use crate::test_helpers::FailAlloc;
+        use olive_test_helpers::FailAlloc;
 
         let mut map: BTreeMap<u32, u32, FailAlloc> = BTreeMap::new_in(FailAlloc);
         let src: &[(u32, u32)] = &[(1, 10), (2, 20), (3, 30)];
@@ -1030,7 +1030,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_clone_failure_returns_tail() {
-        use crate::test_helpers::FlakyClone;
+        use olive_test_helpers::FlakyClone;
 
         // `FlakyClone::new(0)` never clones successfully, so the very first
         // source element's value clone fails. The returned tail must point at the
@@ -1057,7 +1057,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_commits_prefix_before_clone_failure() {
-        use crate::test_helpers::FlakyClone;
+        use olive_test_helpers::FlakyClone;
 
         // Elements 0 and 1 clone cleanly (their values have headroom); element 2
         // has no headroom and its value clone fails. Only the successful prefix
@@ -1099,7 +1099,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_commits_prefix_before_alloc_failure() {
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
         use std::sync::Arc;
 
         let alloc = BudgetedAlloc::new(1 << 20);

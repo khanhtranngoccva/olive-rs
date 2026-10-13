@@ -133,13 +133,13 @@ mod tests {
         // elements are destroyed exactly once when `last` consumes the iterator
         // and pops only the back element — catching leaks and double-frees, not
         // just aggregate counts.
-        use crate::test_helpers::{CloneBudget, FlakyTrackedItem, Ledger};
+        use olive_test_helpers::{CloneBudget, FlakyCloneTrackedItem, Ledger};
         let ledger = Arc::new(Ledger::new());
         let budget = Arc::new(CloneBudget::new(u32::MAX));
-        let mut dq: VecDeque<FlakyTrackedItem> = VecDeque::new();
+        let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for i in 0..4u32 {
             ledger.register(i);
-            dq.try_push_back(FlakyTrackedItem {
+            dq.try_push_back(FlakyCloneTrackedItem {
                 id: i,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),

@@ -102,7 +102,7 @@ mod tests {
 
     use super::*;
     use crate::alloc::Global;
-    use crate::test_helpers::{Ledger, TestRng, TrackedItem};
+    use olive_test_helpers::{Ledger, TestRng, TrackedItem};
 
     /// Inserts a tracked key + tracked value pair into the map, registering both
     /// ids with the ledger up front so drops are observable.

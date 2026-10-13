@@ -726,7 +726,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
-    use crate::test_helpers::{Ledger, TrackedItem};
+    use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
 
     /// A simple comparable wrapper around a fixed-size array, used in place of
@@ -1506,8 +1506,9 @@ mod tests {
 
         struct MaybePanic {
             armed: Arc<AtomicBool>,
-            counter: Arc<crate::test_helpers::DropCounter>,
+            counter: Arc<olive_test_helpers::DropCounter>,
         }
+        
         impl Drop for MaybePanic {
             fn drop(&mut self) {
                 self.counter.record_drop();
@@ -1518,7 +1519,7 @@ mod tests {
         }
 
         let armed = Arc::new(AtomicBool::new(true));
-        let counter = Arc::new(crate::test_helpers::DropCounter::new());
+        let counter = Arc::new(olive_test_helpers::DropCounter::new());
         let mut map: BTreeMap<u32, MaybePanic> = BTreeMap::new_in(Global);
         for i in 0..8u32 {
             map.try_insert(

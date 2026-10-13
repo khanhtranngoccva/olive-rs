@@ -1,16 +1,15 @@
-//! Shared test helpers for the `olive-alloc` crate.
-//!
-//! These utilities replace per-test-file static atomics with per-test
-//! thread-safe shared handles (`Arc` over atomics / `RwLock`), eliminating
-//! cross-test interference when tests run in parallel threads and allowing the
-//! scaffolding to be moved across threads for multi-threaded tests.
+//! Shared test fixtures for the Olive stack.
 
 pub mod allocators;
 pub mod counters;
+/// Value types whose `TryDefault` always fails, for exercising
+/// default-construction failure paths.
 pub mod default;
 pub mod ledger;
 pub mod panicky_ops;
 pub mod rng;
+
+pub use allocators::CountingAllocator;
 // `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
 // exported so future tests can instantiate it with other clone policies (e.g.
 // an infallible one) without touching the tracking machinery. Not referenced by
@@ -19,7 +18,7 @@ pub mod rng;
 pub use counters::CloneCounter;
 pub use default::NoDefault;
 #[allow(unused_imports)]
-pub use ledger::{FlakyTrackedItem, Ledger, TrackedItem};
+pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
 pub use panicky_ops::PanickyOrd;
 pub use rng::TestRng;
 
@@ -28,6 +27,7 @@ extern crate std;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
+use allocator_api2::alloc::Global;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
@@ -35,14 +35,14 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// A per-test drop counter. Each test constructs its own instance so there is
-/// no cross-test interference from parallel execution. Backed by an atomic so a
-/// shared [`Arc<DropCounter>`] can be dropped from multiple threads.
+/// no cross-test interference from parallel execution.
 #[derive(Debug, Default)]
 pub struct DropCounter {
     count: AtomicUsize,
 }
 
 impl DropCounter {
+    /// Creates a counter at zero.
     pub fn new() -> Self {
         Self::default()
     }
@@ -67,36 +67,36 @@ pub struct PanicArmer {
 }
 
 impl PanicArmer {
+    /// Creates an armer in the disarmed state.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Arms the armer, so comparisons touching it will panic.
     pub fn arm(&self) {
         self.armed.store(true, Ordering::Relaxed);
     }
 
+    /// Disarms the armer, so comparisons touching it stop panicking.
     pub fn disarm(&self) {
         self.armed.store(false, Ordering::Relaxed);
     }
 
+    /// Whether the armer is currently armed.
     pub fn is_armed(&self) -> bool {
         self.armed.load(Ordering::Relaxed)
     }
 }
 
-/// A per-test clone budget shared by all instances of [`BudgetedFlaky`].
+/// A per-test clone budget.
 /// Counts down from a configured threshold; when it reaches zero, clones fail.
-///
-/// The counter lives in an [`Arc<AtomicU32>`] so every handle produced by
-/// [`TryClone`] observes and mutates the *same* remaining budget — that sharing
-/// is what lets a single collection draw down one budget across all of its
-/// elements, safely across threads.
 #[derive(Debug)]
 pub struct CloneBudget {
     remaining: Arc<AtomicU32>,
 }
 
 impl CloneBudget {
+    /// Creates a budget allowing `remaining` successful clones before failing.
     pub fn new(remaining: u32) -> Self {
         Self {
             remaining: Arc::new(AtomicU32::new(remaining)),
@@ -165,11 +165,11 @@ impl DropCountingAlloc {
 // SAFETY: delegates all operations to `Global`; no additional invariants.
 unsafe impl Allocator for DropCountingAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        crate::alloc::Global.allocate(layout)
+        Global.allocate(layout)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+        unsafe { Global.deallocate(ptr, layout) };
     }
 }
 
@@ -216,10 +216,10 @@ impl FlakyCloneAlloc {
 // SAFETY: all allocation operations delegate to `Global`; no extra invariants.
 unsafe impl Allocator for FlakyCloneAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        crate::alloc::Global.allocate(layout)
+        Global.allocate(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+        unsafe { Global.deallocate(ptr, layout) };
     }
 }
 
@@ -270,11 +270,7 @@ impl TryDefault for FailAlloc {
 
 /// An allocator that succeeds for its first `budget` allocations and fails
 /// forever after. Lets a test build a populated collection under a working
-/// allocator and then deterministically trigger an OOM on the next growth —
-/// without any buffer surgery or transmute.
-///
-/// The budget is shared via [`Arc<AtomicUsize>`] so the same limit can be
-/// observed from multiple handles, safely across threads.
+/// allocator and then deterministically trigger an OOM on the next growth.
 #[derive(Debug, Clone)]
 pub struct BudgetedAlloc {
     pub(crate) remaining: Arc<AtomicUsize>,
@@ -290,20 +286,27 @@ impl BudgetedAlloc {
 
     /// Sets the remaining allocation budget to exactly `budget`, letting a
     /// test tighten or loosen the limit on the fly — e.g. allow just enough
-    /// allocations for the next operation and no more. The change is visible
-    /// to every handle sharing the same budget (clones share the counter via
-    /// [`Arc`]).
+    /// allocations for the next operation and no more
     pub fn set_budget(&self, budget: usize) {
         self.remaining.store(budget, Ordering::SeqCst);
     }
 
     /// Removes all remaining allocation budget, so every subsequent
     /// [`Allocator::allocate`] call fails. Tests use this to force a
-    /// deterministic OOM on the next growth without leaking any memory (the
-    /// old pattern of looping `allocate` until failure leaked one block per
-    /// iteration).
+    /// deterministic OOM on the next growth.
     pub fn drain(&self) {
         self.set_budget(0);
+    }
+
+    /// The number of allocations still permitted. Reads the shared counter, so
+    /// every handle observing this budget sees the same value.
+    ///
+    /// Replaces direct reads of the `remaining` field, which was `pub(crate)`
+    /// and so cannot cross a crate boundary now that this fixture lives outside
+    /// `olive-alloc`.
+    #[inline]
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::SeqCst)
     }
 }
 
@@ -323,10 +326,10 @@ unsafe impl Allocator for BudgetedAlloc {
         if !had_budget {
             return Err(AllocError);
         }
-        crate::alloc::Global.allocate(layout)
+        Global.allocate(layout)
     }
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        unsafe { crate::alloc::Global.deallocate(ptr, layout) };
+        unsafe { Global.deallocate(ptr, layout) };
     }
 }
 
@@ -356,7 +359,11 @@ impl TryDefault for BudgetedAlloc {
 /// `false`.
 #[derive(Debug, Clone, Copy)]
 pub struct MaybeUnclonable<T> {
+    /// The wrapped payload.
     pub inner: T,
+    /// Whether `try_clone` should succeed. Toggle with
+    /// [`MaybeUnclonable::set_clonable`] to flip an element's clone behaviour
+    /// mid-test.
     pub cloneable: bool,
 }
 
@@ -425,7 +432,9 @@ impl<T: TryClone> TryClone for MaybeUnclonable<T> {
 /// a deterministic point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlakyClone {
+    /// Successful clones performed so far.
     pub count: u32,
+    /// Number of successful clones permitted before `try_clone` starts failing.
     pub threshold: u32,
 }
 

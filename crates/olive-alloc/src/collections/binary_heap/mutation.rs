@@ -233,7 +233,7 @@ impl<T: Ord, A: Allocator> Drop for RebuildTailOnDrop<'_, T, A> {
 mod tests {
     extern crate std;
 
-    use crate::test_helpers::{PanicArmer, PanickyOrd};
+    use olive_test_helpers::{PanicArmer, PanickyOrd};
 
     use super::BinaryHeap;
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
@@ -293,8 +293,7 @@ mod tests {
 
     #[test]
     fn clear_keeps_capacity_and_repush_does_not_allocate() {
-        use crate::test_helpers::BudgetedAlloc;
-        use core::sync::atomic::Ordering;
+        use olive_test_helpers::BudgetedAlloc;
 
         let alloc = BudgetedAlloc::new(8);
         let mut heap: BinaryHeap<i32, _> =
@@ -307,11 +306,7 @@ mod tests {
         for value in 0..8 {
             heap.try_push(value).expect("reused capacity");
         }
-        assert_eq!(
-            alloc.remaining.load(Ordering::SeqCst),
-            7,
-            "refill must not allocate"
-        );
+        assert_eq!(alloc.remaining(), 7, "refill must not allocate");
         assert_eq!(heap.pop(), Some(7));
     }
 

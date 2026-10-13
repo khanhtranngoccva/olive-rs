@@ -214,7 +214,7 @@ mod tests {
 
     use super::PeekMut;
     use crate::collections::binary_heap::BinaryHeap;
-    use crate::test_helpers::{PanicArmer, PanickyOrd};
+    use olive_test_helpers::{PanicArmer, PanickyOrd};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use std::sync::Arc;
     use std::{panic, vec, vec::Vec};

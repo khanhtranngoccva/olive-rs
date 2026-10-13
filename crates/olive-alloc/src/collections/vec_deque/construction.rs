@@ -137,8 +137,10 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::{AllocError, Layout};
-    use crate::test_helpers::FailAlloc;
     use core::mem::size_of;
+    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::DropCountingAlloc;
+    use olive_test_helpers::FailAlloc;
     use std::sync::Arc;
 
     // --- new / new_in --------------------------------------------------------
@@ -157,8 +159,8 @@ mod tests {
 
     #[test]
     fn new_in_carries_the_given_allocator_and_drops_it_exactly_once() {
-        let drops = Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let dq: VecDeque<i32, _> = VecDeque::new_in(alloc);
         assert!(dq.is_empty());
         assert_eq!(dq.capacity(), 0);
@@ -244,8 +246,8 @@ mod tests {
 
     #[test]
     fn try_with_capacity_in_uses_custom_allocator() {
-        let drops = Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let dq = VecDeque::<i32, _>::try_with_capacity_in(16, alloc).expect("allocation ok");
         assert!(dq.capacity() >= 16);
         assert!(dq.is_empty());

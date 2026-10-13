@@ -2211,7 +2211,7 @@ impl<T: ?Sized> TryDefault for Weak<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::test_helpers::FailAlloc;
+    use olive_test_helpers::FailAlloc;
     use static_assertions::assert_not_impl_any;
     use std::string::String;
 

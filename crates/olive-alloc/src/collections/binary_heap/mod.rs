@@ -170,7 +170,7 @@ mod tests {
     extern crate std;
 
     use super::BinaryHeap;
-    use crate::test_helpers::PanickyOrd;
+    use olive_test_helpers::PanickyOrd;
     use std::panic;
 
     // UnwindSafe and RefUnwindSafe assertions

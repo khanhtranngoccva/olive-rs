@@ -119,7 +119,4 @@ impl TryDefault for Global {
 unsafe impl AllocatorTryDefault for Global {}
 
 #[cfg(test)]
-mod test_allocators;
-
-#[cfg(test)]
-pub(crate) use test_allocators::CountingAllocator;
+pub(crate) use olive_test_helpers::CountingAllocator;

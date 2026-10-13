@@ -171,7 +171,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
-    use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
+    use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::string::String;
     use std::sync::Arc as StdArc;
 

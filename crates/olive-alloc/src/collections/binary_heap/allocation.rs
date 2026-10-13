@@ -189,11 +189,10 @@ mod tests {
     extern crate std;
 
     use super::BinaryHeap;
-    use crate::test_helpers::{BudgetedAlloc, PanicArmer, PanickyOrd};
-    use core::sync::atomic::Ordering;
     use olive_core::{
         alloc_errors::TryReserveError, try_traits::try_from_iterator::TryFromIterator,
     };
+    use olive_test_helpers::{BudgetedAlloc, PanicArmer, PanickyOrd};
     use std::panic;
     use std::sync::Arc;
     use std::vec;
@@ -259,7 +258,7 @@ mod tests {
         assert_eq!(heap.len(), value as usize, "the heap did not move");
         assert_eq!(heap.peek(), Some(&(value - 1)));
         assert_eq!(
-            alloc.remaining.load(Ordering::SeqCst),
+            alloc.remaining(),
             0,
             "the failed reserve must not debit the budget"
         );
@@ -274,7 +273,7 @@ mod tests {
             heap.try_push(value).expect("already-reserved slot");
         }
         assert_eq!(
-            alloc.remaining.load(Ordering::SeqCst),
+            alloc.remaining(),
             1,
             "fills within capacity must not allocate"
         );
@@ -290,7 +289,7 @@ mod tests {
             .expect("a ZST slot never asks the allocator");
         heap.try_push(()).expect("nor does the second one");
         assert_eq!(heap.len(), 2);
-        assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
+        assert_eq!(alloc.remaining(), 0);
     }
 
     fn armed_heap(values: &[i32], armer: &Arc<PanicArmer>) -> BinaryHeap<PanickyOrd<i32>> {
@@ -386,7 +385,7 @@ mod tests {
             .try_append(&mut left)
             .expect("empty appends are trivial");
         assert_eq!(drain_i32_budgeted(&mut right), vec![3, 2, 1]);
-        assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
+        assert_eq!(alloc.remaining(), 0);
     }
 
     // --- Capacity operations -------------------------------------------------
@@ -411,7 +410,7 @@ mod tests {
         heap.try_reserve(0).expect("no room is needed");
         heap.try_reserve_exact(0).expect("no room is needed");
         heap.try_reserve_adaptive(0).expect("no room is needed");
-        assert_eq!(alloc.remaining.load(Ordering::SeqCst), 0);
+        assert_eq!(alloc.remaining(), 0);
         assert_eq!(drain_i32_budgeted(&mut heap), vec![3, 2, 1]);
     }
 

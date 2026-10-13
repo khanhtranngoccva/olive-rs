@@ -425,6 +425,9 @@ mod tests {
 
     use super::*;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+    use olive_test_helpers::BudgetedAlloc;
+    use olive_test_helpers::FailAlloc;
+    use olive_test_helpers::MaybeUnclonable;
 
     fn make_set(values: &[i32]) -> BTreeSet<i32> {
         let mut set = BTreeSet::new();
@@ -596,8 +599,6 @@ mod tests {
 
     #[test]
     fn try_from_iter_in_budgeted_alloc_succeeds_within_budget() {
-        use crate::test_helpers::BudgetedAlloc;
-
         // Generous budget: construction must succeed and the set must be
         // intact. The allocator is consumed by value into the set.
         let alloc = BudgetedAlloc::new(100);
@@ -608,8 +609,6 @@ mod tests {
 
     #[test]
     fn try_from_iter_in_drained_alloc_fails() {
-        use crate::test_helpers::BudgetedAlloc;
-
         // Zero budget: the first internal allocation fails, so the whole
         // fallible collection must report an error rather than panic.
         let alloc = BudgetedAlloc::new(0);
@@ -684,7 +683,6 @@ mod tests {
 
     #[test]
     fn try_extend_oom_strands_element() {
-        use crate::test_helpers::BudgetedAlloc;
         // Build a populated set under a generous budget, then constrain the
         // remaining budget so the next insertion that needs a new node OOMs.
         let alloc = BudgetedAlloc::new(1 << 20);
@@ -724,7 +722,6 @@ mod tests {
 
     #[test]
     fn try_extend_from_refs_clone_failure_strands_the_reference() {
-        use crate::test_helpers::MaybeUnclonable;
         let src = [
             MaybeUnclonable::clonable(1),
             MaybeUnclonable::unclonable(2),
@@ -749,7 +746,6 @@ mod tests {
 
     #[test]
     fn try_extend_from_refs_oom_is_reported() {
-        use crate::test_helpers::FailAlloc;
         let mut set: BTreeSet<i32, FailAlloc> = BTreeSet::new_in(FailAlloc);
         let src = [1, 2, 3];
         let (resume, err) = set.try_extend(src.iter()).expect_err("OOM");
@@ -794,7 +790,6 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_clone_failure_returns_tail() {
-        use crate::test_helpers::MaybeUnclonable;
         let mut set: BTreeSet<MaybeUnclonable<u32>> = BTreeSet::new();
         let src = [
             MaybeUnclonable::unclonable(0),
@@ -808,7 +803,6 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_commits_prefix_before_clone_failure() {
-        use crate::test_helpers::MaybeUnclonable;
         // The first element clones happily, the second one's clone fails.
         let src = [
             MaybeUnclonable::clonable(1),
@@ -824,7 +818,6 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_oom_returns_tail() {
-        use crate::test_helpers::BudgetedAlloc;
         // Build a populated set under a generous budget, then constrain the
         // remaining budget so the next insertion that needs a new node OOMs.
         let alloc = BudgetedAlloc::new(1 << 20);
@@ -928,7 +921,7 @@ mod tests {
 
     #[test]
     fn operator_error_is_sticky_through_chains() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut a: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
         let mut b: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
@@ -952,7 +945,6 @@ mod tests {
 
     #[test]
     fn operator_builds_result_with_left_allocator() {
-        use crate::test_helpers::BudgetedAlloc;
         let left = BudgetedAlloc::new(1 << 20);
         let right = BudgetedAlloc::new(1 << 20);
         let mut a: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(left.clone());
@@ -971,7 +963,6 @@ mod tests {
 
     #[test]
     fn operator_reports_clone_error() {
-        use crate::test_helpers::MaybeUnclonable;
         let mut a = BTreeSet::new();
         let mut b = BTreeSet::new();
         for inner in [0u32, 1] {

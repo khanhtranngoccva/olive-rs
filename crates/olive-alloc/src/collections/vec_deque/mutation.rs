@@ -1680,7 +1680,8 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use crate::collections::vec_deque::VecDeque;
-    use crate::test_helpers::DropCounter;
+    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
 
     /// Concatenate the two halves of a deque into a single owned array-backed
@@ -1907,7 +1908,7 @@ mod tests {
     }
 
     /// A minimal drop-counting payload for tests that only need an aggregate
-    /// count (not per-id tracking). See [`crate::test_helpers::Ledger`] for the
+    /// count (not per-id tracking). See [`olive_test_helpers::Ledger`] for the
     /// per-id variant used by the destructor-accounting tests below.
     struct Tracked(Arc<DropCounter>);
     impl Drop for Tracked {
@@ -2644,8 +2645,6 @@ mod tests {
     }
 
     // --- destructor accounting --------------------------------------------------
-
-    use crate::test_helpers::{Ledger, TrackedItem};
 
     /// Seeds a deque with `count` tracked items (ids `0..count`) sharing
     /// `ledger`, returning the filled deque. Each id is registered live before

@@ -15,8 +15,8 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::*;
 use crate::borrow::Cow;
-use crate::test_helpers::{
-    CloneBudget, DropCounter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger,
+use olive_test_helpers::{
+    CloneBudget, DropCounter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
     PanicArmer,
 };
 use std::format;
@@ -450,8 +450,8 @@ fn resize_rollbacks_partial_on_clone_failure() {
     // Seed one live payload (id 0).
     let seed_id = ledger.allocate();
     ledger.register(seed_id);
-    let mut v: Vec<FlakyTrackedItem> = Vec::new();
-    v.try_push(FlakyTrackedItem {
+    let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+    v.try_push(FlakyCloneTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
         inner: (*budget).share(),
@@ -498,8 +498,8 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     // One live seed in the destination (id 0).
     let seed_id = ledger.allocate();
     ledger.register(seed_id);
-    let mut v: Vec<FlakyTrackedItem> = Vec::new();
-    v.try_push(FlakyTrackedItem {
+    let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+    v.try_push(FlakyCloneTrackedItem {
         id: seed_id,
         ledger: ledger.clone(),
         inner: (*budget).share(),
@@ -509,11 +509,11 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
     // order; the budget allows exactly two successful clones (of ids 1 and 2),
     // then the third clone (of id 3) fails → rollback discards the two appends.
-    let mut fv: Vec<FlakyTrackedItem> = Vec::new();
+    let mut fv: Vec<FlakyCloneTrackedItem> = Vec::new();
     for _ in 0..3 {
         let id = ledger.allocate();
         ledger.register(id);
-        fv.try_push(FlakyTrackedItem {
+        fv.try_push(FlakyCloneTrackedItem {
             id,
             ledger: ledger.clone(),
             inner: (*budget).share(),
@@ -616,7 +616,7 @@ fn try_extend_overhint_falls_back_to_incremental_growth() {
     // elements. The upfront batch reserve is too large for the byte-capped
     // allocator and fails silently; extend then proceeds via per-element
     // reserves that each stay within the cap.
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
 
     #[derive(Debug)]
     struct Overhinted(core::ops::Range<i32>);
@@ -671,7 +671,7 @@ fn try_extend_from_slice_trait_success() {
 
 #[test]
 fn try_reserve_adaptive_falls_back_to_exact_when_amortized_refused() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
     let mut v: Vec<i32, ByteCapAlloc> =
         Vec::try_with_capacity_in(15, ByteCapAlloc::new(64)).expect("should create vector");
     v.try_extend(0..15).expect("capacity is sufficient");
@@ -691,7 +691,7 @@ fn try_reserve_adaptive_succeeds_via_amortized_path_when_affordable() {
 
 #[test]
 fn try_extend_from_slice_uses_adaptive_reserve_under_byte_cap() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
     let mut v: Vec<i32, ByteCapAlloc> =
         Vec::try_with_capacity_in(15, ByteCapAlloc::new(64)).expect("should create vector");
     v.try_extend(0..15).expect("capacity is sufficient");
@@ -805,10 +805,10 @@ fn into_iter_drop_mid_way_drops_only_tail() {
 
     // Yield two elements, then drop the iterator while three remain.
     {
-        let mut v: Vec<FlakyTrackedItem> = Vec::new();
+        let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
         for i in 0..5u32 {
             ledger.register(i);
-            v.try_push(FlakyTrackedItem {
+            v.try_push(FlakyCloneTrackedItem {
                 id: i,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),
@@ -1193,10 +1193,10 @@ fn into_raw_parts_roundtrip() {
 fn drop_runs_each_element_once() {
     let ledger = Arc::new(Ledger::new());
     let budget = Arc::new(CloneBudget::new(u32::MAX));
-    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..5u32 {
         ledger.register(i);
-        v.try_push(FlakyTrackedItem {
+        v.try_push(FlakyCloneTrackedItem {
             id: i,
             ledger: ledger.clone(),
             inner: (*budget).share(),
@@ -1231,10 +1231,10 @@ fn dedup_by_panic_is_safe() {
         let l = ledger.clone();
         let b = budget.clone();
         move || {
-            let mut v: Vec<FlakyTrackedItem> = Vec::new();
+            let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
             for i in 0..6u8 {
                 l.register(i as u32);
-                v.try_push(FlakyTrackedItem {
+                v.try_push(FlakyCloneTrackedItem {
                     id: i as u32,
                     ledger: l.clone(),
                     inner: (*b).share(),
@@ -2005,10 +2005,10 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     let ledger = Arc::new(Ledger::new());
     let budget = Arc::new(CloneBudget::new(u32::MAX));
 
-    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
         ledger.register(i);
-        v.try_push(FlakyTrackedItem {
+        v.try_push(FlakyCloneTrackedItem {
             id: i,
             ledger: ledger.clone(),
             inner: (*budget).share(),
@@ -2225,10 +2225,10 @@ fn split_off_moves_all_elements_exactly_once() {
     let ledger = Arc::new(Ledger::new());
     let budget = Arc::new(CloneBudget::new(u32::MAX));
 
-    let mut v: Vec<FlakyTrackedItem> = Vec::new();
+    let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
         ledger.register(i);
-        v.try_push(FlakyTrackedItem {
+        v.try_push(FlakyCloneTrackedItem {
             id: i,
             ledger: ledger.clone(),
             inner: (*budget).share(),
@@ -2632,7 +2632,7 @@ impl Iterator for OverhintedIter {
 
 #[test]
 fn try_from_iter_absorbs_overhint_and_grows_incrementally() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
     // The iterator advertises an upper bound of 1_000 but yields only 4
     // elements. The upfront best-effort reserve for 1_000 slots (~4 KB) is
     // rejected by the byte-capped allocator; `try_from_iter_in` absorbs that
@@ -2650,7 +2650,7 @@ fn try_from_iter_absorbs_overhint_and_grows_incrementally() {
 
 #[test]
 fn try_from_iter_still_fails_on_genuine_oom_under_byte_cap() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
     // Contrast to the absorption case above: the iterator's hint is honest
     // (it really does yield 20 elements), so the upfront reserve is legitimate
     // yet exceeds the 64-byte cap, and incremental growth cannot recover either
@@ -2787,7 +2787,7 @@ fn vec_partial_eq_reverse_vs_array() {
 
 #[test]
 fn vec_partial_eq_cross_allocator() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
 
     let a = mk_vec(&[1, 2, 3]);
     let mut b: Vec<i32, ByteCapAlloc> =
@@ -2808,7 +2808,7 @@ fn vec_partial_eq_cross_allocator() {
 
 #[test]
 fn vec_partial_ord_cross_allocator() {
-    use crate::test_helpers::allocators::ByteCapAlloc;
+    use olive_test_helpers::allocators::ByteCapAlloc;
     use core::cmp::{Ordering, PartialOrd};
 
     let a = mk_vec(&[1, 2]);

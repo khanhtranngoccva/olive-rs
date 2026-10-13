@@ -141,8 +141,8 @@ mod tests {
     extern crate std;
 
     use crate::collections::binary_heap::BinaryHeap;
-    use crate::test_helpers::PanicArmer;
-    use crate::test_helpers::PanickyOrd;
+    use olive_test_helpers::PanicArmer;
+    use olive_test_helpers::PanickyOrd;
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use std::sync::Arc;
     use std::{format, panic, vec, vec::Vec};

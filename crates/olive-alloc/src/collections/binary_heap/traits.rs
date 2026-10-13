@@ -231,9 +231,9 @@ impl<T: Ord + TryClone, A: Allocator> TryExtendFromSlice<T> for BinaryHeap<T, A>
 mod tests {
     extern crate std;
     use super::*;
-    use crate::test_helpers::BudgetedAlloc;
-    use crate::test_helpers::PanicArmer;
-    use crate::test_helpers::PanickyOrd;
+    use olive_test_helpers::BudgetedAlloc;
+    use olive_test_helpers::PanicArmer;
+    use olive_test_helpers::PanickyOrd;
     use olive_core::try_traits::TryFromIterator;
     use std::sync::Arc;
 
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn try_clone_failure_leaves_the_source_untouched() {
-        use crate::test_helpers::MaybeUnclonable;
+        use olive_test_helpers::MaybeUnclonable;
         let mut heap: BinaryHeap<MaybeUnclonable<i32>> = TryFromIterator::try_from_iter([
             MaybeUnclonable::clonable(3),
             MaybeUnclonable::unclonable(9),
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn try_extend_ref_reports_a_clone_failure_with_the_failed_element_first() {
-        use crate::test_helpers::MaybeUnclonable;
+        use olive_test_helpers::MaybeUnclonable;
         let mut heap: BinaryHeap<MaybeUnclonable<i32>> = BinaryHeap::new();
         let source = std::vec![
             MaybeUnclonable::clonable(3),
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_clone_failure_returns_the_remainder() {
-        use crate::test_helpers::MaybeUnclonable;
+        use olive_test_helpers::MaybeUnclonable;
         let mut heap: BinaryHeap<MaybeUnclonable<i32>> = BinaryHeap::new();
         let source = std::vec![
             MaybeUnclonable::clonable(5),

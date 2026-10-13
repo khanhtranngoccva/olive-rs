@@ -227,7 +227,7 @@ mod tests {
 
     use super::super::super::set::BTreeSet;
     use super::*;
-    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
     type TestSet = BTreeSet<TrackedItem<u32>, BudgetedAlloc>;
 

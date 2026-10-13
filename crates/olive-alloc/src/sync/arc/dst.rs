@@ -429,7 +429,9 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::string::String;
-    use crate::test_helpers::{CloneBudget, FailAlloc, FlakyTrackedItem, Ledger};
+    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::DropCountingAlloc;
+    use olive_test_helpers::{CloneBudget, FailAlloc, FlakyCloneTrackedItem, Ledger};
     use std::sync::Arc as StdArc;
     use std::vec::Vec;
 
@@ -489,8 +491,8 @@ mod tests {
 
     #[test]
     fn try_from_slice_in_custom_allocator_drops_handle_once() {
-        let drops = StdArc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = StdArc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let arr = [9u8, 8, 7];
         let arc = Arc::try_from_slice_in(&arr[..], alloc).unwrap();
         assert_eq!(&*arc, &[9, 8, 7]);
@@ -553,18 +555,18 @@ mod tests {
         // dropping the source vec destroys the three originals exactly once.
         let ledger = StdArc::new(Ledger::new());
         let budget = StdArc::new(CloneBudget::new(u32::MAX));
-        let mut src: Vec<FlakyTrackedItem> = Vec::new();
+        let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
             let id = ledger.allocate();
             ledger.register(id);
-            src.push(FlakyTrackedItem {
+            src.push(FlakyCloneTrackedItem {
                 id,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),
             });
         }
 
-        let arc: Arc<[FlakyTrackedItem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
+        let arc: Arc<[FlakyCloneTrackedItem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
         assert_eq!(arc.len(), 3);
         // Six instances exist: the three sources and their three clones. None
         // has been dropped yet.
@@ -594,17 +596,17 @@ mod tests {
         // clones without leaking or double-freeing anything.
         let ledger = StdArc::new(Ledger::new());
         let budget = StdArc::new(CloneBudget::new(2));
-        let mut src: Vec<FlakyTrackedItem> = Vec::new();
+        let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
             let id = ledger.allocate();
             ledger.register(id);
-            src.push(FlakyTrackedItem {
+            src.push(FlakyCloneTrackedItem {
                 id,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),
             });
         }
-        let res: Result<Arc<[FlakyTrackedItem]>, TryCloneError> =
+        let res: Result<Arc<[FlakyCloneTrackedItem]>, TryCloneError> =
             Arc::try_clone_from_ref_in(&src[..], Global);
         assert!(res.is_err(), "third clone must exhaust the budget");
         // Exactly two transient clones (ids 3 and 4) were created and both were

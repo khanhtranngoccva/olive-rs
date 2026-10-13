@@ -110,7 +110,8 @@ mod tests {
 
     use super::*;
     use crate::alloc::Global;
-    use crate::test_helpers::{Ledger, TrackedItem};
+    use olive_test_helpers::{DropCounter, DropCountingAlloc};
+    use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
     /// Helper: build a crate `Vec<i32>` on the global allocator holding `vals`.
     fn mk_vec(vals: &[i32]) -> Vec<i32, Global> {
@@ -374,8 +375,8 @@ mod tests {
 
     #[test]
     fn custom_allocator_handoff_drops_handle_exactly_once() {
-        let drops = Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let mut dq: VecDeque<i32, _> = VecDeque::new_in(alloc);
         for i in 0..4 {
             dq.try_push_back(i).unwrap();
@@ -390,8 +391,8 @@ mod tests {
 
     #[test]
     fn custom_allocator_reverse_handoff_drops_handle_exactly_once() {
-        let drops = Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let mut v: Vec<i32, _> = Vec::new_in(alloc);
         for i in 0..4 {
             v.try_push(i).unwrap();

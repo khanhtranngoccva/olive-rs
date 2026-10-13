@@ -116,7 +116,7 @@ impl<T> Default for BinaryHeap<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::test_helpers::{DropCounter, DropCountingAlloc, FailAlloc};
+    use olive_test_helpers::{DropCounter, DropCountingAlloc, FailAlloc};
     use std::sync::Arc;
 
     // --- new / new_in --------------------------------------------------------

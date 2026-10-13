@@ -559,7 +559,7 @@ mod tests {
     use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
     use super::Entry;
     use crate::alloc::Global;
-    use crate::test_helpers::{BudgetedAlloc, NoDefault};
+    use olive_test_helpers::{BudgetedAlloc, NoDefault};
 
     // An error type for and_try_modify / or_try_insert_with closures.
     #[derive(Debug, PartialEq, Eq)]
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn or_try_insert_alloc_error_on_split() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
 
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn or_try_insert_with_key_alloc_error_on_split() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
 
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn vacant_try_insert_entry_alloc_error_on_split() {
-        use crate::test_helpers::BudgetedAlloc;
+        use olive_test_helpers::BudgetedAlloc;
 
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());

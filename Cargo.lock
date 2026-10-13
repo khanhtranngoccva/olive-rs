@@ -133,6 +133,7 @@ dependencies = [
  "allocator-api2",
  "olive-build",
  "olive-core",
+ "olive-test-helpers",
  "static_assertions",
 ]
 
@@ -163,6 +164,14 @@ name = "olive-std"
 version = "0.1.0"
 dependencies = [
  "olive-alloc",
+ "olive-core",
+]
+
+[[package]]
+name = "olive-test-helpers"
+version = "0.1.0"
+dependencies = [
+ "allocator-api2",
  "olive-core",
 ]
 

@@ -18,6 +18,7 @@ olive-build = { workspace = true }
 
 [dev-dependencies]
 static_assertions = "1"
+olive-test-helpers = { workspace = true }
 
 [lints]
 workspace = true

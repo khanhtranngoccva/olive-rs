@@ -469,7 +469,7 @@ unsafe impl<T: Sync, A: Allocator + Sync> Sync for VecDeque<T, A> {}
 mod tests {
     extern crate std;
     use super::*;
-    use crate::test_helpers::{CloneBudget, FailAlloc, FlakyClone, FlakyTrackedItem, Ledger};
+    use olive_test_helpers::{CloneBudget, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger};
     use std::format;
     use std::sync::Arc;
 
@@ -579,7 +579,7 @@ mod tests {
     fn try_clone_reports_allocator_clone_failure() {
         // A flaky allocator with an exhausted clone budget must surface its
         // failure as a `TryCloneError` before any element work begins.
-        use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
+        use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
         let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
         let dq: VecDeque<i32, FlakyCloneAlloc> = VecDeque::new_in(alloc);
@@ -591,7 +591,7 @@ mod tests {
     fn try_clone_with_budgeted_allocator_succeeds_and_matches() {
         // With a sufficient clone budget the clone succeeds and preserves the
         // logical order of elements.
-        use crate::test_helpers::{CloneBudget, FlakyCloneAlloc};
+        use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
         use std::sync::Arc;
         let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(16)));
         let mut dq: VecDeque<i32, FlakyCloneAlloc> = VecDeque::new_in(alloc);
@@ -614,11 +614,11 @@ mod tests {
         let budget = Arc::new(CloneBudget::new(2));
 
         // Seed three elements into the source deque (ids 0, 1, 2).
-        let mut dq: VecDeque<FlakyTrackedItem> = VecDeque::new();
+        let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for _ in 0..3 {
             let id = ledger.allocate();
             ledger.register(id);
-            dq.try_push_back(FlakyTrackedItem {
+            dq.try_push_back(FlakyCloneTrackedItem {
                 id,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),
@@ -699,7 +699,7 @@ mod tests {
         // elements. The upfront batch reserve is too large for the byte-capped
         // allocator and fails silently; collection then proceeds via
         // per-element reserves that each stay within the cap.
-        use crate::test_helpers::allocators::ByteCapAlloc;
+        use olive_test_helpers::allocators::ByteCapAlloc;
 
         struct Overhinted(core::ops::Range<i32>);
         impl Iterator for Overhinted {
@@ -783,7 +783,7 @@ mod tests {
         // elements. The upfront batch reserve is too large for the byte-capped
         // allocator and fails silently; extend then proceeds via per-element
         // reserves that each stay within the cap.
-        use crate::test_helpers::allocators::ByteCapAlloc;
+        use olive_test_helpers::allocators::ByteCapAlloc;
 
         #[derive(Debug)]
         struct Overhinted(core::ops::Range<i32>);
@@ -840,7 +840,7 @@ mod tests {
     fn try_extend_from_slice_appends_clones() {
         // A type whose `TryClone` succeeds and records call count via a shared
         // counter, proving the clone path is exercised rather than a plain copy.
-        use crate::test_helpers::CloneCounter;
+        use olive_test_helpers::CloneCounter;
 
         struct Cloned(i32, Arc<CloneCounter>);
         impl TryClone for Cloned {
@@ -898,7 +898,7 @@ mod tests {
 
     #[test]
     fn try_extend_from_slice_uses_adaptive_reserve_under_byte_cap() {
-        use crate::test_helpers::allocators::ByteCapAlloc;
+        use olive_test_helpers::allocators::ByteCapAlloc;
         let mut dq: VecDeque<i32, ByteCapAlloc> =
             VecDeque::try_with_capacity_in(15, ByteCapAlloc::new(64)).unwrap();
         // Fill the deque to capacity.
@@ -1005,7 +1005,7 @@ mod tests {
 
     #[test]
     fn try_extend_front_overhint_falls_back_to_incremental_growth() {
-        use crate::test_helpers::allocators::ByteCapAlloc;
+        use olive_test_helpers::allocators::ByteCapAlloc;
 
         #[derive(Debug)]
         struct Overhinted(core::ops::Range<i32>);
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn try_extend_front_falls_back_to_exact_when_amortized_refused() {
-        use crate::test_helpers::allocators::ByteCapAlloc;
+        use olive_test_helpers::allocators::ByteCapAlloc;
 
         // A deque of exactly 15 i32s occupies 60 bytes within a 64-byte cap.
         // Pushing one more triggers growth: the amortized path asks for

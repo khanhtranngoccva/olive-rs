@@ -236,7 +236,7 @@ mod tests {
     use super::super::invariant::{check_ascending_keys, check_tree_invariant};
     use super::super::map::BTreeMap;
     use crate::alloc::Global;
-    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
     /// Runs all structural invariant checks on both maps after a split.
     fn verify_both<K, V>(left: &BTreeMap<K, V>, right: &BTreeMap<K, V>)

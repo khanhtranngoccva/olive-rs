@@ -78,7 +78,7 @@ mod tests {
 
     use super::super::super::invariant::{check_ascending_keys, check_tree_invariant};
     use super::*;
-    use crate::test_helpers::{Ledger, TestRng, TrackedItem};
+    use olive_test_helpers::{Ledger, TestRng, TrackedItem};
 
     type TestSet = BTreeSet<TrackedItem<u32>>;
 

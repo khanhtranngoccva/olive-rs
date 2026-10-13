@@ -1,0 +1,17 @@
+[package]
+name = "olive-test-helpers"
+description = "Shared test fixtures for the Olive stack: allocators, ledgers, counters, failing newtypes, and panicky newtypes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+olive-core = { workspace = true }
+allocator-api2 = { workspace = true }
+
+[lints]
+workspace = true

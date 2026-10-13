@@ -185,7 +185,7 @@ mod tests {
     use super::super::map::BTreeMap;
     use crate::alloc::Global;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
-    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -437,7 +437,7 @@ mod tests {
         // original ID — while `b`'s duplicate key and both values are dropped.
         // If the merge ever substituted `b`'s key for `a`'s, the surviving
         // entry would carry `b`'s ID and this assertion would fail.
-        use crate::test_helpers::{Ledger, TrackedItem};
+        use olive_test_helpers::{Ledger, TrackedItem};
         let ledger = Arc::new(Ledger::new());
         let mut a: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
@@ -532,7 +532,7 @@ mod tests {
         val_val: u32,
         ledger: &Arc<Ledger>,
     ) {
-        use crate::test_helpers::TrackedItem;
+        use olive_test_helpers::TrackedItem;
         let kid = ledger.allocate();
         ledger.register(kid);
         let vid = ledger.allocate();
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn append_give_back_hands_stranded_pair_and_partitions_union() {
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
         use std::collections::HashSet;
 
         // Build both maps under a generous shared budget so construction
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn append_delegates_to_give_back_and_drops_stranded_pair() {
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
         // Same setup as above; here we only confirm that `try_append` reports
         // the same failure and leaves `self` in a valid (non-corrupt) state,
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn try_insert_unique_fails_with_unique_error_and_no_leak() {
         use super::super::TryBTreeMapUniqueError;
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
         let alloc = BudgetedAlloc::new(1 << 20);
         let ledger = Arc::new(Ledger::new());
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn try_insert_unique_give_back_hands_pair_separately_from_error() {
         use super::super::TryBTreeMapUniqueError;
-        use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+        use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
 
         let alloc = BudgetedAlloc::new(1 << 20);
         let ledger = Arc::new(Ledger::new());

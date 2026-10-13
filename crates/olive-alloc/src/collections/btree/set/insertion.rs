@@ -101,7 +101,7 @@ mod tests {
 
     use super::*;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
-    use crate::test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
+    use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
     use std::vec::Vec;
 
     #[test]

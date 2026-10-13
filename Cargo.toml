@@ -1,12 +1,12 @@
 [workspace]
 # Olive is a fully-fallible re-port of Rust's `std`/`alloc`. Every operation that
 # can fail — above all, any heap allocation — returns a `Result` instead of
-# panicking, so OOM-resilient code can be written without sprinkling
-# `catch_unwind` everywhere.
+# panicking, so OOM-resilient code can be written.
 #
 # The stack is three crates, mirroring the standard library's own layering:
 #   - `olive_core`   : no_std. Foundational traits + errors (AllocError,
-#                      TryReserveError) and the panic machinery. No dependencies.
+#                      TryReserveError) and the panic machinery, with virtually 
+#                      no dependencies.
 #   - `olive_alloc`  : no_std + alloc. A full mirror of the `alloc` crate
 #                      (Vec, String, BTreeMap/Set, Rc/Arc, Cow, ...) rewritten
 #                      to allocate fallibly. Depends on olive_core.
@@ -21,6 +21,7 @@ members = [
     "crates/olive-core",
     "crates/olive-alloc",
     "crates/olive-std",
+    "crates/olive-test-helpers",
     "crates/debug",
     "xtask",
 ]
@@ -41,6 +42,7 @@ olive-macros = { path = "crates/olive-macros" }
 olive-core = { path = "crates/olive-core" }
 olive-alloc = { path = "crates/olive-alloc" }
 olive-std = { path = "crates/olive-std" }
+olive-test-helpers = { path = "crates/olive-test-helpers" }
 cfg-if = "1.0.4"
 allocator-api2 = { version = "0.4", default-features = false, features = ["fresh-rust", "alloc"] }
 

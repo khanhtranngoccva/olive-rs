@@ -278,7 +278,9 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::AllocError;
-    use crate::test_helpers::FailAlloc;
+    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::DropCountingAlloc;
+    use olive_test_helpers::FailAlloc;
     use std::string::String;
 
     use crate::sync::arc::pointers::is_dangling_weak;
@@ -377,8 +379,8 @@ mod tests {
 
     #[test]
     fn try_new_in_with_custom_allocator() {
-        let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = std::sync::Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(7i64, alloc).unwrap();
         assert_eq!(*arc, 7);
         assert_eq!(Arc::strong_count(&arc), 1);
@@ -446,8 +448,8 @@ mod tests {
         // The allocator-parameterized form is equally dangling, but must carry
         // the given allocator handle — which we observe being dropped exactly
         // once when the `Weak` itself is dropped.
-        let drops = std::sync::Arc::new(crate::test_helpers::DropCounter::new());
-        let alloc = crate::test_helpers::DropCountingAlloc::new(drops.clone());
+        let drops = std::sync::Arc::new(DropCounter::new());
+        let alloc = DropCountingAlloc::new(drops.clone());
         let w: Weak<u64, _> = Weak::new_in(alloc);
         assert!(is_dangling_weak(w.ptr.as_ptr()));
         assert!(w.inner().is_none());

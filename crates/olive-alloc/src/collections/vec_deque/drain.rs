@@ -516,13 +516,13 @@ mod tests {
         // Track each element individually in a ledger so we can prove the three
         // unconsumed elements are destroyed exactly once when the drainer drops
         // — catching leaks and double-frees, not just aggregate counts.
-        use crate::test_helpers::{CloneBudget, FlakyTrackedItem, Ledger};
+        use olive_test_helpers::{CloneBudget, FlakyCloneTrackedItem, Ledger};
         let ledger = Arc::new(Ledger::new());
         let budget = Arc::new(CloneBudget::new(u32::MAX));
-        let mut dq: VecDeque<FlakyTrackedItem> = VecDeque::try_with_capacity(8).expect("ok");
+        let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::try_with_capacity(8).expect("ok");
         for i in 0..5u32 {
             ledger.register(i);
-            dq.try_push_back_within_capacity(FlakyTrackedItem {
+            dq.try_push_back_within_capacity(FlakyCloneTrackedItem {
                 id: i,
                 ledger: ledger.clone(),
                 inner: (*budget).share(),
