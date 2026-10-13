@@ -116,7 +116,7 @@ impl<T> Default for BinaryHeap<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::{DropCounter, DropCountingAlloc, FailAlloc};
+    use olive_test_helpers::{Counter, DropCountingAlloc, FailAlloc};
     use std::sync::Arc;
 
     // --- new / new_in --------------------------------------------------------
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn new_in_carries_the_given_allocator_and_drops_it_exactly_once() {
-        let drops = Arc::new(DropCounter::new());
+        let drops = Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let heap: BinaryHeap<i32, _> = BinaryHeap::new_in(alloc);
         assert!(heap.is_empty());
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn try_with_capacity_in_uses_custom_allocator() {
-        let drops = Arc::new(DropCounter::new());
+        let drops = Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let heap = BinaryHeap::<i32, _>::try_with_capacity_in(16, alloc).expect("allocation ok");
         assert_eq!(heap.capacity(), 16);

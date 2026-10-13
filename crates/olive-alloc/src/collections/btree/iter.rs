@@ -1506,12 +1506,12 @@ mod tests {
 
         struct MaybePanic {
             armed: Arc<AtomicBool>,
-            counter: Arc<olive_test_helpers::DropCounter>,
+            counter: Arc<olive_test_helpers::Counter>,
         }
         
         impl Drop for MaybePanic {
             fn drop(&mut self) {
-                self.counter.record_drop();
+                self.counter.record();
                 if self.armed.swap(false, Ordering::SeqCst) {
                     panic!("boom during IntoIter drop");
                 }
@@ -1519,7 +1519,7 @@ mod tests {
         }
 
         let armed = Arc::new(AtomicBool::new(true));
-        let counter = Arc::new(olive_test_helpers::DropCounter::new());
+        let counter = Arc::new(olive_test_helpers::Counter::new());
         let mut map: BTreeMap<u32, MaybePanic> = BTreeMap::new_in(Global);
         for i in 0..8u32 {
             map.try_insert(

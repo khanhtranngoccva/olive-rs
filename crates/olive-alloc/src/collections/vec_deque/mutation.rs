@@ -1680,7 +1680,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
 mod tests {
     extern crate std;
     use crate::collections::vec_deque::VecDeque;
-    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::Counter;
     use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
 
@@ -1910,16 +1910,16 @@ mod tests {
     /// A minimal drop-counting payload for tests that only need an aggregate
     /// count (not per-id tracking). See [`olive_test_helpers::Ledger`] for the
     /// per-id variant used by the destructor-accounting tests below.
-    struct Tracked(Arc<DropCounter>);
+    struct Tracked(Arc<Counter>);
     impl Drop for Tracked {
         fn drop(&mut self) {
-            self.0.record_drop();
+            self.0.record();
         }
     }
 
     #[test]
     fn push_back_mut_within_capacity_drops_value_on_plain_failure() {
-        let counter = Arc::new(DropCounter::new());
+        let counter = Arc::new(Counter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
         assert_eq!(
             dq.try_push_back_within_capacity(Tracked(counter.clone())),
@@ -1936,7 +1936,7 @@ mod tests {
 
     #[test]
     fn push_front_mut_within_capacity_drops_value_on_plain_failure() {
-        let counter = Arc::new(DropCounter::new());
+        let counter = Arc::new(Counter::new());
         let mut dq: VecDeque<Tracked> = VecDeque::try_with_capacity(1).expect("allocation ok");
         assert_eq!(
             dq.try_push_back_within_capacity(Tracked(counter.clone())),

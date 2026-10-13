@@ -110,7 +110,7 @@ mod tests {
 
     use super::*;
     use crate::alloc::Global;
-    use olive_test_helpers::{DropCounter, DropCountingAlloc};
+    use olive_test_helpers::{Counter, DropCountingAlloc};
     use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
     /// Helper: build a crate `Vec<i32>` on the global allocator holding `vals`.
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn custom_allocator_handoff_drops_handle_exactly_once() {
-        let drops = Arc::new(DropCounter::new());
+        let drops = Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let mut dq: VecDeque<i32, _> = VecDeque::new_in(alloc);
         for i in 0..4 {
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn custom_allocator_reverse_handoff_drops_handle_exactly_once() {
-        let drops = Arc::new(DropCounter::new());
+        let drops = Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let mut v: Vec<i32, _> = Vec::new_in(alloc);
         for i in 0..4 {

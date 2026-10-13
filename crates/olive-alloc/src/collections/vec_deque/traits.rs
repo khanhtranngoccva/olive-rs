@@ -840,12 +840,12 @@ mod tests {
     fn try_extend_from_slice_appends_clones() {
         // A type whose `TryClone` succeeds and records call count via a shared
         // counter, proving the clone path is exercised rather than a plain copy.
-        use olive_test_helpers::CloneCounter;
+        use olive_test_helpers::Counter;
 
-        struct Cloned(i32, Arc<CloneCounter>);
+        struct Cloned(i32, Arc<Counter>);
         impl TryClone for Cloned {
             fn try_clone(&self) -> Result<Self, TryCloneError> {
-                self.1.record_clone();
+                self.1.record();
                 Ok(Cloned(self.0, self.1.clone()))
             }
         }
@@ -860,7 +860,7 @@ mod tests {
             }
         }
 
-        let counter = CloneCounter::shared();
+        let counter = Counter::shared();
         let mut dq: VecDeque<Cloned> = VecDeque::new();
         let src = [
             Cloned(1, counter.clone()),

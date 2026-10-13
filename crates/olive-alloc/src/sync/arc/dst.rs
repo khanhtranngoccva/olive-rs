@@ -429,7 +429,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::string::String;
-    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::Counter;
     use olive_test_helpers::DropCountingAlloc;
     use olive_test_helpers::{CloneBudget, FailAlloc, FlakyCloneTrackedItem, Ledger};
     use std::sync::Arc as StdArc;
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn try_from_slice_in_custom_allocator_drops_handle_once() {
-        let drops = StdArc::new(DropCounter::new());
+        let drops = StdArc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let arr = [9u8, 8, 7];
         let arc = Arc::try_from_slice_in(&arr[..], alloc).unwrap();

@@ -1,33 +1,38 @@
-//! Per-test counters for tracking operation counts (clones, drops, etc.)
-//! without relying on process-global statics.
+//! Per-test counters for aggregating operation counts (clones, drops, etc.).
 //!
-//! Each counter is backed by an [`AtomicUsize`] and shared via [`Arc`] so that
-//! multiple handles (e.g. every element in a collection) observe and mutate
-//! the *same* counter safely across threads. Construct one per test to avoid
-//! cross-test interference under parallel execution.
+//! A counter is an *aggregate*: it answers "how many times did this happen",
+//! with no identity attached to any individual event. It holds no per-event
+//! state — just a single tally. For per-id tracking ("what happened to element
+//! 3"), use [`Ledger`](crate::ledger::Ledger) instead.
 
 extern crate std;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A per-test clone counter. Each test constructs its own instance so there is
-/// no cross-test interference from parallel execution. Backed by an atomic so a
-/// shared [`Arc<CloneCounter>`] can be observed from multiple threads.
+/// A per-test aggregate counter. Each test constructs its own instance so there
+/// is no cross-test interference from parallel execution. Backed by an atomic so
+/// a shared [`Arc<Counter>`] can be observed from multiple threads.
 #[derive(Debug, Default)]
-pub struct CloneCounter {
+pub struct Counter {
     count: AtomicUsize,
 }
 
-impl CloneCounter {
-    /// Returns the current clone count.
-    pub fn get(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
+impl Counter {
+    /// Creates a counter at zero.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Increments the counter (call from a `TryClone` impl via the shared `Arc`).
-    pub fn record_clone(&self) {
+    /// Records one occurrence of the event being counted. Call from a `Drop` or
+    /// `TryClone` impl via the shared [`Arc`].
+    pub fn record(&self) {
         self.count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the current count.
+    pub fn get(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
     }
 
     /// Convenience: creates an [`Arc`] handle suitable for embedding in

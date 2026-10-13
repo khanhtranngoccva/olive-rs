@@ -10,12 +10,7 @@ pub mod panicky_ops;
 pub mod rng;
 
 pub use allocators::CountingAllocator;
-// `TrackedItem` is the generic base behind the `FlakyTrackedItem` alias; it's
-// exported so future tests can instantiate it with other clone policies (e.g.
-// an infallible one) without touching the tracking machinery. Not referenced by
-// name in current tests, hence the allow.
-#[allow(unused_imports)]
-pub use counters::CloneCounter;
+pub use counters::Counter;
 pub use default::NoDefault;
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
@@ -33,30 +28,6 @@ use core::ptr::NonNull;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-
-/// A per-test drop counter. Each test constructs its own instance so there is
-/// no cross-test interference from parallel execution.
-#[derive(Debug, Default)]
-pub struct DropCounter {
-    count: AtomicUsize,
-}
-
-impl DropCounter {
-    /// Creates a counter at zero.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Increments the counter (call from a `Drop` impl via the shared `Arc`).
-    pub fn record_drop(&self) {
-        self.count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Returns the current drop count.
-    pub fn get(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
-    }
-}
 
 /// A per-test panic armer. Starts disarmed; the test arms it before triggering
 /// the code path under test and can disarm it afterwards. Backed by an atomic
@@ -152,12 +123,12 @@ impl TryClone for CloneBudget {
 /// `Arc` shared with the test body.
 #[derive(Debug, Clone)]
 pub struct DropCountingAlloc {
-    drops: Arc<DropCounter>,
+    drops: Arc<Counter>,
 }
 
 impl DropCountingAlloc {
     /// Builds a counting allocator sharing one drop counter with the test.
-    pub fn new(drops: Arc<DropCounter>) -> Self {
+    pub fn new(drops: Arc<Counter>) -> Self {
         Self { drops }
     }
 }
@@ -175,7 +146,7 @@ unsafe impl Allocator for DropCountingAlloc {
 
 impl Drop for DropCountingAlloc {
     fn drop(&mut self) {
-        self.drops.record_drop();
+        self.drops.record();
     }
 }
 
@@ -195,7 +166,7 @@ unsafe impl AllocatorTryClone for DropCountingAlloc {}
 
 impl TryDefault for DropCountingAlloc {
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self::new(Arc::new(DropCounter::new())))
+        Ok(Self::new(Arc::new(Counter::new())))
     }
 }
 

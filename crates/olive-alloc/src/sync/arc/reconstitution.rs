@@ -261,7 +261,7 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::Counter;
     use olive_core::try_traits::TryClone;
     use std::sync::Arc as StdArc;
 
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn arc_into_raw_with_allocator_roundtrip() {
-        let drops = StdArc::new(DropCounter::new());
+        let drops = StdArc::new(Counter::new());
         let alloc = olive_test_helpers::DropCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn weak_into_raw_with_allocator_roundtrip() {
-        let drops = StdArc::new(DropCounter::new());
+        let drops = StdArc::new(Counter::new());
         let alloc = olive_test_helpers::DropCountingAlloc::new(drops.clone());
 
         let arc = Arc::try_new_in(2i32, alloc).unwrap();

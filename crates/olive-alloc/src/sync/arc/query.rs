@@ -216,7 +216,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
-    use olive_test_helpers::DropCounter;
+    use olive_test_helpers::Counter;
     use olive_test_helpers::DropCountingAlloc;
 
     #[test]
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn allocator_returns_backing_handle() {
-        let drops = std::sync::Arc::new(DropCounter::new());
+        let drops = std::sync::Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let arc = Arc::try_new_in(1i32, alloc).unwrap();
         // The returned reference must alias the exact handle stored inside the
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn weak_allocator_returns_backing_handle() {
         // The returned reference aliases the exact handle stored inside the Weak.
-        let drops = std::sync::Arc::new(DropCounter::new());
+        let drops = std::sync::Arc::new(Counter::new());
         let alloc = DropCountingAlloc::new(drops.clone());
         let w: Weak<u64, _> = Weak::new_in(alloc);
         let got: &DropCountingAlloc = w.allocator();

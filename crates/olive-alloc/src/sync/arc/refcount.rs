@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn generic_forms_match_global_behaviour() {
         let drops = Rc::new(Cell::new(0));
-        let alloc_counter = StdArc::new(olive_test_helpers::DropCounter::new());
+        let alloc_counter = StdArc::new(olive_test_helpers::Counter::new());
         let alloc = DropCountingAlloc::new(alloc_counter);
         let arc = Arc::try_new_in(DropRecorder::new(drops.clone()), alloc).unwrap();
 

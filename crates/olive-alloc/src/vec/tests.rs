@@ -16,7 +16,7 @@ use olive_core::try_traits::try_from_iterator::TryFromIterator;
 use super::*;
 use crate::borrow::Cow;
 use olive_test_helpers::{
-    CloneBudget, DropCounter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
+    CloneBudget, Counter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
     PanicArmer,
 };
 use std::format;
@@ -953,7 +953,7 @@ fn into_iter_zst_as_slice_length_matches_len() {
 // then assert the count is exactly one after the iterator goes out of scope.
 #[test]
 fn into_iter_drops_allocator_exactly_once() {
-    let counter = Arc::new(DropCounter::new());
+    let counter = Arc::new(Counter::new());
     let alloc = DropCountingAlloc::new(counter.clone());
     let mut v: Vec<i32, DropCountingAlloc> = Vec::new_in(alloc);
     for i in 0..5i32 {
@@ -2055,13 +2055,13 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
 // drain compacts the vec correctly and drops every element exactly once.
 #[test]
 fn drain_fully_collected_compacts_and_drops_once() {
-    let counter = Arc::new(DropCounter::new());
+    let counter = Arc::new(Counter::new());
 
     #[allow(dead_code)]
-    struct Tracked(u32, Arc<DropCounter>);
+    struct Tracked(u32, Arc<Counter>);
     impl Drop for Tracked {
         fn drop(&mut self) {
-            self.1.record_drop();
+            self.1.record();
         }
     }
 
@@ -2104,13 +2104,13 @@ fn drain_fully_collected_compacts_and_drops_once() {
 #[test]
 fn drain_panic_in_destructor_still_compacts() {
     let armer = Arc::new(PanicArmer::new());
-    let counter = Arc::new(DropCounter::new());
+    let counter = Arc::new(Counter::new());
 
     #[allow(dead_code)]
-    struct Panicky(u32, Arc<PanicArmer>, Arc<DropCounter>);
+    struct Panicky(u32, Arc<PanicArmer>, Arc<Counter>);
     impl Drop for Panicky {
         fn drop(&mut self) {
-            self.2.record_drop();
+            self.2.record();
             if self.1.is_armed() && self.0 == 2 {
                 panic!("boom");
             }
