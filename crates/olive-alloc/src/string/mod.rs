@@ -1271,7 +1271,6 @@ impl<A: Allocator> String<A> {
     ) -> Result<Self, TryFromUtf16Error>
     where
         I: IntoIterator<Item = u16>,
-        I::IntoIter: FusedIterator,
     {
         // Reserve ahead of time
         let cap = count
@@ -1283,38 +1282,15 @@ impl<A: Allocator> String<A> {
             kind: TryFromUtf16ErrorKind::Reserve(e),
         })?;
 
-        // When `char::decode_utf16` reports an error, the counter tells us
-        // how many units were consumed up to (and including) the offending one,
-        // and whether the iterator has stopped.
-        let units_consumed = core::cell::Cell::new(0usize);
-        let terminated = core::cell::Cell::new(false);
-        let hooked_iter = input
-            .into_iter()
-            .inspect(|_| {
-                let prev = units_consumed.get();
-                #[allow(clippy::arithmetic_side_effects, reason = "bounded by count")]
-                {
-                    units_consumed.set(prev + 1);
-                }
-            })
-            .chain(core::iter::from_fn(|| {
-                terminated.set(true);
-                None
-            }));
-
-        for decoded in char::decode_utf16(hooked_iter) {
-            let ch = decoded.map_err(|_| {
-                // There are two scenarios:
-                // - The lone surrogate does not have anything following it
-                // (terminated = true), in which case subtracting 1 codeunit is correct.
-                // - The lone surrogate has something following it
-                // (terminated = false), so one must subtract 2 codeunits.
-                let deducted = if terminated.get() { 1 } else { 2 };
-                let pos = units_consumed.get().saturating_sub(deducted);
-                TryFromUtf16Error {
-                    kind: TryFromUtf16ErrorKind::LoneSurrogate(pos),
-                }
+        let mut cursor = 0usize;
+        for decoded in char::decode_utf16(input.into_iter()) {
+            let ch = decoded.map_err(|_| TryFromUtf16Error {
+                kind: TryFromUtf16ErrorKind::LoneSurrogate(cursor),
             })?;
+            #[allow(clippy::arithmetic_side_effects, reason = "bounded by count")]
+            {
+                cursor += ch.len_utf16();
+            }
             ret.try_push(ch).map_err(|e| TryFromUtf16Error {
                 kind: TryFromUtf16ErrorKind::Reserve(e),
             })?;
@@ -2500,6 +2476,32 @@ mod tests {
             "got {:?}",
             err.kind
         );
+    }
+
+    /// Regression: a lone *low* (trailing) surrogate must report its own
+    /// index. `char::decode_utf16` errors on it without peeking, so exactly one
+    /// unit is consumed; the former `terminated`-only discount under-reported
+    /// the position by one for this case.
+    #[test]
+    fn utf16_lone_low_surrogate_index() {
+        let cases: &[(&[u16], usize)] = &[
+            (&[0x0041, 0xDC00], 1),
+            (&[0xDC00], 0),
+            (&[0xDC00, 0x0041], 0),
+            (&[0x0041, 0x0042, 0xDC00], 2),
+            // Leading-surrogate cases must keep reporting the leading index.
+            (&[0x0041, 0xD800], 1),
+            (&[0x0041, 0xD800, 0x0042], 1),
+            (&[0x0041, 0xD800, 0xD800], 1),
+        ];
+        for (units, expected) in cases {
+            let err = String::try_from_utf16(units).unwrap_err();
+            assert!(
+                matches!(err.kind, TryFromUtf16ErrorKind::LoneSurrogate(pos) if pos == *expected),
+                "units={units:?} expected={expected} got {:?}",
+                err.kind
+            );
+        }
     }
 
     #[test]
