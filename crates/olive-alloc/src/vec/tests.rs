@@ -706,16 +706,8 @@ fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
     let mut v: Vec<FlakyClone> = Vec::new();
     let mut src: Vec<FlakyClone> = Vec::new();
     src.try_push(FlakyClone::new(2)).unwrap();
-    src.try_push(FlakyClone {
-        count: 1,
-        threshold: 2,
-    })
-    .unwrap();
-    src.try_push(FlakyClone {
-        count: 2,
-        threshold: 2,
-    })
-    .unwrap(); // fails to clone
+    src.try_push(FlakyClone::at(1, 2)).unwrap();
+    src.try_push(FlakyClone::at(2, 2)).unwrap(); // fails to clone
     let (rest, e) = v
         .try_extend_from_slice(src.as_slice())
         .expect_err("clone fail");
@@ -2808,8 +2800,8 @@ fn vec_partial_eq_cross_allocator() {
 
 #[test]
 fn vec_partial_ord_cross_allocator() {
-    use olive_test_helpers::allocators::ByteCapAlloc;
     use core::cmp::{Ordering, PartialOrd};
+    use olive_test_helpers::allocators::ByteCapAlloc;
 
     let a = mk_vec(&[1, 2]);
     let mut b: Vec<i32, ByteCapAlloc> =

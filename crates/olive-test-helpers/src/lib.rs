@@ -9,7 +9,7 @@ pub mod rng;
 
 pub use allocators::CountingAllocator;
 pub use counters::Counter;
-pub use fallible_ops::{FailArmer, MaybeUnclonable, NoDefault};
+pub use fallible_ops::{FailArmer, FlakyClone, MaybeUnclonable, NoDefault};
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
 pub use panicky_ops::PanickyOrd;
@@ -324,40 +324,3 @@ impl TryDefault for BudgetedAlloc {
     }
 }
 
-/// A value whose `try_clone` succeeds while its internal counter is below
-/// `threshold`, incrementing it each successful clone, then fails forever once
-/// the counter reaches `threshold`. Parametrized as `(start, threshold)` so a
-/// test can place exactly where in a sequence of clones the failure lands: an
-/// element seeded with `start` will fail to clone after `threshold - start`
-/// further successful clones. Lets us simulate a mid-operation clone failure at
-/// a deterministic point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FlakyClone {
-    /// Successful clones performed so far.
-    pub count: u32,
-    /// Number of successful clones permitted before `try_clone` starts failing.
-    pub threshold: u32,
-}
-
-impl FlakyClone {
-    /// Shorthand constructor for the common case of starting at 0.
-    pub const fn new(threshold: u32) -> Self {
-        Self {
-            count: 0,
-            threshold,
-        }
-    }
-}
-
-impl TryClone for FlakyClone {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        if self.count >= self.threshold {
-            Err(TryCloneError::Other("flaky"))
-        } else {
-            Ok(FlakyClone {
-                count: self.count + 1,
-                threshold: self.threshold,
-            })
-        }
-    }
-}

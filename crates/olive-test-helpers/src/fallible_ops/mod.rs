@@ -9,8 +9,10 @@ extern crate std;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub mod flaky_clone;
 pub mod maybe_unclonable;
 pub mod no_default;
+pub use flaky_clone::FlakyClone;
 pub use maybe_unclonable::MaybeUnclonable;
 pub use no_default::NoDefault;
 

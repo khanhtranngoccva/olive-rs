@@ -1064,27 +1064,9 @@ mod tests {
         // may be committed, and the tail must begin exactly at the failing element.
         let mut m: BTreeMap<u32, FlakyClone> = BTreeMap::new();
         let src: &[(u32, FlakyClone)] = &[
-            (
-                1,
-                FlakyClone {
-                    count: 0,
-                    threshold: 5,
-                },
-            ),
-            (
-                2,
-                FlakyClone {
-                    count: 0,
-                    threshold: 5,
-                },
-            ),
-            (
-                3,
-                FlakyClone {
-                    count: 5,
-                    threshold: 5,
-                },
-            ),
+            (1, FlakyClone::new(5)),
+            (2, FlakyClone::new(5)),
+            (3, FlakyClone::at(5, 5)),
         ];
         let (rest, e) = m
             .try_extend_from_slice(src)

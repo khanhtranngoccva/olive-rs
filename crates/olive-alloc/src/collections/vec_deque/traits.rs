@@ -918,14 +918,8 @@ mod tests {
         let mut dq: VecDeque<FlakyClone> = VecDeque::new();
         let src = [
             FlakyClone::new(2), // count=0 → clones to count=1 ✓
-            FlakyClone {
-                count: 1,
-                threshold: 2,
-            }, // clones to count=2 ✓
-            FlakyClone {
-                count: 2,
-                threshold: 2,
-            }, // count >= threshold → ✗
+            FlakyClone::at(1, 2), // clones to count=2 ✓
+            FlakyClone::at(2, 2), // count >= threshold → ✗
         ];
         let (rest, err) = match dq.try_extend_from_slice(&src) {
             Ok(_) => panic!("expected clone failure"),
