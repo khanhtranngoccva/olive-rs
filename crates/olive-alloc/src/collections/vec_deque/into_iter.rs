@@ -138,19 +138,18 @@ mod tests {
         let budget = Arc::new(CloneBudget::new(u32::MAX));
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for i in 0..4u32 {
-            ledger.register(i);
-            dq.try_push_back(FlakyCloneTrackedItem {
-                id: i,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            })
+            dq.try_push_back(FlakyCloneTrackedItem::with_id(
+                &ledger,
+                i,
+                (*budget).share(),
+            ))
             .unwrap();
         }
         assert!(ledger.live_ids().len() == 4);
         let last = dq.into_iter().last();
         // `last` yields the back element (id 3) and leaves the rest to the
         // deque's Drop, which destroys the three front elements.
-        assert_eq!(last.as_ref().map(|t| t.id), Some(3));
+        assert_eq!(last.as_ref().map(|t| t.id()), Some(3));
         assert_eq!(ledger.live_ids(), std::vec![3]);
         assert!(ledger.double_dropped().is_empty());
         drop(last);

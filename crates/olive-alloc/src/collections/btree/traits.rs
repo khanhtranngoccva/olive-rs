@@ -835,21 +835,9 @@ mod tests {
         let mut m: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
             BTreeMap::new_in(alloc.clone());
         for i in (0..40u32).step_by(2) {
-            let kid = ledger.allocate();
-            ledger.register(kid);
-            let vid = ledger.allocate();
-            ledger.register(vid);
             m.try_insert(
-                TrackedItem {
-                    id: kid,
-                    ledger: ledger.clone(),
-                    inner: i,
-                },
-                TrackedItem {
-                    id: vid,
-                    ledger: ledger.clone(),
-                    inner: i * 100,
-                },
+                TrackedItem::construct(&ledger, i),
+                TrackedItem::construct(&ledger, i * 100),
             )
             .unwrap();
         }
@@ -860,21 +848,9 @@ mod tests {
         let mut src_pairs: std::vec::Vec<(TrackedItem<u32>, TrackedItem<u32>)> =
             std::vec::Vec::new();
         for i in (1..80u32).step_by(2) {
-            let kid = ledger.allocate();
-            ledger.register(kid);
-            let vid = ledger.allocate();
-            ledger.register(vid);
             src_pairs.push((
-                TrackedItem {
-                    id: kid,
-                    ledger: ledger.clone(),
-                    inner: i,
-                },
-                TrackedItem {
-                    id: vid,
-                    ledger: ledger.clone(),
-                    inner: i * 100,
-                },
+                TrackedItem::construct(&ledger, i),
+                TrackedItem::construct(&ledger, i * 100),
             ));
         }
 

@@ -1014,21 +1014,9 @@ mod tests {
         val_val: u32,
         ledger: &Arc<Ledger>,
     ) {
-        let kid = ledger.allocate();
-        ledger.register(kid);
-        let vid = ledger.allocate();
-        ledger.register(vid);
         map.try_insert(
-            TrackedItem {
-                id: kid,
-                ledger: ledger.clone(),
-                inner: key_val,
-            },
-            TrackedItem {
-                id: vid,
-                ledger: ledger.clone(),
-                inner: val_val,
-            },
+            TrackedItem::construct(ledger, key_val),
+            TrackedItem::construct(ledger, val_val),
         )
         .unwrap();
     }
@@ -1508,7 +1496,7 @@ mod tests {
             armed: Arc<AtomicBool>,
             counter: Arc<olive_test_helpers::Counter>,
         }
-        
+
         impl Drop for MaybePanic {
             fn drop(&mut self) {
                 self.counter.record();

@@ -2653,13 +2653,8 @@ mod tests {
         let mut dq: VecDeque<TrackedItem<()>> =
             VecDeque::try_with_capacity((count as usize).max(4)).expect("allocation ok");
         for i in 0..count {
-            ledger.register(i);
             assert_eq!(
-                dq.try_push_back_within_capacity(TrackedItem {
-                    id: i,
-                    ledger: ledger.clone(),
-                    inner: (),
-                }),
+                dq.try_push_back_within_capacity(TrackedItem::with_id(ledger, i, ())),
                 Ok(())
             );
         }
@@ -2671,9 +2666,9 @@ mod tests {
         let ledger = Arc::new(Ledger::new());
         let mut dq = seed_tracked(4, &ledger);
         assert_eq!(ledger.live_ids(), std::vec![0, 1, 2, 3]);
-        assert_eq!(dq.pop_back().map(|t| t.id), Some(3));
+        assert_eq!(dq.pop_back().map(|t| t.id()), Some(3));
         assert_eq!(ledger.drop_count(3), 1);
-        assert_eq!(dq.pop_front().map(|t| t.id), Some(0));
+        assert_eq!(dq.pop_front().map(|t| t.id()), Some(0));
         assert_eq!(ledger.drop_count(0), 1);
         // Two survivors remain in the deque; nothing double-dropped yet.
         assert_eq!(dq.len(), 2);

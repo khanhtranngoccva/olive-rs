@@ -521,12 +521,11 @@ mod tests {
         let budget = Arc::new(CloneBudget::new(u32::MAX));
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::try_with_capacity(8).expect("ok");
         for i in 0..5u32 {
-            ledger.register(i);
-            dq.try_push_back_within_capacity(FlakyCloneTrackedItem {
-                id: i,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            })
+            dq.try_push_back_within_capacity(FlakyCloneTrackedItem::with_id(
+                &ledger,
+                i,
+                (*budget).share(),
+            ))
             .unwrap();
         }
         assert_eq!(ledger.live_ids(), std::vec![0, 1, 2, 3, 4]);
@@ -535,8 +534,8 @@ mod tests {
         let mut drain = dq.try_drain(..).unwrap();
         // Consuming moves the item out of the deque, so its ledger id dies the
         // moment the returned value is dropped (end of statement).
-        assert_eq!(drain.next().map(|t| t.id), Some(0));
-        assert_eq!(drain.next().map(|t| t.id), Some(1));
+        assert_eq!(drain.next().map(|t| t.id()), Some(0));
+        assert_eq!(drain.next().map(|t| t.id()), Some(1));
         assert_eq!(ledger.live_ids(), std::vec![2, 3, 4]);
         // Drop the drainer with 3 unconsumed elements (ids 2, 3, 4) — its Drop
         // impl must destroy exactly those three, each once.

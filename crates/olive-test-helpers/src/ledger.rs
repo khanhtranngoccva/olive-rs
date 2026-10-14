@@ -20,9 +20,9 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 /// aggregate counts.
 pub struct TrackedItem<C> {
     /// This item's unique ledger id.
-    pub id: u32,
+    id: u32,
     /// The ledger this item registers its drops with.
-    pub ledger: Arc<Ledger>,
+    ledger: Arc<Ledger>,
     /// The wrapped payload.
     pub inner: C,
 }
@@ -45,6 +45,32 @@ impl<C> TrackedItem<C> {
             ledger: ledger.clone(),
             inner,
         }
+    }
+
+    /// Constructs a tracked item with an explicit `id`, registering it as live.
+    ///
+    /// This ID should generally come from the [`Ledger::allocate`] function. 
+    /// Regardless of whether the ID was allocated or not, do not call this on 
+    /// an already registered ID.
+    pub fn with_id(ledger: &Arc<Ledger>, id: u32, inner: C) -> Self {
+        ledger.register(id);
+        Self {
+            id,
+            ledger: ledger.clone(),
+            inner,
+        }
+    }
+
+    /// This item's ledger id. Read-only: the id is fixed at construction
+    /// because `Drop` unregisters it.
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The ledger this item registers its drops with. Read-only: `Drop` must
+    /// reach the ledger that registered the id.
+    pub fn ledger(&self) -> &Arc<Ledger> {
+        &self.ledger
     }
 }
 

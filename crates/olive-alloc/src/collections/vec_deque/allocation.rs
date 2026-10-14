@@ -890,9 +890,9 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::collections::vec_deque::TryVecDequeWithCloneError;
-    use olive_test_helpers::{BudgetedAlloc, FailAlloc};
     use core::mem::size_of;
     use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+    use olive_test_helpers::{BudgetedAlloc, FailAlloc};
 
     /// Concatenate the two halves of a deque into a fixed-size array for
     /// comparison. Returns `None` if the combined length exceeds `N`.
@@ -2150,13 +2150,8 @@ mod tests {
                 let mut dq: VecDeque<TrackedItem<()>> = VecDeque::new();
                 // Seed one element (id 0).
                 let seed_id = l.allocate();
-                l.register(seed_id);
-                dq.try_push_back(TrackedItem {
-                    id: seed_id,
-                    ledger: l.clone(),
-                    inner: (),
-                })
-                .unwrap();
+                dq.try_push_back(TrackedItem::with_id(&l, seed_id, ()))
+                    .unwrap();
 
                 // Resize to 4: the closure succeeds twice (minting ids 1 and 2),
                 // then panics on the third call. The guard rolls the two pushed
@@ -2169,12 +2164,7 @@ mod tests {
                             panic!("forced panic mid-resize_with");
                         }
                         let id = l.allocate();
-                        l.register(id);
-                        Ok(TrackedItem {
-                            id,
-                            ledger: l.clone(),
-                            inner: (),
-                        })
+                        Ok(TrackedItem::with_id(&l, id, ()))
                     });
             }
         }));

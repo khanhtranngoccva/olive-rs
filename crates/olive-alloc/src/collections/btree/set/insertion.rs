@@ -418,9 +418,9 @@ mod tests {
         for i in [5, 10, 12, 14] {
             b.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
         }
-        let id_of_five = a.get(&5).unwrap().id;
+        let id_of_five = a.get(&5).unwrap().id();
         a.try_append(&mut b).unwrap();
-        let new_id_of_five = a.get(&5).unwrap().id;
+        let new_id_of_five = a.get(&5).unwrap().id();
         assert_eq!(
             new_id_of_five, id_of_five,
             "old item should not be pushed out"

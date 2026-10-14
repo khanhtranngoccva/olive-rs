@@ -130,12 +130,7 @@ mod tests {
         let mut ids = std::vec::Vec::with_capacity(n as usize);
         for i in 0..n {
             let id = ledger.allocate();
-            ledger.register(id);
-            let item = TrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (),
-            };
+            let item = TrackedItem::with_id(&ledger, id, ());
             dq.try_push_back(item).expect("push ok");
             ids.push(i);
         }
@@ -206,12 +201,7 @@ mod tests {
         let mut ids = std::vec::Vec::with_capacity(n as usize);
         for i in 0..n {
             let id = ledger.allocate();
-            ledger.register(id);
-            let item = TrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (),
-            };
+            let item = TrackedItem::with_id(&ledger, id, ());
             dq.try_push_back_within_capacity(item)
                 .expect("within-capacity push ok");
             ids.push(i);
@@ -225,12 +215,7 @@ mod tests {
         let mut front_ids_rev = std::vec::Vec::with_capacity(2);
         for _j in 0..2u32 {
             let id = ledger.allocate();
-            ledger.register(id);
-            let item = TrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (),
-            };
+            let item = TrackedItem::with_id(&ledger, id, ());
             dq.try_push_front_within_capacity(item)
                 .expect("within-capacity push ok");
             front_ids_rev.push(id);
@@ -328,12 +313,7 @@ mod tests {
         for i in 0..5u32 {
             let id = ledger.allocate();
             ledger.register(id);
-            v.try_push(TrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (),
-            })
-            .unwrap();
+            v.try_push(TrackedItem::with_id(&ledger, id, ())).unwrap();
             ids.push(i);
         }
         drop(VecDeque::from(v));

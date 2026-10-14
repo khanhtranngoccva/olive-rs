@@ -336,14 +336,8 @@ mod tests {
         // Build a 2-element slice payload; each item shares the same budget.
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..2 {
-            let id = ledger.allocate();
-            ledger.register(id);
-            src.try_push(FlakyCloneTrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            })
-            .unwrap();
+            src.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+                .unwrap();
         }
         let arc = Arc::try_new_in(src, alloc).unwrap();
         let arc2 = arc.try_clone().unwrap(); // consumes 1 (budget: 2 -> 1)
@@ -351,7 +345,8 @@ mod tests {
 
         // Allocator clone inside try_make_mut succeeds (budget: 1 -> 0),
         // but the first element clone in try_clone_to_uninit fails.
-        let res: Result<&mut Vec<FlakyCloneTrackedItem>, TryCloneError> = Arc::try_make_mut(&mut arc);
+        let res: Result<&mut Vec<FlakyCloneTrackedItem>, TryCloneError> =
+            Arc::try_make_mut(&mut arc);
         assert!(res.is_err());
         // The arc is unchanged (still shared, still pointing at the original).
         assert_eq!(Arc::strong_count(&arc), 2);

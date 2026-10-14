@@ -323,4 +323,3 @@ impl TryDefault for BudgetedAlloc {
         Ok(Self::new(0))
     }
 }
-

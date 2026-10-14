@@ -557,16 +557,11 @@ mod tests {
         let budget = StdArc::new(CloneBudget::new(u32::MAX));
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
-            let id = ledger.allocate();
-            ledger.register(id);
-            src.push(FlakyCloneTrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            });
+            src.push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()));
         }
 
-        let arc: Arc<[FlakyCloneTrackedItem]> = Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
+        let arc: Arc<[FlakyCloneTrackedItem]> =
+            Arc::try_clone_from_ref_in(&src[..], Global).unwrap();
         assert_eq!(arc.len(), 3);
         // Six instances exist: the three sources and their three clones. None
         // has been dropped yet.
@@ -598,13 +593,7 @@ mod tests {
         let budget = StdArc::new(CloneBudget::new(2));
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
-            let id = ledger.allocate();
-            ledger.register(id);
-            src.push(FlakyCloneTrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            });
+            src.push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()));
         }
         let res: Result<Arc<[FlakyCloneTrackedItem]>, TryCloneError> =
             Arc::try_clone_from_ref_in(&src[..], Global);

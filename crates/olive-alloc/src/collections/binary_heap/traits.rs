@@ -231,10 +231,10 @@ impl<T: Ord + TryClone, A: Allocator> TryExtendFromSlice<T> for BinaryHeap<T, A>
 mod tests {
     extern crate std;
     use super::*;
+    use olive_core::try_traits::TryFromIterator;
     use olive_test_helpers::BudgetedAlloc;
     use olive_test_helpers::PanicArmer;
     use olive_test_helpers::PanickyOrd;
-    use olive_core::try_traits::TryFromIterator;
     use std::sync::Arc;
 
     // --- Debug ---------------------------------------------------------------

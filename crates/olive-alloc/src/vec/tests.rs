@@ -448,15 +448,9 @@ fn resize_rollbacks_partial_on_clone_failure() {
     let budget = Arc::new(CloneBudget::new(2));
 
     // Seed one live payload (id 0).
-    let seed_id = ledger.allocate();
-    ledger.register(seed_id);
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
-    v.try_push(FlakyCloneTrackedItem {
-        id: seed_id,
-        ledger: ledger.clone(),
-        inner: (*budget).share(),
-    })
-    .unwrap();
+    v.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+        .unwrap();
 
     // Clone the seed out so we can hand it to try_resize by reference without
     // fighting the &mut self borrow. This is a real clone (id 1) that lives in
@@ -496,29 +490,17 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     let budget = Arc::new(CloneBudget::new(2));
 
     // One live seed in the destination (id 0).
-    let seed_id = ledger.allocate();
-    ledger.register(seed_id);
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
-    v.try_push(FlakyCloneTrackedItem {
-        id: seed_id,
-        ledger: ledger.clone(),
-        inner: (*budget).share(),
-    })
-    .unwrap();
+    v.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+        .unwrap();
 
     // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
     // order; the budget allows exactly two successful clones (of ids 1 and 2),
     // then the third clone (of id 3) fails → rollback discards the two appends.
     let mut fv: Vec<FlakyCloneTrackedItem> = Vec::new();
     for _ in 0..3 {
-        let id = ledger.allocate();
-        ledger.register(id);
-        fv.try_push(FlakyCloneTrackedItem {
-            id,
-            ledger: ledger.clone(),
-            inner: (*budget).share(),
-        })
-        .unwrap();
+        fv.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+            .unwrap();
     }
 
     let e = v
@@ -799,12 +781,11 @@ fn into_iter_drop_mid_way_drops_only_tail() {
     {
         let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
         for i in 0..5u32 {
-            ledger.register(i);
-            v.try_push(FlakyCloneTrackedItem {
-                id: i,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            })
+            v.try_push(FlakyCloneTrackedItem::with_id(
+                &ledger,
+                i,
+                (*budget).share(),
+            ))
             .unwrap();
         }
         let mut it = v.into_iter();
@@ -1187,12 +1168,11 @@ fn drop_runs_each_element_once() {
     let budget = Arc::new(CloneBudget::new(u32::MAX));
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..5u32 {
-        ledger.register(i);
-        v.try_push(FlakyCloneTrackedItem {
-            id: i,
-            ledger: ledger.clone(),
-            inner: (*budget).share(),
-        })
+        v.try_push(FlakyCloneTrackedItem::with_id(
+            &ledger,
+            i,
+            (*budget).share(),
+        ))
         .unwrap();
     }
     // truncate(3) destroys the tail (ids 3 and 4).
@@ -1225,13 +1205,8 @@ fn dedup_by_panic_is_safe() {
         move || {
             let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
             for i in 0..6u8 {
-                l.register(i as u32);
-                v.try_push(FlakyCloneTrackedItem {
-                    id: i as u32,
-                    ledger: l.clone(),
-                    inner: (*b).share(),
-                })
-                .unwrap();
+                v.try_push(FlakyCloneTrackedItem::with_id(&l, i as u32, (*b).share()))
+                    .unwrap();
             }
             // Panic on the third predicate call, mid-gap-fill, so some duplicate
             // elements have already been destroyed by the time we unwind.
@@ -1241,7 +1216,7 @@ fn dedup_by_panic_is_safe() {
                 if calls == 3 {
                     panic!("forced panic mid-dedup");
                 }
-                a.id == b.id
+                a.id() == b.id()
             });
         }
     }));
@@ -1999,12 +1974,11 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
 
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
-        ledger.register(i);
-        v.try_push(FlakyCloneTrackedItem {
-            id: i,
-            ledger: ledger.clone(),
-            inner: (*budget).share(),
-        })
+        v.try_push(FlakyCloneTrackedItem::with_id(
+            &ledger,
+            i,
+            (*budget).share(),
+        ))
         .unwrap();
     }
     // Drain [1..4): elements 1, 2, 3 live in the hole. Pull one from each end:
@@ -2014,9 +1988,9 @@ fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     // the prefix is the only part the vec still owns.)
     let mut d = v.try_drain(1..4).unwrap();
     let front = d.next().expect("front drain element");
-    assert_eq!(front.id, 1);
+    assert_eq!(front.id(), 1);
     let back = d.next_back().expect("back drain element");
-    assert_eq!(back.id, 3);
+    assert_eq!(back.id(), 3);
     // Forget the rest of the drainer: its remaining hole (element 2) and the
     // suffix (4, 5) are abandoned by both owners.
     core::mem::forget(d);
@@ -2219,12 +2193,11 @@ fn split_off_moves_all_elements_exactly_once() {
 
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
-        ledger.register(i);
-        v.try_push(FlakyCloneTrackedItem {
-            id: i,
-            ledger: ledger.clone(),
-            inner: (*budget).share(),
-        })
+        v.try_push(FlakyCloneTrackedItem::with_id(
+            &ledger,
+            i,
+            (*budget).share(),
+        ))
         .unwrap();
     }
     let right = v.try_split_off(3).unwrap();

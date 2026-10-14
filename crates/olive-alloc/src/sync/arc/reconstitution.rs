@@ -261,8 +261,8 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::Counter;
     use olive_core::try_traits::TryClone;
+    use olive_test_helpers::Counter;
     use std::sync::Arc as StdArc;
 
     // --- Sized round-trips ---------------------------------------------------

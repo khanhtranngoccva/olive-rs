@@ -247,8 +247,8 @@ mod tests {
 
     use super::IntoIter;
     use crate::collections::binary_heap::BinaryHeap;
-    use olive_test_helpers::{PanicArmer, PanickyOrd};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
+    use olive_test_helpers::{PanicArmer, PanickyOrd};
     use std::sync::Arc;
     use std::{format, panic, vec, vec::Vec};
 

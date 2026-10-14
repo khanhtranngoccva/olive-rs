@@ -385,24 +385,11 @@ mod tests {
         val_val: u32,
         ledger: &Arc<Ledger>,
     ) -> u32 {
-        let kid = ledger.allocate();
-        ledger.register(kid);
-        let vid = ledger.allocate();
-        ledger.register(vid);
-        map.try_insert(
-            TrackedItem {
-                id: kid,
-                ledger: ledger.clone(),
-                inner: key_val,
-            },
-            TrackedItem {
-                id: vid,
-                ledger: ledger.clone(),
-                inner: val_val,
-            },
-        )
-        .unwrap();
-        kid
+        let key = TrackedItem::construct(ledger, key_val);
+        let key_id = key.id();
+        map.try_insert(key, TrackedItem::construct(ledger, val_val))
+            .unwrap();
+        key_id
     }
 
     #[test]
@@ -461,7 +448,8 @@ mod tests {
             .find(|(k, _)| k.inner == 3)
             .expect("key 3 survives");
         assert_eq!(
-            k.id, a_k3,
+            k.id(),
+            a_k3,
             "surviving key must be self's original key, not other's"
         );
         // …and carries OTHER's value payload (its old value was displaced).
@@ -533,21 +521,9 @@ mod tests {
         ledger: &Arc<Ledger>,
     ) {
         use olive_test_helpers::TrackedItem;
-        let kid = ledger.allocate();
-        ledger.register(kid);
-        let vid = ledger.allocate();
-        ledger.register(vid);
         map.try_insert(
-            TrackedItem {
-                id: kid,
-                ledger: ledger.clone(),
-                inner: key_val,
-            },
-            TrackedItem {
-                id: vid,
-                ledger: ledger.clone(),
-                inner: val_val,
-            },
+            TrackedItem::construct(ledger, key_val),
+            TrackedItem::construct(ledger, val_val),
         )
         .unwrap();
     }

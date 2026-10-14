@@ -616,14 +616,8 @@ mod tests {
         // Seed three elements into the source deque (ids 0, 1, 2).
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for _ in 0..3 {
-            let id = ledger.allocate();
-            ledger.register(id);
-            dq.try_push_back(FlakyCloneTrackedItem {
-                id,
-                ledger: ledger.clone(),
-                inner: (*budget).share(),
-            })
-            .unwrap();
+            dq.try_push_back(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+                .unwrap();
         }
 
         let err = match dq.try_clone() {
@@ -917,7 +911,7 @@ mod tests {
         // (the failing element).
         let mut dq: VecDeque<FlakyClone> = VecDeque::new();
         let src = [
-            FlakyClone::new(2), // count=0 → clones to count=1 ✓
+            FlakyClone::new(2),   // count=0 → clones to count=1 ✓
             FlakyClone::at(1, 2), // clones to count=2 ✓
             FlakyClone::at(2, 2), // count >= threshold → ✗
         ];
