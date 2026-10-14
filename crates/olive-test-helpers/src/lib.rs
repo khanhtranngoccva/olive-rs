@@ -12,13 +12,13 @@ pub use counters::Counter;
 pub use fallible_ops::{FailArmer, FlakyClone, MaybeUnclonable, NoDefault};
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
-pub use panicky_ops::PanickyOrd;
+pub use panicky_ops::{PanicArmer, PanickyOrd};
 pub use rng::TestRng;
 
 extern crate std;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use allocator_api2::alloc::Global;
 use core::alloc::Layout;
@@ -26,36 +26,6 @@ use core::ptr::NonNull;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-
-/// A per-test panic armer. Starts disarmed; the test arms it before triggering
-/// the code path under test and can disarm it afterwards. Backed by an atomic
-/// so a shared [`Arc<PanicArmer>`] can be observed across threads.
-#[derive(Debug, Default)]
-pub struct PanicArmer {
-    armed: AtomicBool,
-}
-
-impl PanicArmer {
-    /// Creates an armer in the disarmed state.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Arms the armer, so comparisons touching it will panic.
-    pub fn arm(&self) {
-        self.armed.store(true, Ordering::Relaxed);
-    }
-
-    /// Disarms the armer, so comparisons touching it stop panicking.
-    pub fn disarm(&self) {
-        self.armed.store(false, Ordering::Relaxed);
-    }
-
-    /// Whether the armer is currently armed.
-    pub fn is_armed(&self) -> bool {
-        self.armed.load(Ordering::Relaxed)
-    }
-}
 
 /// A per-test clone budget.
 /// Counts down from a configured threshold; when it reaches zero, clones fail.

@@ -49,8 +49,8 @@ impl<C> TrackedItem<C> {
 
     /// Constructs a tracked item with an explicit `id`, registering it as live.
     ///
-    /// This ID should generally come from the [`Ledger::allocate`] function. 
-    /// Regardless of whether the ID was allocated or not, do not call this on 
+    /// This ID should generally come from the [`Ledger::allocate`] function.
+    /// Regardless of whether the ID was allocated or not, do not call this on
     /// an already registered ID.
     pub fn with_id(ledger: &Arc<Ledger>, id: u32, inner: C) -> Self {
         ledger.register(id);

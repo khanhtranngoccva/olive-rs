@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use crate::PanicArmer;
+use super::PanicArmer;
 use core::ops::{Deref, DerefMut};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use std::sync::Arc;
