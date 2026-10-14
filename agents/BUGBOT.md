@@ -16,6 +16,8 @@ This is a non-exhaustive document/playbook to instruct LLM-based bugbots to sear
 ## Unintentional leak/no-drop bugs
 - The `ManuallyDrop` object suppresses the drop glue. Caution is necessary to make sure these values are eventually hydrated for `Drop` at some point.
     - An actual bug was found and fixed in `IntoIter` where a reference is taken from `self.alloc` to deallocate, but does not call `ManuallyDrop::take()` to hydrate and drop the allocator.
+- A naive `Drop` implementation that drains owned elements is not panic-safe: if a key/value destructor (or any user code run mid-drain) unwinds, the remaining owned elements are never dropped and their allocations leak. Structure the drain as a `DropGuard` whose own `Drop` resumes draining during unwind, so both the normal and the unwinding path go through the same loop.
+    - An actual bug was found and fixed in `BTreeMap::IntoIter`'s `Drop`: a key or value destructor unwinding mid-drain leaked every remaining node allocation. Fixed by the `DropGuard` pattern above.
 
 ## Double drop bugs
 - `ptr::read` usually implies move syntax. Do not move values that are not wrapped with `ManuallyDrop`. 
