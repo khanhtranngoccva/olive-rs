@@ -4,14 +4,24 @@
 //!
 //! This is different from [`panicky_ops`](crate::panicky_ops), whose operations blow up
 //! with a panic.
+//!
+//! The failure triggers come in three shapes:
+//! - *command-triggered*, set off at will through a [`FailArmer`]
+//!   ([`MaybeUnclonable`]),
+//! - *unconditional* (like [`NoDefault`]),
+//! - *delayed*, landing after a set number of clones ([`FlakyClone`] with a
+//!   per-instance counter, [`CloneBudget`] with one budget shared by every
+//!   clone).
 
 extern crate std;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub mod clone_budget;
 pub mod flaky_clone;
 pub mod maybe_unclonable;
 pub mod no_default;
+pub use clone_budget::CloneBudget;
 pub use flaky_clone::FlakyClone;
 pub use maybe_unclonable::MaybeUnclonable;
 pub use no_default::NoDefault;

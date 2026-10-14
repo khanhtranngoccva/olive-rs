@@ -6,9 +6,8 @@ use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 /// counter is below `threshold`, incrementing the counter each successful
 /// clone, then fails forever once the counter reaches `threshold`.
 ///
-/// Retained as the older of the two mechanisms; prefer
-/// [`MaybeUnclonable`](super::MaybeUnclonable) unless the test genuinely needs
-/// the failure to land after a fixed number of clones.
+/// Each clone carries its own counter, [`CloneBudget`](super::CloneBudget)
+/// is a similar pill with a shared counter instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlakyClone {
     /// Successful clones performed so far.

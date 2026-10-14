@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::vec::Vec;
 
-use super::CloneBudget;
+use crate::fallible_ops::CloneBudget;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 /// A tracked item carrying a unique [`Ledger`] id plus a pluggable inner payload
