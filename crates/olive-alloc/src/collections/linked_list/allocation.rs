@@ -7,7 +7,7 @@ use super::LinkedList;
 use super::node::Node;
 
 impl<T, A: Allocator> LinkedList<T, A> {
-    /// Prepends `element` to the front of the list, allocating its node.
+    /// Prepends `element` to the front of the list, allocating its node in the process.
     ///
     /// # Errors
     ///
@@ -20,8 +20,8 @@ impl<T, A: Allocator> LinkedList<T, A> {
             .map_err(|(_, error)| error)
     }
 
-    /// Prepends `element` to the front of the list, allocating its node, and
-    /// returns a mutable reference to the newly inserted element.
+    /// Prepends `element` to the front of the list, allocating its node in the process,
+    /// and returns a mutable reference to the newly inserted element.
     ///
     /// # Errors
     ///
@@ -44,8 +44,8 @@ impl<T, A: Allocator> LinkedList<T, A> {
         self.try_push_front_mut_give_back(element).map(|_| ())
     }
 
-    /// Prepends `element` to the front of the list, allocating its node, and
-    /// returns a mutable reference to the newly inserted element.
+    /// Prepends `element` to the front of the list, allocating its node in the process,
+    /// and returns a mutable reference to the newly inserted element.
     ///
     /// The reference stays valid for as long as the list is mutably borrowed:
     /// nodes are heap-allocated, so later pushes never move it.
@@ -76,8 +76,78 @@ impl<T, A: Allocator> LinkedList<T, A> {
         // initialized by the `write` above.
         Ok(unsafe { self.push_front_node(node) })
     }
+
+    /// Appends `element` to the back of the list, allocating its node in the process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if allocating the node fails. The list is then
+    /// unchanged and the element is dropped.
+    pub fn try_push_back(&mut self, element: T) -> Result<(), AllocError> {
+        self.try_push_back_mut_give_back(element)
+            .map(|_| ())
+            .map_err(|(_, error)| error)
+    }
+
+    /// Appends `element` to the back of the list, allocating its node in the process,
+    /// and returns a mutable reference to the newly inserted element.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if allocating the node fails. The list is then
+    /// unchanged and the element is dropped.
+    pub fn try_push_back_mut(&mut self, element: T) -> Result<&mut T, AllocError> {
+        self.try_push_back_mut_give_back(element)
+            .map_err(|(_, error)| error)
+    }
+
+    /// Like [`try_push_back`](Self::try_push_back), but hands the element
+    /// back on failure instead of dropping it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err((element, AllocError))` if allocating the node fails. The
+    /// list is then unchanged and the element is returned untouched.
+    pub fn try_push_back_give_back(&mut self, element: T) -> Result<(), (T, AllocError)> {
+        self.try_push_back_mut_give_back(element).map(|_| ())
+    }
+
+    /// Appends `element` to the back of the list, allocating its node in the process,
+    /// and returns a mutable reference to the newly inserted element.
+    ///
+    /// The reference stays valid for as long as the list is mutably borrowed:
+    /// nodes are heap-allocated, so later pushes never move it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err((element, AllocError))` if allocating the node fails. The
+    /// list is then unchanged and the element is returned untouched.
+    pub fn try_push_back_mut_give_back(&mut self, element: T) -> Result<&mut T, (T, AllocError)> {
+        // Allocate the node before moving the element in, so a failed
+        // allocation leaves the element untouched for the caller.
+        let node = match Box::try_new_uninit_in(&self.alloc) {
+            Ok(node) => node,
+            Err(error) => return Err((element, error)),
+        };
+        // The allocation succeeded, so no failure is possible from here on.
+        let node = node.write(Node {
+            next: None,
+            prev: None,
+            element,
+        });
+
+        // SAFETY: the node was allocated with `&self.alloc` and is not
+        // linked anywhere.
+        let (node, _) = Box::into_non_null_with_allocator(node);
+        // SAFETY: the node was just allocated with `&self.alloc`, the same
+        // allocator this list deallocates with, and its element was fully
+        // initialized by the `write` above.
+        Ok(unsafe { self.push_back_node(node) })
+    }
 }
 
+// FIXME: after finalizing query.rs or iter.rs or traits.rs (for PartialEq), should check the state of the
+// list to match expectations
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -230,10 +300,11 @@ mod tests {
         assert!(ledger.all_dropped_once(0..1));
     }
 
-    // This test is written to run under Miri. Pushing a second element should not
-    // invalidate the first element's aliasing reference.
+    // This test is written to run under Miri. Pushing a second element to the front
+    // should not invalidate the first element's aliasing reference when writing the old
+    // head's `prev` pointer.
     #[test]
-    fn pointer_to_first_element_survives_a_second_push() {
+    fn pointer_to_first_element_survives_a_push_front() {
         let mut l: LinkedList<i32> = LinkedList::new();
         let first = l.try_push_front_mut_give_back(1).unwrap();
         assert_eq!(*first, 1);
@@ -245,6 +316,137 @@ mod tests {
 
         // The first element's storage was untouched by the push:
         // the reference must still read the value it was created from.
+        assert_eq!(*reference, 1);
+        assert_eq!(l.len(), 2);
+    }
+
+    #[test]
+    fn try_push_back_grows_the_list() {
+        let mut l = LinkedList::new();
+        for i in 0..3 {
+            l.try_push_back(i).unwrap();
+            assert_eq!(l.len(), i + 1);
+        }
+        assert!(!l.is_empty());
+    }
+
+    // FIXME: add query methods to simplify this test
+    #[test]
+    fn try_push_back_appends_at_the_back() {
+        // A `Drop` observer: whatever value the element holds when the list
+        // tears it down lands in `sink`, which is how the test reads back a
+        // stored element before any pop or iteration API exists.
+        #[derive(Debug)]
+        struct DropCell<'a> {
+            value: i32,
+            sink: &'a Cell<i32>,
+        }
+
+        impl Drop for DropCell<'_> {
+            fn drop(&mut self) {
+                self.sink.set(self.value);
+            }
+        }
+
+        let sink = Cell::new(0);
+        let mut l: LinkedList<DropCell<'_>> = LinkedList::new();
+        for value in 1..=3 {
+            l.try_push_back(DropCell { value, sink: &sink }).unwrap();
+        }
+
+        drop(l);
+        // The list tears its elements down front-to-back: a correct append
+        // leaves 3 at the back, so the sink ends at 3, while a prepend would
+        // have left 1 there.
+        assert_eq!(sink.get(), 3);
+    }
+
+    #[test]
+    fn try_push_back_oom_leaves_the_list_unchanged() {
+        let ledger = Arc::new(Ledger::new());
+        let budget = BudgetedAlloc::new(4);
+        let mut l = LinkedList::new_in(budget.clone());
+        for i in 0..4u32 {
+            l.try_push_back(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+
+        assert!(matches!(
+            l.try_push_back(TrackedItem::construct(&ledger, 4)),
+            Err(AllocError)
+        ));
+        assert_eq!(l.len(), 4);
+
+        drop(l);
+
+        // The four stored elements plus the failed push's element (dropped on
+        // failure, as documented) each died exactly once.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
+    }
+
+    #[test]
+    fn try_push_back_give_back_returns_the_element_on_oom() {
+        let ledger = Arc::new(Ledger::new());
+        let mut l: LinkedList<TrackedItem<u32>, FailAlloc> = LinkedList::new_in(FailAlloc);
+        let Err((item, AllocError)) = l.try_push_back_give_back(TrackedItem::construct(&ledger, 0))
+        else {
+            panic!("expected an allocation failure");
+        };
+
+        assert!(l.is_empty());
+        drop(item);
+        drop(l);
+
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..1));
+    }
+
+    #[test]
+    fn try_push_back_mut_returns_a_reference_to_the_stored_element() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        let back = l.try_push_back_mut(1).unwrap();
+        assert_eq!(*back, 1);
+        *back = 2;
+        assert_eq!(l.len(), 1);
+        assert!(!l.is_empty());
+    }
+
+    #[test]
+    fn try_push_back_mut_drops_the_element_on_oom() {
+        let ledger = Arc::new(Ledger::new());
+        let mut l: LinkedList<TrackedItem<u32>, FailAlloc> = LinkedList::new_in(FailAlloc);
+        assert!(matches!(
+            l.try_push_back_mut(TrackedItem::construct(&ledger, 0)),
+            Err(AllocError)
+        ));
+
+        assert!(l.is_empty());
+        drop(l);
+
+        // The failed push's element was dropped on failure, as documented.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..1));
+    }
+
+    // This test is written to run under Miri. Pushing a new last element
+    // rewrites the old tail's `next` field, which must not tamper with the
+    // aliasing reference held against the old last element.
+    #[test]
+    fn pointer_to_last_element_survives_a_push_back() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        let last = l.try_push_back_mut_give_back(1).unwrap();
+        assert_eq!(*last, 1);
+        let pointer: *mut i32 = last;
+        assert_eq!(unsafe { *pointer }, 1);
+
+        let reference: &mut i32 = unsafe { &mut *pointer };
+        l.try_push_back(2).unwrap();
+
+        // The old last element's storage was untouched by the push: the
+        // reference must still read the value it was created from.
         assert_eq!(*reference, 1);
         assert_eq!(l.len(), 2);
     }
