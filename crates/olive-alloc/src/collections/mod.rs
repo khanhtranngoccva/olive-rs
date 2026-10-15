@@ -1,6 +1,7 @@
 //! Fallible ports of the `alloc` crate's collection types.
 pub mod binary_heap;
 mod btree;
+pub mod linked_list;
 pub mod vec_deque;
 
 /// A fallible port of `alloc::collections::BTreeMap`.
