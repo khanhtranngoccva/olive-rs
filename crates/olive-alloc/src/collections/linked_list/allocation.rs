@@ -146,13 +146,10 @@ impl<T, A: Allocator> LinkedList<T, A> {
     }
 }
 
-// FIXME: after finalizing query.rs or iter.rs or traits.rs (for PartialEq), should check the state of the
-// list to match expectations
 #[cfg(test)]
 mod tests {
     extern crate std;
 
-    use core::cell::Cell;
     use std::sync::Arc;
 
     use olive_test_helpers::{BudgetedAlloc, FailAlloc, Ledger, TrackedItem};
@@ -167,7 +164,32 @@ mod tests {
             l.try_push_front(i).unwrap();
             assert_eq!(l.len(), i + 1);
         }
+        assert_eq!(
+            l.front(),
+            Some(&2),
+            "the last pushed front element is the head"
+        );
         assert!(!l.is_empty());
+    }
+
+    #[test]
+    fn try_push_front_prepends_at_the_front() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        for value in 1..=3 {
+            l.try_push_front(value).unwrap();
+        }
+
+        assert_eq!(
+            l.front(),
+            Some(&3),
+            "the first appended element is the head"
+        );
+        assert_eq!(l.back(), Some(&1), "the last appended element is the tail");
+        // A correct append preserves front-to-back order; a prepend would
+        // have reversed it.
+        let collected: std::vec::Vec<i32> = l.iter().copied().collect();
+        assert_eq!(collected, std::vec![3, 2, 1]);
+        assert_eq!(l.len(), 3);
     }
 
     #[test]
@@ -242,43 +264,21 @@ mod tests {
         assert!(ledger.all_dropped_once(0..1));
     }
 
-    // FIXME: add query methods to simplify this test
     #[test]
     fn try_push_front_mut_give_back_returns_a_reference_to_the_stored_element() {
-        // A `Drop` observer: whatever value the element holds when the list
-        // tears it down lands in `sink`, which is how the test reads back a
-        // stored element before any pop or iteration API exists.
-        #[derive(Debug)]
-        struct DropCell<'a> {
-            value: i32,
-            sink: &'a Cell<i32>,
-        }
-
-        impl Drop for DropCell<'_> {
-            fn drop(&mut self) {
-                self.sink.set(self.value);
-            }
-        }
-
-        let sink = Cell::new(0);
-        let mut l: LinkedList<DropCell<'_>> = LinkedList::new();
+        let mut l: LinkedList<i32> = LinkedList::new();
 
         {
-            let front = l
-                .try_push_front_mut_give_back(DropCell {
-                    value: 1,
-                    sink: &sink,
-                })
-                .unwrap();
-            assert_eq!(front.value, 1);
-            front.value = 42;
+            let front = l.try_push_front_mut_give_back(1).unwrap();
+            assert_eq!(*front, 1);
+            *front = 42;
         }
 
         assert_eq!(l.len(), 1);
-        drop(l);
         // The mutation through the returned reference reached the stored
-        // element: teardown dropped it with the updated value.
-        assert_eq!(sink.get(), 42);
+        // element.
+        assert_eq!(l.front(), Some(&42));
+        assert_eq!(l.back(), Some(&42));
     }
 
     #[test]
@@ -330,35 +330,24 @@ mod tests {
         assert!(!l.is_empty());
     }
 
-    // FIXME: add query methods to simplify this test
     #[test]
     fn try_push_back_appends_at_the_back() {
-        // A `Drop` observer: whatever value the element holds when the list
-        // tears it down lands in `sink`, which is how the test reads back a
-        // stored element before any pop or iteration API exists.
-        #[derive(Debug)]
-        struct DropCell<'a> {
-            value: i32,
-            sink: &'a Cell<i32>,
-        }
-
-        impl Drop for DropCell<'_> {
-            fn drop(&mut self) {
-                self.sink.set(self.value);
-            }
-        }
-
-        let sink = Cell::new(0);
-        let mut l: LinkedList<DropCell<'_>> = LinkedList::new();
+        let mut l: LinkedList<i32> = LinkedList::new();
         for value in 1..=3 {
-            l.try_push_back(DropCell { value, sink: &sink }).unwrap();
+            l.try_push_back(value).unwrap();
         }
 
-        drop(l);
-        // The list tears its elements down front-to-back: a correct append
-        // leaves 3 at the back, so the sink ends at 3, while a prepend would
-        // have left 1 there.
-        assert_eq!(sink.get(), 3);
+        assert_eq!(
+            l.front(),
+            Some(&1),
+            "the first appended element is the head"
+        );
+        assert_eq!(l.back(), Some(&3), "the last appended element is the tail");
+        // A correct append preserves front-to-back order; a prepend would
+        // have reversed it.
+        let collected: std::vec::Vec<i32> = l.iter().copied().collect();
+        assert_eq!(collected, std::vec![1, 2, 3]);
+        assert_eq!(l.len(), 3);
     }
 
     #[test]

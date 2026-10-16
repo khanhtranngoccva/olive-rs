@@ -73,22 +73,11 @@ impl<T, A: Allocator> LinkedList<T, A> {
     /// value.
     ///
     /// This operation should compute in O(n) time.
-    // FIXME: switch to Iter implementation soon
     pub fn contains(&self, x: &T) -> bool
     where
         T: PartialEq<T>,
     {
-        let mut node = self.head;
-        while let Some(ptr) = node {
-            // SAFETY: `ptr` points to a live node of this list, whose
-            // `element` and links stay initialized and unchanged.
-            let node_ref = unsafe { ptr.as_ref() };
-            if node_ref.element == *x {
-                return true;
-            }
-            node = node_ref.next;
-        }
-        false
+        self.iter().any(|element| element == x)
     }
 }
 

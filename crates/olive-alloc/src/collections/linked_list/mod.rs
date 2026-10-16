@@ -12,10 +12,12 @@ mod traits;
 pub use iter::{IntoIter, Iter, IterMut};
 
 use self::node::Node;
-use crate::alloc::{Allocator, Global};
+use crate::alloc::{AllocError, Allocator, Global};
 use crate::boxed::Box;
+use core::fmt;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
+use olive_core::try_traits::try_clone::TryCloneError;
 
 /// A doubly-linked list with owned nodes.
 ///
@@ -52,4 +54,56 @@ pub struct LinkedList<T, A: Allocator = Global> {
     /// inside its nodes), even though it reaches them only through raw
     /// pointers.
     marker: PhantomData<Box<Node<T>, A>>,
+}
+
+/// Error returned by fallible [`LinkedList`] operations that clone elements.
+///
+/// The list has no reserve phase (each push is its own node allocation), so
+/// the failure modes of such operations are limited to a failed element clone
+/// or a failed node allocation.
+#[derive(Clone, PartialEq, Eq)]
+pub enum TryLinkedListWithCloneError {
+    /// A node allocation failed.
+    Alloc(AllocError),
+    /// An element clone failed during an operation that requires elements to
+    /// implement [`TryClone`](olive_core::try_traits::TryClone).
+    Clone(TryCloneError),
+}
+
+impl fmt::Debug for TryLinkedListWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Alloc(alloc_error) => f
+                .debug_tuple("TryLinkedListWithCloneError::Alloc")
+                .field(alloc_error)
+                .finish(),
+            Self::Clone(clone_error) => f
+                .debug_tuple("TryLinkedListWithCloneError::Clone")
+                .field(clone_error)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryLinkedListWithCloneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Alloc(_) => f.write_str("a linked list node allocation failed"),
+            Self::Clone(e) => write!(f, "cloning a linked list element failed: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for TryLinkedListWithCloneError {}
+
+impl From<AllocError> for TryLinkedListWithCloneError {
+    fn from(error: AllocError) -> Self {
+        Self::Alloc(error)
+    }
+}
+
+impl From<TryCloneError> for TryLinkedListWithCloneError {
+    fn from(error: TryCloneError) -> Self {
+        Self::Clone(error)
+    }
 }
