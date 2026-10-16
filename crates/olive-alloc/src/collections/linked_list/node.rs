@@ -17,12 +17,6 @@ pub(super) struct Node<T> {
     /// The node before this one, or `None` when this is the first node.
     pub(super) prev: Option<NonNull<Node<T>>>,
     /// The element stored in this node.
-    #[allow(
-        dead_code,
-        reason = "no operation reads elements yet; they are only written at \
-                  construction and destroyed by the drop glue once popping or \
-                  iteration lands"
-    )]
     pub(super) element: T,
 }
 
