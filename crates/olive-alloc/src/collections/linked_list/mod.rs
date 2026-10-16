@@ -3,9 +3,13 @@
 mod allocation;
 mod construction;
 mod drop;
+mod iter;
 mod mutation;
 mod node;
 mod query;
+mod traits;
+
+pub use iter::{IntoIter, Iter, IterMut};
 
 use self::node::Node;
 use crate::alloc::{Allocator, Global};
