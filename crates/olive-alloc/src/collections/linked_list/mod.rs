@@ -3,6 +3,7 @@
 mod allocation;
 mod construction;
 mod drop;
+mod mutation;
 mod node;
 mod query;
 

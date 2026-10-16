@@ -20,6 +20,15 @@ pub(super) struct Node<T> {
     pub(super) element: T,
 }
 
+impl<T> Node<T> {
+    /// Deconstructs a boxed node into the element it stores, deallocating
+    /// the node with the box's allocator.
+    #[inline]
+    pub(super) fn into_element<A: Allocator>(node: Box<Node<T>, &A>) -> T {
+        Box::into_inner(node).element
+    }
+}
+
 impl<T, A: Allocator> LinkedList<T, A> {
     /// Prepends an already-allocated node to the front of the list and
     /// returns a mutable reference to its element.
