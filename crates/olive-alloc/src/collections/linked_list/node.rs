@@ -62,7 +62,7 @@ impl<T, A: Allocator> LinkedList<T, A> {
         self.head = linked;
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "overflow requires at least 2 * 2 ^ usize::BITS memory which is impossible"
+            reason = "overflow requires at least 2 * 2 ^ usize::BITS bytes of memory, which is impossible"
         )]
         {
             self.len += 1;
@@ -138,7 +138,7 @@ impl<T, A: Allocator> LinkedList<T, A> {
         self.tail = linked;
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "overflow requires at least 2 * 2 ^ usize::BITS memory which is impossible"
+            reason = "overflow requires at least 2 * 2 ^ usize::BITS bytes of memory, which is impossible"
         )]
         {
             self.len += 1;
