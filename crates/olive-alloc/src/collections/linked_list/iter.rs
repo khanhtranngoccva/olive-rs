@@ -579,22 +579,36 @@ mod tests {
 
     #[test]
     fn iter_clone_continues_independently() {
-        let mut l: LinkedList<i32> = LinkedList::new();
+        let ledger = Arc::new(Ledger::new());
+        let mut l = LinkedList::new();
         for value in 0..4 {
-            l.try_push_back(value).unwrap();
+            l.try_push_back(TrackedItem::construct(&ledger, value))
+                .unwrap();
         }
         let mut iter = l.iter();
-        assert_eq!(iter.next(), Some(&0));
+        assert_eq!(iter.next().map(|item| item.inner), Some(0));
         let mut cloned = iter.clone();
-        assert_eq!(iter.next(), Some(&1));
-        assert_eq!(cloned.next(), Some(&1));
+        assert_eq!(iter.next().map(|item| item.inner), Some(1));
+        assert_eq!(cloned.next().map(|item| item.inner), Some(1));
         // The two iterators advance over the same nodes independently.
-        assert_eq!(cloned.next_back(), Some(&3));
-        assert_eq!(iter.next_back(), Some(&3));
-        assert_eq!(cloned.next(), Some(&2));
-        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(cloned.next_back().map(|item| item.inner), Some(3));
+        assert_eq!(iter.next_back().map(|item| item.inner), Some(3));
+        assert_eq!(cloned.next().map(|item| item.inner), Some(2));
+        assert_eq!(iter.next().map(|item| item.inner), Some(2));
         assert_eq!(cloned.next(), None);
         assert_eq!(iter.next(), None);
+
+        // Both exhausted iterators hold raw pointers into the list's nodes,
+        // so dropping everything now must tear each element down exactly
+        // once through the list's guarded `Drop`.
+        drop(cloned);
+        drop(iter);
+        drop(l);
+
+        assert_eq!(ledger.total_allocated(), 4);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4));
     }
 
     #[test]
@@ -715,23 +729,41 @@ mod tests {
 
     #[test]
     fn into_iter_count_matches_the_length() {
-        let mut l: LinkedList<i32> = LinkedList::new();
+        let ledger = Arc::new(Ledger::new());
+        let mut l = LinkedList::new();
         for value in 0..3 {
-            l.try_push_back(value).unwrap();
+            l.try_push_back(TrackedItem::construct(&ledger, value))
+                .unwrap();
         }
         assert_eq!(l.into_iter().count(), 3);
+
+        // A fully-consumed `IntoIter` destroyed every element exactly once.
+        assert_eq!(ledger.total_allocated(), 3);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..3));
     }
 
     #[test]
     fn into_iter_last_yields_the_back_element() {
-        let l: LinkedList<i32> = LinkedList::new();
-        assert_eq!(l.into_iter().last(), None);
+        let ledger = Arc::new(Ledger::new());
+        assert_eq!(
+            LinkedList::<TrackedItem<u32>>::new().into_iter().last(),
+            None
+        );
 
-        let mut l: LinkedList<i32> = LinkedList::new();
+        let mut l = LinkedList::new();
         for value in 0..3 {
-            l.try_push_back(value).unwrap();
+            l.try_push_back(TrackedItem::construct(&ledger, value))
+                .unwrap();
         }
-        assert_eq!(l.into_iter().last(), Some(2));
+        assert_eq!(l.into_iter().last().map(|item| item.inner), Some(2));
+
+        // The fully-consumed iterator destroyed every element exactly once.
+        assert_eq!(ledger.total_allocated(), 3);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..3));
     }
 
     #[test]

@@ -143,9 +143,11 @@ mod tests {
 
     #[test]
     fn clear_removes_all_elements_and_leaves_the_list_reusable() {
-        let mut l: LinkedList<i32> = LinkedList::new();
-        for value in 1..=4 {
-            l.try_push_back(value).unwrap();
+        let ledger = Arc::new(Ledger::new());
+        let mut l = LinkedList::new();
+        for value in 0..4 {
+            l.try_push_back(TrackedItem::construct(&ledger, value))
+                .unwrap();
         }
 
         l.clear();
@@ -156,11 +158,24 @@ mod tests {
         assert!(l.pop_front().is_none());
         assert!(l.pop_back().is_none());
 
-        // The list still works afterwards: it can take new elements.
-        l.try_push_back(1).unwrap();
-        assert_eq!(l.front(), Some(&1));
-        assert_eq!(l.back(), Some(&1));
+        // The clear destroyed every stored element exactly once.
+        assert_eq!(ledger.total_allocated(), 4);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4));
+
+        // The list still works afterwards: it can take new elements, tracked
+        // by ids continuing the same ledger.
+        l.try_push_back(TrackedItem::construct(&ledger, 4)).unwrap();
+        assert_eq!(l.front().unwrap().inner, 4);
+        assert_eq!(l.back().unwrap().inner, 4);
         assert_eq!(l.len(), 1);
+
+        drop(l);
+        assert_eq!(ledger.total_allocated(), 5);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
     }
 
     #[test]
