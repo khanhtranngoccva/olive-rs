@@ -166,6 +166,15 @@ impl<T: fmt::Debug> fmt::Debug for Iter<'_, T> {
     }
 }
 
+// SAFETY: the iterator is a cursor over a list it only ever shared-borrows,
+// and it hands out shared `&T` exclusively. Moving or sharing it across
+// threads is sound exactly when `T` is `Sync`.
+unsafe impl<T: Sync> Send for Iter<'_, T> {}
+
+// SAFETY: the iterator holds no mutable access, so sharing it across threads
+// is sound exactly when `T` is `Sync` (the same bound as `Send` above).
+unsafe impl<T: Sync> Sync for Iter<'_, T> {}
+
 impl<'a, T, A: Allocator> IntoIterator for &'a LinkedList<T, A> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
@@ -311,6 +320,17 @@ impl<T: fmt::Debug> fmt::Debug for IterMut<'_, T> {
     }
 }
 
+// SAFETY: the iterator is a cursor over a list it mutably borrows, so the
+// iterator itself can only ever be used from one thread at a time. Sending it
+// hands the new thread the `&mut T` access it yields, which is sound exactly
+// when `T` is `Send`.
+unsafe impl<T: Send> Send for IterMut<'_, T> {}
+
+// SAFETY: the iterator holds `&mut Node<T>` access behind `&mut self` only,
+// so sharing it never grants two threads overlapping mutable access; this is
+// sound exactly when `T` is `Sync`.
+unsafe impl<T: Sync> Sync for IterMut<'_, T> {}
+
 impl<'a, T, A: Allocator> IntoIterator for &'a mut LinkedList<T, A> {
     type Item = &'a mut T;
     type IntoIter = IterMut<'a, T>;
@@ -333,14 +353,6 @@ pub struct IntoIter<T, A: Allocator = Global> {
     /// dropped is destroyed by the list's own guarded `Drop`.
     list: LinkedList<T, A>,
 }
-
-// SAFETY: the iterator owns the whole list, so it carries the exact same
-// thread safety requirements as the list itself.
-unsafe impl<T: Send, A: Allocator + Send> Send for IntoIter<T, A> {}
-
-// SAFETY: the iterator owns the whole list, so it carries the exact same
-// thread safety requirements as the list itself.
-unsafe impl<T: Sync, A: Allocator + Sync> Sync for IntoIter<T, A> {}
 
 impl<T, A: Allocator> IntoIter<T, A> {
     pub(super) fn new(list: LinkedList<T, A>) -> Self {
@@ -394,6 +406,13 @@ impl<T: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<T, A> {
         f.debug_tuple("IntoIter").field(&self.list).finish()
     }
 }
+
+// SAFETY: the iterator owns a `LinkedList` outright, so it is `Send`/`Sync`
+// under exactly the list's bounds as it only performs `LinkedList` operations.
+unsafe impl<T: Send, A: Allocator + Send> Send for IntoIter<T, A> {}
+
+// SAFETY: see the `Send` impl above; the bounds are the list's own.
+unsafe impl<T: Sync, A: Allocator + Sync> Sync for IntoIter<T, A> {}
 
 impl<T, A: Allocator> IntoIterator for LinkedList<T, A> {
     type Item = T;
@@ -762,6 +781,19 @@ mod tests {
             moved.push(value);
         }
         assert_eq!(moved, [0, 2, 4]);
+    }
+
+    #[test]
+    fn iterators_are_send_and_sync() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<Iter<'static, i32>>();
+        assert_sync::<Iter<'static, i32>>();
+        assert_send::<IterMut<'static, i32>>();
+        assert_sync::<IterMut<'static, i32>>();
+        assert_send::<IntoIter<i32>>();
+        assert_sync::<IntoIter<i32>>();
     }
 
     #[test]
