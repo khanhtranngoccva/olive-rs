@@ -68,6 +68,28 @@ impl<T, A: Allocator> LinkedList<T, A> {
         self.tail
             .map(|mut node| unsafe { &mut node.as_mut().element })
     }
+
+    /// Returns `true` if the list contains an element equal to the given
+    /// value.
+    ///
+    /// This operation should compute in O(n) time.
+    // FIXME: switch to Iter implementation soon
+    pub fn contains(&self, x: &T) -> bool
+    where
+        T: PartialEq<T>,
+    {
+        let mut node = self.head;
+        while let Some(ptr) = node {
+            // SAFETY: `ptr` points to a live node of this list, whose
+            // `element` and links stay initialized and unchanged.
+            let node_ref = unsafe { ptr.as_ref() };
+            if node_ref.element == *x {
+                return true;
+            }
+            node = node_ref.next;
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +188,20 @@ mod tests {
         assert_eq!(*reference, 1);
         assert_eq!(l.front(), Some(&1));
         assert_eq!(l.back(), Some(&10));
+    }
+
+    #[test]
+    fn contains_finds_only_matching_elements() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        assert!(!l.contains(&1));
+
+        for value in 1..=4 {
+            l.try_push_back(value).unwrap();
+        }
+
+        assert!(l.contains(&1));
+        assert!(l.contains(&2));
+        assert!(l.contains(&4));
+        assert!(!l.contains(&5));
     }
 }

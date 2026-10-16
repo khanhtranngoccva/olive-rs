@@ -1,5 +1,8 @@
 //! Mutation operations for [`LinkedList`].
 
+use core::marker::PhantomData;
+use core::mem;
+
 use crate::alloc::Allocator;
 
 use super::LinkedList;
@@ -23,13 +26,28 @@ impl<T, A: Allocator> LinkedList<T, A> {
     pub fn pop_back(&mut self) -> Option<T> {
         self.pop_back_node().map(Node::into_element)
     }
+
+    /// Removes all elements from the list.
+    ///
+    /// This operation should compute in O(n) time.
+    pub fn clear(&mut self) {
+        // Construct an ad-hoc list and drop it.
+        drop(LinkedList {
+            head: self.head.take(),
+            tail: self.tail.take(),
+            len: mem::take(&mut self.len),
+            alloc: &self.alloc,
+            marker: PhantomData,
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::{Ledger, TrackedItem};
+    use olive_test_helpers::{Ledger, PanicArmer, TrackedItem};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
 
     #[test]
@@ -111,5 +129,111 @@ mod tests {
         assert!(ledger.leaked_ids().is_empty());
         assert!(ledger.double_dropped().is_empty());
         assert!(ledger.all_dropped_once(0..3));
+    }
+
+    #[test]
+    fn clear_on_an_empty_list_is_a_no_op() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        l.clear();
+
+        assert_eq!(l.len(), 0);
+        assert!(l.front().is_none());
+        assert!(l.back().is_none());
+    }
+
+    #[test]
+    fn clear_removes_all_elements_and_leaves_the_list_reusable() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        for value in 1..=4 {
+            l.try_push_back(value).unwrap();
+        }
+
+        l.clear();
+
+        assert_eq!(l.len(), 0);
+        assert!(l.front().is_none());
+        assert!(l.back().is_none());
+        assert!(l.pop_front().is_none());
+        assert!(l.pop_back().is_none());
+
+        // The list still works afterwards: it can take new elements.
+        l.try_push_back(1).unwrap();
+        assert_eq!(l.front(), Some(&1));
+        assert_eq!(l.back(), Some(&1));
+        assert_eq!(l.len(), 1);
+    }
+
+    #[test]
+    fn clear_drops_each_element_exactly_once() {
+        let ledger = Arc::new(Ledger::new());
+        let mut l: LinkedList<TrackedItem<u32>> = LinkedList::new();
+        for i in 0..3u32 {
+            l.try_push_back(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+
+        l.clear();
+
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..3));
+        assert_eq!(l.len(), 0);
+    }
+
+    #[test]
+    fn clearing_with_a_panicking_element_still_empties_the_list() {
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        struct PanicDrop {
+            armer: Arc<PanicArmer>,
+        }
+
+        impl Drop for PanicDrop {
+            fn drop(&mut self) {
+                if self.armer.is_armed() {
+                    self.armer.disarm();
+                    panic!("forced panic in drop");
+                }
+            }
+        }
+
+        let mut l = LinkedList::new();
+        for _ in 0..4 {
+            l.try_push_back(TrackedItem::construct(
+                &ledger,
+                PanicDrop {
+                    armer: armer.clone(),
+                },
+            ))
+            .unwrap();
+        }
+
+        armer.arm();
+        let result = catch_unwind(AssertUnwindSafe(|| l.clear()));
+        assert!(result.is_err(), "expected the clear to panic");
+
+        // The teardown ran through the ad-hoc list's guarded `Drop`, so the
+        // panic left `l` empty rather than half-cleared, and it stays
+        // usable afterwards.
+        assert_eq!(l.len(), 0);
+        assert!(l.front().is_none());
+        assert!(l.back().is_none());
+        // The list accepts new elements again, and clearing it a second
+        // time works now that nothing is armed.
+        l.try_push_back(TrackedItem::construct(
+            &ledger,
+            PanicDrop {
+                armer: armer.clone(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(l.len(), 1);
+        l.clear();
+        assert_eq!(l.len(), 0);
+
+        assert_eq!(ledger.total_allocated(), 5);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
     }
 }
