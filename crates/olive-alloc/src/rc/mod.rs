@@ -2221,17 +2221,17 @@ impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
     }
 }
 
-impl<T: ?Sized, A: Allocator + Default> Default for Weak<T, A> {
+impl<T: ?Sized> Default for Weak<T, Global> {
     #[inline]
     fn default() -> Self {
-        Self::new_in(A::default())
+        Self::new_in(Global)
     }
 }
 
-impl<T: ?Sized> TryDefault for Weak<T, Global> {
+impl<T: ?Sized, A: AllocatorTryDefault> TryDefault for Weak<T, A> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self::new())
+        Ok(Self::new_in(A::try_default()?))
     }
 }
 
