@@ -9,6 +9,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
 use olive_core::prelude::{TryClone, TryDefault};
 use olive_core::try_traits::try_clone::TryCloneError;
 use olive_core::try_traits::try_default::TryDefaultError;
@@ -478,6 +479,32 @@ impl<T, A: Allocator> LinkedList<T, A> {
     }
 }
 
+impl<T: TryClone, A: AllocatorTryClone> TryClone for IntoIter<T, A> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            list: self.list.try_clone()?,
+        })
+    }
+}
+
+impl<T> Default for IntoIter<T, Global> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            list: LinkedList::new_in(Global),
+        }
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for IntoIter<T, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self {
+            list: LinkedList::new_in(A::try_default()?),
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -486,7 +513,9 @@ impl<T, A: Allocator> LinkedList<T, A> {
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::{Ledger, TrackedItem};
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::TryDefault;
+    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, Ledger, TrackedItem};
     use std::format;
     use std::sync::Arc;
     use std::vec::Vec;
@@ -617,6 +646,40 @@ mod tests {
         assert_eq!(iter.count(), 0);
 
         let iter: IterMut<'_, i32> = IterMut::default();
+        assert_eq!(iter.count(), 0);
+    }
+
+    #[test]
+    fn iter_try_clone_matches_clone() {
+        let mut l: LinkedList<i32> = LinkedList::new();
+        for value in 0..4 {
+            l.try_push_back(value).unwrap();
+        }
+        let mut iter = l.iter();
+        assert_eq!(iter.next(), Some(&0));
+        // The fallible form delegates to the infallible `Clone`, so it can
+        // never fail and the clone advances independently over the same
+        // nodes.
+        let mut cloned = iter.try_clone().unwrap();
+        assert_eq!(cloned.next(), Some(&1));
+        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(cloned.next_back(), Some(&3));
+        assert_eq!(iter.next_back(), Some(&3));
+        assert_eq!(cloned.next(), Some(&2));
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(cloned.next(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn iter_try_default_is_empty() {
+        let iter: Iter<'_, i32> = TryDefault::try_default().unwrap();
+        assert_eq!(iter.count(), 0);
+    }
+
+    #[test]
+    fn iter_mut_try_default_is_empty() {
+        let iter: IterMut<'_, i32> = TryDefault::try_default().unwrap();
         assert_eq!(iter.count(), 0);
     }
 
@@ -813,6 +876,59 @@ mod tests {
             moved.push(value);
         }
         assert_eq!(moved, [0, 2, 4]);
+    }
+
+    #[test]
+    fn into_iter_try_clone_preserves_remaining() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut l = LinkedList::new_in(alloc);
+        for x in [1, 2, 3] {
+            l.try_push_back(x).unwrap();
+        }
+        let mut it = l.into_iter();
+        assert_eq!(it.next(), Some(1));
+        let mut clone = it.try_clone().unwrap();
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(clone.next(), Some(2));
+        assert_eq!(clone.next(), Some(3));
+        assert_eq!(clone.next(), None);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_budget_exhausted() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut l = LinkedList::new_in(alloc.clone());
+        for x in [1, 2, 3] {
+            l.try_push_back(x).unwrap();
+        }
+        let mut it = l.into_iter();
+        assert_eq!(it.next(), Some(1));
+        // Set the allocator's budget low enough so the clone's node allocations cannot go
+        // through.
+        alloc.set_budget(1);
+        assert!(it.try_clone().is_err());
+        // A failed clone leaves the original iterator untouched.
+        let rest: Vec<i32> = it.collect();
+        assert_eq!(rest, [2, 3]);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_allocator_clone_fails() {
+        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let mut l = LinkedList::new_in(alloc);
+        l.try_push_back(1).unwrap();
+        let it = l.into_iter();
+        // The allocator itself cannot be cloned, so the clone fails before
+        // any node is touched.
+        assert!(it.try_clone().is_err());
+    }
+
+    #[test]
+    fn into_iter_default_and_try_default_are_empty() {
+        let empty: IntoIter<u32> = Default::default();
+        assert_eq!(empty.count(), 0);
+        let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
+        assert_eq!(empty.count(), 0);
     }
 
     #[test]

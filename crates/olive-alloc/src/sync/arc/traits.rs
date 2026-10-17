@@ -3,14 +3,15 @@
 //! Covers `Deref`, `TryClone`, `TryDefault`, `Default`, `Debug`, `Display`,
 //! `AsRef`, `Borrow`, and `Pointer`.
 
+use super::dst::UniqueArcUninit;
 use super::pointers::{self, checked_increment};
 use super::{Arc, Weak};
 use crate::alloc::Global;
 use core::borrow::Borrow;
 use core::fmt::{self, Debug, Formatter};
 use core::ops::Deref;
-use olive_core::alloc::Allocator;
 use olive_core::alloc::AllocatorTryClone;
+use olive_core::alloc::{Allocator, AllocatorTryDefault};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
@@ -146,6 +147,30 @@ impl<T: TryDefault> TryDefault for Arc<T, Global> {
     }
 }
 
+/// Converts a [`TryCloneError`] into a [`TryDefaultError`].
+fn try_clone_error_to_default(e: TryCloneError) -> TryDefaultError {
+    match e {
+        TryCloneError::Reserve(r) => TryDefaultError::Reserve(r),
+        TryCloneError::Alloc(a) => TryDefaultError::Alloc(a),
+        TryCloneError::Other(m) => TryDefaultError::Other(m),
+    }
+}
+
+impl<A: AllocatorTryDefault> TryDefault for Arc<str, A> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Self::try_from_str_in("", A::try_default()?).map_err(try_clone_error_to_default)
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for Arc<[T], A> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        let empty: &[T] = &[];
+        let uninit = UniqueArcUninit::<[T], _>::try_new_for_value(empty, A::try_default()?)
+            .map_err(try_clone_error_to_default)?;
+        Ok(uninit.into_arc())
+    }
+}
+
 // A dangling `Weak` is infallible by construction (no allocation involved), so
 // the conventional `Default` succeeds and yields a weak that points at nothing.
 impl<T: ?Sized, A: Allocator + Default> Default for Weak<T, A> {
@@ -171,6 +196,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
+    use olive_core::try_traits::try_default::TryDefault;
     use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::string::String;
     use std::sync::Arc as StdArc;
@@ -383,6 +409,12 @@ mod tests {
     fn arc_try_default_global_succeeds() {
         let a: Arc<i32, Global> = TryDefault::try_default().unwrap();
         assert_eq!(*a, 0);
+    }
+
+    #[test]
+    fn arc_try_default_str_and_slice() {
+        assert_eq!(&*Arc::<str>::try_default().unwrap(), "");
+        assert_eq!(Arc::<[u8]>::try_default().unwrap().len(), 0);
     }
 
     #[test]

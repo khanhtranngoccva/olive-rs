@@ -2,6 +2,9 @@
 use super::VecDeque;
 use crate::alloc::{Allocator, Global};
 use core::iter::FusedIterator;
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// An iterator that moves out of a `VecDeque`.
 ///
@@ -100,10 +103,39 @@ impl<T, A: Allocator> IntoIterator for VecDeque<T, A> {
     }
 }
 
+impl<T: TryClone, A: AllocatorTryClone> TryClone for IntoIter<T, A> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            deque: self.deque.try_clone()?,
+        })
+    }
+}
+
+impl<T> Default for IntoIter<T, Global> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            deque: VecDeque::new_in(Global),
+        }
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for IntoIter<T, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self {
+            deque: VecDeque::new_in(A::try_default()?),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
     use super::*;
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::TryDefault;
+    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc};
     use std::sync::Arc;
 
     fn build(n: usize) -> VecDeque<i32> {
@@ -167,5 +199,58 @@ mod tests {
         let rest = it.into_vecdeque();
         let collected: std::vec::Vec<_> = rest.into_iter().collect();
         assert_eq!(collected, std::vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn into_iter_try_clone_preserves_remaining() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut d = VecDeque::new_in(alloc);
+        for x in [1, 2, 3] {
+            d.try_push_back(x).unwrap();
+        }
+        let mut it = d.into_iter();
+        assert_eq!(it.next(), Some(1));
+        let mut clone = it.try_clone().unwrap();
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(clone.next(), Some(2));
+        assert_eq!(clone.next(), Some(3));
+        assert_eq!(clone.next(), None);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_budget_exhausted() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut d = VecDeque::new_in(alloc.clone());
+        for x in [1, 2, 3] {
+            d.try_push_back(x).unwrap();
+        }
+        let mut it = d.into_iter();
+        assert_eq!(it.next(), Some(1));
+        // Exhaust the allocator so the clone's backing allocation cannot go
+        // through.
+        alloc.drain();
+        assert!(it.try_clone().is_err());
+        // A failed clone leaves the original iterator untouched.
+        let rest: std::vec::Vec<i32> = it.collect();
+        assert_eq!(rest, std::vec![2, 3]);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_allocator_clone_fails() {
+        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let mut d = VecDeque::new_in(alloc);
+        d.try_push_back(1).unwrap();
+        let it = d.into_iter();
+        // The allocator itself cannot be cloned, so the clone fails before
+        // any element is touched.
+        assert!(it.try_clone().is_err());
+    }
+
+    #[test]
+    fn into_iter_default_and_try_default_are_empty() {
+        let empty: IntoIter<u32> = Default::default();
+        assert_eq!(empty.count(), 0);
+        let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
+        assert_eq!(empty.count(), 0);
     }
 }

@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use allocator_api2::alloc::Global;
-use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
+use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone, AllocatorTryDefault};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
@@ -43,3 +43,7 @@ impl TryDefault for FailAlloc {
         Ok(Self)
     }
 }
+
+// SAFETY: `FailAlloc` is a stateless ZST that delegates every zero-sized
+// layout to `Global`, the process-wide singleton backing store.
+unsafe impl AllocatorTryDefault for FailAlloc {}

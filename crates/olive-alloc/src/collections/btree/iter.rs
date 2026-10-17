@@ -1,12 +1,12 @@
 //! Iterators for BTreeMap.
 
-use olive_core::try_traits::{TryClone, TryCloneError};
+use olive_core::try_traits::{TryClone, TryCloneError, TryDefault, TryDefaultError};
 
 use super::map::BTreeMap;
 use super::navigate::LazyLeafRange;
 use super::node::marker;
 use super::node::{Handle, NodeRef};
-use crate::alloc::{Allocator, Global};
+use crate::alloc::{Allocator, AllocatorTryDefault, Global};
 use core::fmt;
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::mem::ManuallyDrop;
@@ -115,6 +115,21 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Iter<'_, K, V> {
     }
 }
 
+impl<'a, K: 'a, V: 'a> Default for Iter<'a, K, V> {
+    fn default() -> Self {
+        Iter {
+            range: LazyLeafRange::default(),
+            length: 0,
+        }
+    }
+}
+
+impl<K, V> TryDefault for Iter<'_, K, V> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
+    }
+}
+
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 /// An iterator yielding immutable key references over the entries of a `BTreeMap`.
@@ -193,6 +208,20 @@ impl<K: fmt::Debug, V> fmt::Debug for Keys<'_, K, V> {
     }
 }
 
+impl<'a, K: 'a, V: 'a> Default for Keys<'a, K, V> {
+    fn default() -> Self {
+        Keys {
+            iter: Iter::default(),
+        }
+    }
+}
+
+impl<K, V> TryDefault for Keys<'_, K, V> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
+    }
+}
+
 // ── Values ───────────────────────────────────────────────────────────────────
 
 /// An iterator yielding immutable value references over the entries of a `BTreeMap`.
@@ -250,6 +279,20 @@ impl<'a, K: 'a, V: 'a> TryClone for Values<'a, K, V> {
 impl<K, V: fmt::Debug> fmt::Debug for Values<'_, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.clone()).finish()
+    }
+}
+
+impl<'a, K: 'a, V: 'a> Default for Values<'a, K, V> {
+    fn default() -> Self {
+        Values {
+            iter: Iter::default(),
+        }
+    }
+}
+
+impl<K, V> TryDefault for Values<'_, K, V> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
     }
 }
 
@@ -352,6 +395,21 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IterMut<'_, K, V> {
     }
 }
 
+impl<'a, K: 'a, V: 'a> Default for IterMut<'a, K, V> {
+    fn default() -> Self {
+        IterMut {
+            range: LazyLeafRange::default(),
+            length: 0,
+        }
+    }
+}
+
+impl<K, V> TryDefault for IterMut<'_, K, V> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
+    }
+}
+
 // ── ValuesMut ────────────────────────────────────────────────────────────────
 
 /// An iterator yielding mutable value references over the entries of a `BTreeMap`.
@@ -396,6 +454,20 @@ impl<K, V: fmt::Debug> fmt::Debug for ValuesMut<'_, K, V> {
         f.debug_list()
             .entries(self.iter.iter().map(|(_, val)| val))
             .finish()
+    }
+}
+
+impl<'a, K: 'a, V: 'a> Default for ValuesMut<'a, K, V> {
+    fn default() -> Self {
+        ValuesMut {
+            iter: IterMut::default(),
+        }
+    }
+}
+
+impl<K, V> TryDefault for ValuesMut<'_, K, V> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
     }
 }
 
@@ -525,6 +597,28 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<K, V, A
     }
 }
 
+impl<K, V> Default for IntoIter<K, V, Global> {
+    #[inline]
+    fn default() -> Self {
+        IntoIter {
+            range: LazyLeafRange::default(),
+            length: 0,
+            alloc: Global,
+        }
+    }
+}
+
+impl<K, V, A: AllocatorTryDefault> TryDefault for IntoIter<K, V, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(IntoIter {
+            range: LazyLeafRange::default(),
+            length: 0,
+            alloc: A::try_default()?,
+        })
+    }
+}
+
 // ── IntoKeys ─────────────────────────────────────────────────────────────────
 
 /// An owning iterator over the keys of a `BTreeMap`, consuming the map.
@@ -572,6 +666,24 @@ impl<K: fmt::Debug, V, A: Allocator> fmt::Debug for IntoKeys<K, V, A> {
     }
 }
 
+impl<K, V> Default for IntoKeys<K, V, Global> {
+    #[inline]
+    fn default() -> Self {
+        IntoKeys {
+            iter: IntoIter::default(),
+        }
+    }
+}
+
+impl<K, V, A: AllocatorTryDefault> TryDefault for IntoKeys<K, V, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(IntoKeys {
+            iter: IntoIter::try_default()?,
+        })
+    }
+}
+
 // ── IntoValues ───────────────────────────────────────────────────────────────
 
 /// An owning iterator over the values of a `BTreeMap`, consuming the map.
@@ -616,6 +728,24 @@ impl<K, V: fmt::Debug, A: Allocator> fmt::Debug for IntoValues<K, V, A> {
         f.debug_list()
             .entries(self.iter.iter().map(|(_k, v)| v))
             .finish()
+    }
+}
+
+impl<K, V> Default for IntoValues<K, V, Global> {
+    #[inline]
+    fn default() -> Self {
+        IntoValues {
+            iter: IntoIter::default(),
+        }
+    }
+}
+
+impl<K, V, A: AllocatorTryDefault> TryDefault for IntoValues<K, V, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(IntoValues {
+            iter: IntoIter::try_default()?,
+        })
     }
 }
 
@@ -726,6 +856,8 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
+    use olive_core::try_traits::try_default::TryDefault;
     use olive_test_helpers::{Ledger, TrackedItem};
     use std::sync::Arc;
 
@@ -884,6 +1016,18 @@ mod tests {
         assert_eq!(it.next(), None, "fused: repeated next after exhaustion");
     }
 
+    #[test]
+    fn iter_default_is_empty() {
+        let m: Iter<'static, u32, u32> = Default::default();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn iter_try_default_is_empty() {
+        let m: Iter<'static, u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(m.count(), 0);
+    }
+
     // ── IterMut tests ─────────────────────────────────────────────────────────
 
     #[test]
@@ -940,6 +1084,18 @@ mod tests {
         for i in 0..80u32 {
             assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
         }
+    }
+
+    #[test]
+    fn iter_mut_default_is_empty() {
+        let m: IterMut<'static, u32, u32> = Default::default();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn iter_mut_try_default_is_empty() {
+        let m: IterMut<'static, u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(m.count(), 0);
     }
 
     // ── IntoIter tests ────────────────────────────────────────────────────────
@@ -1095,6 +1251,18 @@ mod tests {
         assert_eq!(it.next(), None);
     }
 
+    #[test]
+    fn into_iter_default_is_empty() {
+        let m: IntoIter<u32, u32> = Default::default();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn into_iter_try_default_is_empty() {
+        let m: IntoIter<u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(m.count(), 0);
+    }
+
     // ── Keys tests ────────────────────────────────────────────────────────────
 
     #[test]
@@ -1172,6 +1340,18 @@ mod tests {
         assert_eq!(it.next(), Some(&1));
         assert_eq!(it.next(), None);
         assert_eq!(it.next(), None, "fused: repeated next after exhaustion");
+    }
+
+    #[test]
+    fn keys_default_is_empty() {
+        let k: Keys<'static, u32, u32> = Default::default();
+        assert_eq!(k.count(), 0);
+    }
+
+    #[test]
+    fn keys_try_default_is_empty() {
+        let k: Keys<'static, u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(k.count(), 0);
     }
 
     // ── Values tests ──────────────────────────────────────────────────────────
@@ -1252,6 +1432,18 @@ mod tests {
         assert_eq!(it.next(), None, "fused: repeated next after exhaustion");
     }
 
+    #[test]
+    fn values_default_is_empty() {
+        let v: Values<'static, u32, u32> = Default::default();
+        assert_eq!(v.count(), 0);
+    }
+
+    #[test]
+    fn values_try_default_is_empty() {
+        let v: Values<'static, u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(v.count(), 0);
+    }
+
     // ── ValuesMut tests ───────────────────────────────────────────────────────
 
     #[test]
@@ -1318,6 +1510,18 @@ mod tests {
         assert_eq!(*it.next().unwrap(), 10);
         assert_eq!(it.next(), None);
         assert_eq!(it.next(), None, "fused: repeated next after exhaustion");
+    }
+
+    #[test]
+    fn values_mut_default_is_empty() {
+        let v: ValuesMut<'static, u32, u32> = Default::default();
+        assert_eq!(v.count(), 0);
+    }
+
+    #[test]
+    fn values_mut_try_default_is_empty() {
+        let v: ValuesMut<'static, u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(v.count(), 0);
     }
 
     // ── IntoKeys tests ────────────────────────────────────────────────────────
@@ -1410,6 +1614,18 @@ mod tests {
         assert_eq!(it.next(), None);
     }
 
+    #[test]
+    fn into_keys_default_is_empty() {
+        let m: IntoKeys<u32, u32> = Default::default();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn into_keys_try_default_is_empty() {
+        let m: IntoKeys<u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(m.count(), 0);
+    }
+
     // ── IntoValues tests ──────────────────────────────────────────────────────
 
     #[test]
@@ -1488,6 +1704,18 @@ mod tests {
     }
 
     #[test]
+    fn into_values_default_is_empty() {
+        let m: IntoValues<u32, u32> = Default::default();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn into_values_try_default_is_empty() {
+        let m: IntoValues<u32, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
     fn into_iter_drop_drops_remaining_entries_when_one_destructor_panics() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1527,5 +1755,19 @@ mod tests {
             8,
             "all values must still be dropped when one destructor panics"
         );
+    }
+
+    // Compile-time auto-trait probe.
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn into_iter_propagates_auto_traits() {
+        assert_send::<IntoIter<i32, i32>>();
+        assert_sync::<IntoIter<i32, i32>>();
+        assert_unwind_safe::<IntoIter<i32, i32>>();
+        assert_ref_unwind_safe::<IntoIter<i32, i32>>();
     }
 }

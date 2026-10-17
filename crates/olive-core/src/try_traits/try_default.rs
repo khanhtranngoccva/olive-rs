@@ -61,9 +61,17 @@ impl From<AllocError> for TryDefaultError {
 /// A fallible analogue of [`core::default::Default`].
 ///
 /// Unlike [`Default`], whose implementations are required to be infallible (and
-/// whose `Vec`-style constructors historically panic on allocation failure),
+/// whose `Vec`-style constructors historically panic/abort on allocation failure),
 /// [`TryDefault`] returns a [`Result`] so that construction of an empty or
 /// default value can fail gracefully when it must reserve capacity.
+///
+/// # `Default` vs `TryDefault`
+///
+/// - [`Default`] is implemented exactly when building the value is actually infallible.
+///   In that case, [`Default`] is implemented and [`TryDefault`] must delegate to
+///   [`Default::default`].
+/// - Where building the value can fail (for example, due to allocation), only [`TryDefault`]
+///   is implemented and std's aborting `Default` is not mirrored.
 ///
 /// Most types implement this infallibly — an empty value needs no allocation at
 /// all — but the error channel exists for the cases where "empty" still means

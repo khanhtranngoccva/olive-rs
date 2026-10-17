@@ -40,10 +40,11 @@ use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Deref;
+use core::panic::{RefUnwindSafe, UnwindSafe};
 use core::pin::Pin;
 
 use crate::alloc::{AllocError, Allocator, Global, Layout, LayoutError, StaticAllocator};
-use olive_core::alloc::{AllocatorTryClone, LayoutExt};
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault, LayoutExt};
 use olive_core::ptr::PointerExt;
 use olive_core::ptr::{self, NonNull};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError, TryCloneToUninit};
@@ -634,13 +635,13 @@ impl<T: ?Sized, A: Allocator> UniqueRcUninit<T, A> {
 
     /// Consumes the handle and produces the finalized `Rc<T, A>`.
     ///
-    /// # Safety contract
+    /// # Safety
     ///
     /// The caller guarantees that the payload region (pointed to by
     /// [`data_ptr`](Self::data_ptr)) has been fully initialized with a valid
     /// `T` before calling this method.
     #[inline]
-    pub(crate) fn into_rc(self) -> Rc<T, A> {
+    pub(crate) unsafe fn into_rc(self) -> Rc<T, A> {
         let me = ManuallyDrop::new(self);
         // SAFETY: we are transferring ownership of the block to the returned
         // `Rc`. Reading the fields out and wrapping ManuallyDrop on `self`
@@ -912,7 +913,8 @@ impl<T, A: Allocator> Rc<T, A> {
     #[inline]
     pub fn try_new_uninit_in(alloc: A) -> Result<Rc<MaybeUninit<T>, A>, AllocError> {
         let uninit = UniqueRcUninit::<MaybeUninit<T>, A>::try_new(alloc)?;
-        Ok(uninit.into_rc())
+        // SAFETY: we are initializing a MaybeUninit.
+        Ok(unsafe { uninit.into_rc() })
     }
 
     /// Allocates a new `Rc<T>` with all bytes zeroed, parameterized over the
@@ -1227,7 +1229,8 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Rc<T, A> {
         // SAFETY: `uninit.data_ptr()` points to the uninitialized payload slot
         // within a live allocation of the correct size and alignment.
         unsafe { <T as TryCloneToUninit>::try_clone_to_uninit(src, uninit.data_ptr()) }?;
-        Ok(uninit.into_rc())
+        // SAFETY: the value is just cloned into the uninit item.
+        Ok(unsafe { uninit.into_rc() })
     }
 }
 
@@ -1512,6 +1515,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
             // Replace `this` with the freshly constructed `Rc` holding the moved
             // data. Writing over `this` using pointer syntax inhibits its `Drop` impl,
             // so the old Rc is not dropped.
+            // SAFETY: we already transferred the data.
             ptr::write(this, in_progress.into_rc());
 
             // Panics may occur here, but the state is already fully committed at this point.
@@ -1847,6 +1851,37 @@ impl<T: TryDefault> TryDefault for Rc<T, Global> {
         Ok(unsafe { uninit.write(value) })
     }
 }
+
+/// Converts a [`TryCloneError`] into a [`TryDefaultError`].
+fn try_clone_error_to_default(e: TryCloneError) -> TryDefaultError {
+    match e {
+        TryCloneError::Reserve(r) => TryDefaultError::Reserve(r),
+        TryCloneError::Alloc(a) => TryDefaultError::Alloc(a),
+        TryCloneError::Other(m) => TryDefaultError::Other(m),
+    }
+}
+
+impl<A: AllocatorTryDefault> TryDefault for Rc<str, A> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Self::try_from_str_in("", A::try_default()?).map_err(try_clone_error_to_default)
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for Rc<[T], A> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        let empty: &[T] = &[];
+        let uninit = UniqueRcUninit::<[T], _>::try_new_for_value(empty, A::try_default()?)
+            .map_err(try_clone_error_to_default)?;
+        // SAFETY: we are dealing with empty slices.
+        Ok(unsafe { uninit.into_rc() })
+    }
+}
+
+// Interior mutability inside `Rc` is only exercised through `&self` methods
+// that can be re-entrantly observed, so unwind safety is granted conditionally
+// on `T: RefUnwindSafe` exactly as std does for `std::rc::Rc`.
+impl<T: RefUnwindSafe + ?Sized> UnwindSafe for Rc<T> {}
+impl<T: ?Sized + RefUnwindSafe> RefUnwindSafe for Rc<T> {}
 
 // ---------------------------------------------------------------------------
 // Weak
@@ -2211,6 +2246,8 @@ impl<T: ?Sized> TryDefault for Weak<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
+    use olive_core::try_traits::try_default::TryDefault;
     use olive_test_helpers::FailAlloc;
     use static_assertions::assert_not_impl_any;
     use std::string::String;
@@ -2518,6 +2555,25 @@ mod tests {
         assert_eq!(Rc::strong_count(&rc), 1);
         // A different payload type exercises the same path.
         assert_eq!(*Rc::<u8>::try_default().unwrap(), 0);
+    }
+
+    #[test]
+    fn try_default_str_is_empty_with_one_strong_ref() {
+        let s = Rc::<str>::try_default().unwrap();
+        assert_eq!(&*s, "");
+        assert_eq!(Rc::strong_count(&s), 1);
+    }
+
+    #[test]
+    fn try_default_slice_is_empty() {
+        let a = Rc::<[u8]>::try_default().unwrap();
+        assert_eq!(a.len(), 0);
+        assert_eq!(Rc::strong_count(&a), 1);
+    }
+
+    #[test]
+    fn try_default_sized() {
+        assert_eq!(*Rc::<u32>::try_default().unwrap(), 0);
     }
 
     #[test]
@@ -2868,5 +2924,18 @@ mod tests {
         // genuine (now dead) payload address, not the sentinel.
         assert_ne!(p.addr(), usize::MAX);
         assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn unwind_safe_impls_match_std() {
+        assert_unwind_safe::<Rc<u32>>();
+        assert_ref_unwind_safe::<Rc<u32>>();
+        assert_unwind_safe::<Rc<str>>();
+        assert_ref_unwind_safe::<Rc<str>>();
+        assert_unwind_safe::<Rc<[u8]>>();
+        assert_ref_unwind_safe::<Rc<[u8]>>();
     }
 }

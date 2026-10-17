@@ -12,6 +12,8 @@
 
 use core::fmt;
 
+use olive_core::TryClone;
+
 use super::map::BTreeMap;
 use super::set_val::SetValZST;
 use crate::alloc::{Allocator, Global};
@@ -36,6 +38,7 @@ mod traits;
 /// Values are stored in sorted order according to their [`Ord`] implementation.
 /// Internally this is a [`BTreeMap<T, SetValZST>`]; the marker on the right-hand
 /// side is never exposed through the public API.
+#[derive(TryClone)]
 pub struct BTreeSet<T, A: Allocator = Global> {
     map: BTreeMap<T, SetValZST, A>,
 }

@@ -418,6 +418,7 @@ mod tests {
     use super::super::invariant::{check_ascending_keys, check_tree_invariant};
 
     use super::*;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use std::format;
 
@@ -1191,5 +1192,18 @@ mod tests {
         let src: [(u32, u32); 0] = [];
         let map = BTreeMap::try_from(src).unwrap();
         assert!(map.is_empty());
+    }
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn map_propagates_auto_traits() {
+        assert_send::<BTreeMap<i32, i32>>();
+        assert_sync::<BTreeMap<i32, i32>>();
+        assert_unwind_safe::<BTreeMap<i32, i32>>();
+        assert_ref_unwind_safe::<BTreeMap<i32, i32>>();
     }
 }

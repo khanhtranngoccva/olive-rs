@@ -9,7 +9,7 @@ use crate::recovery::{ResumableSource, Resume};
 ///
 /// Builds a value from an iterator, returning a [`Result`] if any step (typically
 /// a capacity reservation) fails. Unlike [`FromIterator`], the builder does not
-/// panic on out-of-memory.
+/// panic/abort on out-of-memory.
 pub trait TryCollect: Iterator + Sized {
     /// Fallibly collect an iterator into a target type.
     ///
@@ -28,7 +28,7 @@ pub trait TryCollect: Iterator + Sized {
 ///
 /// Extends a value from an iterator or a [`Resume`] of an iterator, returning a [`Result`] if
 /// any step (typically a capacity reservation) fails. Unlike [`Extend`], the builder does not
-/// panic on out-of-memory.
+/// panic/abort on out-of-memory.
 pub trait TryCollectInto: ResumableSource + Sized {
     /// Fallibly extends a target type with contents from the iterator (or a [`Resume`] object).
     ///

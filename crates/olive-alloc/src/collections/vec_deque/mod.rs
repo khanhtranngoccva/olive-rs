@@ -33,6 +33,7 @@ use crate::raw_vec::RawVec;
 
 pub use allocation::{TryVecDequeInsertError, TryVecDequeWithClosureError};
 pub use drain::Drain;
+pub use into_iter::IntoIter;
 pub use iter::{Iter, IterMut};
 pub use mutation::{
     TryVecDequeInsertWithinCapacityError, TryVecDequePushWithinCapacityError,

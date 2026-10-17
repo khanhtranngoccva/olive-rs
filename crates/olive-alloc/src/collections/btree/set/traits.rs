@@ -425,6 +425,7 @@ mod tests {
 
     use super::*;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+    use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_test_helpers::BudgetedAlloc;
     use olive_test_helpers::FailAlloc;
     use olive_test_helpers::MaybeUnclonable;
@@ -988,5 +989,112 @@ mod tests {
         check_tree_invariant(&u.map);
         let x = (&a ^ &b).finish().unwrap();
         check_ascending_keys(&x.map);
+    }
+
+    // --- TryClone ------------------------------------------------------------
+
+    #[test]
+    fn try_clone_empty_set() {
+        let set: BTreeSet<i32> = BTreeSet::new();
+        let cloned = set.try_clone().expect("clone ok");
+        assert!(cloned.is_empty());
+    }
+
+    #[test]
+    fn try_clone_preserves_elements() {
+        let set = make_set(&[3, 1, 2, 5, 4]);
+        let cloned = set.try_clone().expect("clone ok");
+        assert_eq!(cloned.len(), 5);
+        assert_eq!(cloned, set);
+    }
+
+    #[test]
+    fn try_clone_multilevel() {
+        let values: std::vec::Vec<i32> = (0..80).collect();
+        let set = make_set(&values);
+        let cloned = set.try_clone().expect("clone ok");
+        assert_eq!(cloned.len(), 80);
+        assert_eq!(cloned, set);
+    }
+
+    #[test]
+    fn try_clone_original_unchanged() {
+        let set = make_set(&[1, 2, 3]);
+        let mut cloned = set.try_clone().expect("clone ok");
+        cloned.try_insert(4).unwrap();
+        // Original must be intact.
+        assert_eq!(set.len(), 3);
+        assert!(!set.contains(&4));
+    }
+
+    #[test]
+    fn try_clone_fails_when_allocator_clone_exhausted() {
+        use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
+        use std::sync::Arc;
+
+        let budget = Arc::new(CloneBudget::new(0));
+        let alloc = FlakyCloneAlloc::new(budget.clone());
+        let mut set: BTreeSet<i32, FlakyCloneAlloc> = BTreeSet::new_in(alloc);
+        set.try_insert(1).unwrap();
+
+        // Cloning the allocator must fail with zero budget.
+        let result = set.try_clone();
+        assert!(
+            result.is_err(),
+            "clone should fail when allocator clone is exhausted"
+        );
+    }
+
+    #[test]
+    fn try_clone_fails_midway_on_allocation_error() {
+        use olive_core::try_traits::try_clone::TryCloneError;
+
+        // Build a multi-element set under a BudgetedAlloc with just enough
+        // budget to construct it, then drain the remaining budget before
+        // calling try_clone.
+        // The clone succeeds at cloning the allocator
+        // (Arc clone is practically infallible) but OOMs while rebuilding the tree.
+        let alloc = BudgetedAlloc::new(5);
+        let mut set: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        for i in 0..20i32 {
+            match set.try_insert(i) {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        let len_before = set.len();
+        assert!(
+            len_before > 1,
+            "need multiple elements to exercise the clone path"
+        );
+
+        alloc.drain();
+        let result = set.try_clone();
+        assert!(
+            result.is_err(),
+            "clone should fail when budget is exhausted"
+        );
+        assert!(matches!(result.unwrap_err(), TryCloneError::Alloc(_)));
+
+        // Original must still be intact.
+        assert_eq!(set.len(), len_before);
+        for i in 0..len_before as i32 {
+            assert!(set.contains(&i));
+        }
+    }
+
+    // Compile-time auto-trait probe.
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn set_propagates_auto_traits() {
+        assert_send::<BTreeSet<i32>>();
+        assert_sync::<BTreeSet<i32>>();
+        assert_unwind_safe::<BTreeSet<i32>>();
+        assert_ref_unwind_safe::<BTreeSet<i32>>();
     }
 }

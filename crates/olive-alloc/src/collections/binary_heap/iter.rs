@@ -6,6 +6,9 @@ use crate::vec::IntoIter as VecIntoIter;
 use core::fmt::{self, Debug};
 use core::iter::FusedIterator;
 use core::slice;
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// A borrowing iterator over the elements of a [`BinaryHeap`](super::BinaryHeap),
 /// yielding each exactly once.
@@ -103,6 +106,18 @@ impl<T> Default for Iter<'_, T> {
         Self {
             inner: Default::default(),
         }
+    }
+}
+
+impl<T> TryClone for Iter<'_, T> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(self.clone())
+    }
+}
+
+impl<T> TryDefault for Iter<'_, T> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
     }
 }
 
@@ -241,14 +256,42 @@ impl<'a, T, A: Allocator> IntoIterator for &'a BinaryHeap<T, A> {
     }
 }
 
+impl<T: TryClone, A: AllocatorTryClone> TryClone for IntoIter<T, A> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(Self {
+            inner: self.inner.try_clone()?,
+        })
+    }
+}
+
+impl<T> Default for IntoIter<T, Global> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            inner: VecIntoIter::default(),
+        }
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for IntoIter<T, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self {
+            inner: VecIntoIter::try_default()?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
 
-    use super::IntoIter;
+    use super::{IntoIter, Iter};
     use crate::collections::binary_heap::BinaryHeap;
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::TryDefault;
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
-    use olive_test_helpers::{PanicArmer, PanickyOrd};
+    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, PanicArmer, PanickyOrd};
     use std::sync::Arc;
     use std::{format, panic, vec, vec::Vec};
 
@@ -367,6 +410,61 @@ mod tests {
         assert_eq!(count, 4, "draining a quarantined heap yields everything");
     }
 
+    #[test]
+    fn into_iter_try_clone_preserves_remaining() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut h = BinaryHeap::new_in(alloc);
+        for x in [1, 2, 3] {
+            h.try_push(x).unwrap();
+        }
+        let mut it = h.into_iter();
+        let _ = it.next();
+        let clone = it.try_clone().unwrap();
+        let mut a: Vec<u32> = it.collect();
+        let mut b: Vec<u32> = clone.collect();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 2);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_budget_exhausted() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut h = BinaryHeap::new_in(alloc.clone());
+        for x in [1, 2, 3] {
+            h.try_push(x).unwrap();
+        }
+        let mut it = h.into_iter();
+        let _ = it.next();
+        alloc.drain();
+        // The remaining two elements cannot be re-allocated, so cloning the
+        // owned iterator must fail.
+        assert!(it.try_clone().is_err());
+        // The original must be untouched by the failed clone: it still
+        // yields exactly the same remaining elements.
+        let mut rest: Vec<u32> = it.collect();
+        rest.sort_unstable();
+        assert_eq!(rest, vec![1, 2]);
+    }
+
+    #[test]
+    fn into_iter_try_clone_fails_when_allocator_clone_fails() {
+        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let mut h = BinaryHeap::new_in(alloc);
+        h.try_push(1).unwrap();
+        let it = h.into_iter();
+        assert!(it.try_clone().is_err());
+    }
+
+    #[test]
+    fn into_iter_default_and_try_default_are_empty() {
+        let empty: IntoIter<u32> = Default::default();
+        assert_eq!(empty.count(), 0);
+        let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
+        assert_eq!(empty.count(), 0);
+    }
+
     // --- borrowing Iter ------------------------------------------------------
 
     #[test]
@@ -420,5 +518,19 @@ mod tests {
         let text = format!("{it:?}");
         assert!(text.contains('1'));
         assert!(!text.contains("42"));
+    }
+
+    #[test]
+    fn iter_try_clone_and_try_default_delegate() {
+        let mut h = BinaryHeap::new();
+        h.try_push(3).unwrap();
+        h.try_push(1).unwrap();
+        let it = h.iter();
+        let clone = it.try_clone().unwrap();
+        assert_eq!(it.count(), 2);
+        assert_eq!(clone.count(), 2);
+
+        let empty: Iter<'static, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(empty.count(), 0);
     }
 }

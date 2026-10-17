@@ -73,7 +73,7 @@ impl From<TryCloneError> for TryToOwnedError {
 /// A fallible analogue of [`alloc::borrow::ToOwned`].
 ///
 /// Types implementing this trait guarantee that constructing their owned variant
-/// will not panic on allocation failure.
+/// will not panic/abort on allocation failure.
 pub trait TryToOwned {
     /// The owned type produced by [`Self::try_to_owned`].
     type Owned: Borrow<Self>;

@@ -6,6 +6,7 @@
 #![allow(unused_imports, clippy::vec_init_then_push)]
 
 extern crate std;
+use crate::alloc::AllocatorTryDefault;
 use crate::alloc::CountingAllocator;
 use core::any::Any;
 use core::borrow::{Borrow, BorrowMut};
@@ -14,9 +15,12 @@ use core::error::Error;
 use core::ffi::CStr;
 use core::fmt;
 use core::marker::PhantomPinned;
+use core::ptr::NonNull;
 use olive_core::TryClone;
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 use super::*;
+use std::alloc::Layout;
 use std::format;
 use std::string::String;
 use std::vec::Vec;
@@ -502,4 +506,50 @@ fn box_send_sync_bounds_hold() {
     assert_sync::<Box<str, Global>>();
     assert_send::<Box<dyn Send, Global>>();
     assert_sync::<Box<dyn Sync, Global>>();
+}
+
+// Default / TryDefault.
+use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
+
+#[test]
+fn test_box_default_empty_slice() {
+    let b = Box::<[u8]>::default();
+    assert_eq!(b.len(), 0);
+}
+
+#[test]
+fn test_box_default_empty_str() {
+    let b = Box::<str>::default();
+    assert_eq!(&*b, "");
+}
+
+#[test]
+fn test_box_try_default_matches_default() {
+    assert_eq!(Box::<[u8]>::try_default().unwrap().len(), 0);
+    assert_eq!(&*Box::<str>::try_default().unwrap(), "");
+}
+
+#[test]
+fn test_box_try_default_sized_uses_allocator() {
+    let b = Box::<u32>::try_default().unwrap();
+    assert_eq!(*b, 0);
+}
+
+#[test]
+fn test_box_try_default_linked_allocator() {
+    // Dangling-pointer construction allocates nothing, so the failing
+    // allocation path is never exercised; the default value is built
+    // entirely from the `Global` singleton the allocator delegates to.
+    let b = Box::<[u8], FailAlloc>::try_default().unwrap();
+    assert_eq!(b.len(), 0);
+    let s = Box::<str, FailAlloc>::try_default().unwrap();
+    assert_eq!(&*s, "");
+}
+
+#[test]
+fn test_box_try_default_allocator_failure_propagates() {
+    let e = Box::<[u8], FailDefaultAlloc>::try_default().unwrap_err();
+    assert!(matches!(e, TryDefaultError::Other(_)));
+    let e = Box::<str, FailDefaultAlloc>::try_default().unwrap_err();
+    assert!(matches!(e, TryDefaultError::Other(_)));
 }

@@ -11,7 +11,7 @@
 //!    own `Concat` type, we get a local receiver and can implement the standard
 //!    operators directly.
 //!
-//! 2. **Fallibility without panics**: naive `String + &str` would panic on OOM.
+//! 2. **Fallibility without panics**: naive `String + &str` would panic/abort on OOM.
 //!    `Concat` carries the error internally; the user calls [`Concat::finish`]
 //!    to extract the final `Result<String, TryReserveError>` when satisfied.
 //!

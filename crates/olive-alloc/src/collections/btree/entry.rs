@@ -559,6 +559,7 @@ mod tests {
     use super::super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
     use super::Entry;
     use crate::alloc::Global;
+    use core::panic::RefUnwindSafe;
     use olive_test_helpers::{BudgetedAlloc, NoDefault};
 
     // An error type for and_try_modify / or_try_insert_with closures.
@@ -1015,5 +1016,18 @@ mod tests {
             _ => panic!("expected vacant entry"),
         }
         assert!(map.is_empty());
+    }
+
+    // Compile-time auto-trait probe.
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn entry_propagates_auto_traits() {
+        assert_send::<Entry<'static, i32, i32>>();
+        assert_sync::<Entry<'static, i32, i32>>();
+        assert_ref_unwind_safe::<Entry<'static, i32, i32>>();
     }
 }

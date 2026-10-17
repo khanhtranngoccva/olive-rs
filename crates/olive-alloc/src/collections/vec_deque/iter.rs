@@ -369,7 +369,10 @@ impl<'a, T> IterMut<'a, T> {
 mod tests {
     extern crate std;
     use super::super::VecDeque;
+    use super::{Iter, IterMut};
     use olive_core::slice::TrySliceRangeError;
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::TryDefault;
 
     /// Collects the elements yielded by an iterator into a freshly grown
     /// `std::vec::Vec`, for easy comparison against expected values.
@@ -531,5 +534,42 @@ mod tests {
         assert_eq!(it.next_back(), Some(&mut 4));
         assert_eq!(it.next(), Some(&mut 3));
         assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn iter_try_clone_matches_clone() {
+        let dq = wrapped_deque();
+        let mut iter = dq.iter();
+        assert_eq!(iter.next(), Some(&5));
+        // The fallible form delegates to the infallible `Clone`, so it can
+        // never fail and the clone advances independently over the same
+        // slices, across the wrap point.
+        let mut cloned = iter.try_clone().unwrap();
+        assert_eq!(cloned.next(), Some(&4));
+        assert_eq!(iter.next(), Some(&4));
+        assert_eq!(cloned.next_back(), Some(&3));
+        assert_eq!(iter.next_back(), Some(&3));
+        assert_eq!(cloned.next(), Some(&1));
+        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(cloned.next(), Some(&2));
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(cloned.next(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn iter_try_default_is_empty() {
+        let iter: Iter<'_, i32> = Default::default();
+        assert!(collect(iter).is_empty());
+        let iter: Iter<'_, i32> = TryDefault::try_default().unwrap();
+        assert!(collect(iter).is_empty());
+    }
+
+    #[test]
+    fn iter_mut_try_default_is_empty() {
+        let iter: IterMut<'_, i32> = Default::default();
+        assert_eq!(iter.count(), 0);
+        let iter: IterMut<'_, i32> = TryDefault::try_default().unwrap();
+        assert_eq!(iter.count(), 0);
     }
 }

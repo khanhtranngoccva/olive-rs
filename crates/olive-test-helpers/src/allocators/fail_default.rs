@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 use allocator_api2::alloc::Global;
-use olive_core::alloc::{AllocError, Allocator};
+use olive_core::alloc::{AllocError, Allocator, AllocatorTryDefault};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// An allocator whose `TryDefault` always fails, used to exercise the
@@ -28,3 +28,5 @@ impl TryDefault for FailDefaultAlloc {
         Err(TryDefaultError::Other("allocator default failed"))
     }
 }
+
+unsafe impl AllocatorTryDefault for FailDefaultAlloc {}

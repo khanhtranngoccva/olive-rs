@@ -12,6 +12,10 @@ use core::slice;
 
 use crate::alloc::{Allocator, Global};
 use crate::raw_vec::RawVec;
+use crate::vec::Vec;
+use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
+use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// An iterator that moves out of a vector.
 ///
@@ -229,5 +233,187 @@ impl<T: Debug, A: Allocator> Debug for IntoIter<T, A> {
         // Match std: the remaining elements are wrapped in an `IntoIter(...)`
         // tuple, not printed as a bare list.
         f.debug_tuple("IntoIter").field(&self.as_slice()).finish()
+    }
+}
+
+impl<T: TryClone, A: AllocatorTryClone> TryClone for IntoIter<T, A> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        let alloc = self.raw.allocator().try_clone()?;
+        let mut out = Vec::<T, A>::try_with_capacity_in(self.as_slice().len(), alloc)?;
+        for item in self.as_slice() {
+            let cloned = item.try_clone()?;
+            // SAFETY: capacity was reserved above for every element.
+            unsafe { out.force_push(cloned) };
+        }
+        Ok(out.into_iter())
+    }
+}
+
+impl<T> Default for IntoIter<T, Global> {
+    #[inline]
+    fn default() -> Self {
+        Vec::new_in(Global).into_iter()
+    }
+}
+
+impl<T, A: AllocatorTryDefault> TryDefault for IntoIter<T, A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Vec::new_in(A::try_default()?).into_iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use crate::vec::{IntoIter, Vec};
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::TryDefault;
+    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, Ledger, TrackedItem};
+    use std::sync::Arc as StdArc;
+
+    fn make_vec(alloc: BudgetedAlloc) -> Vec<u32, BudgetedAlloc> {
+        let mut v = Vec::new_in(alloc);
+        for x in [1, 2, 3, 4] {
+            v.try_push(x).unwrap();
+        }
+        v
+    }
+
+    #[test]
+    fn try_clone_preserves_remaining() {
+        let mut it = make_vec(BudgetedAlloc::new(16)).into_iter();
+        assert_eq!(it.next(), Some(1));
+        let mut clone = it.try_clone().unwrap();
+        assert_eq!(clone.next(), Some(2));
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(it.next(), Some(3));
+        assert_eq!(it.next(), Some(4));
+        assert_eq!(it.next(), None);
+        assert_eq!(clone.next(), Some(3));
+        assert_eq!(clone.next(), Some(4));
+        assert_eq!(clone.next(), None);
+    }
+
+    #[test]
+    fn try_clone_fails_when_allocator_clone_fails() {
+        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(0)));
+        let mut v = Vec::new_in(alloc);
+        v.try_push(1).unwrap();
+        let it = v.into_iter();
+        assert!(it.try_clone().is_err());
+    }
+
+    #[test]
+    fn try_clone_fails_when_budget_exhausted() {
+        let alloc = BudgetedAlloc::new(16);
+        let mut it = make_vec(alloc.clone()).into_iter();
+        it.next();
+        alloc.drain();
+        // The remaining three elements cannot be re-allocated, so cloning the
+        // owned iterator must fail.
+        assert!(it.try_clone().is_err());
+    }
+
+    #[test]
+    fn try_clone_neither_leaks_nor_double_drops() {
+        let ledger = StdArc::new(Ledger::new());
+        let mut v: Vec<TrackedItem<u32>, BudgetedAlloc> = Vec::new_in(BudgetedAlloc::new(16));
+        for x in [10, 20, 30, 40] {
+            v.try_push(TrackedItem::construct(&ledger, x)).unwrap();
+        }
+
+        let mut it = v.into_iter();
+        // Yielding the front element drops it exactly once when the yielded
+        // value is dropped.
+        assert_eq!(it.next().unwrap().inner, 10);
+
+        let mut clone = it.try_clone().unwrap();
+
+        // Both iterators drain independently: each remaining element instance
+        // must die exactly once. A clone that aliased the original buffer
+        // would double-drop here; a clone that failed to take ownership would
+        // leak.
+        for _ in 0..3 {
+            it.next();
+        }
+        assert!(it.next().is_none());
+        for _ in 0..3 {
+            clone.next();
+        }
+        assert!(clone.next().is_none());
+
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped ids: {:?}",
+            ledger.double_dropped()
+        );
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.all_dropped_once(0..ledger.total_allocated()),
+            "drop counts: {:?}",
+            ledger.drop_counts()
+        );
+    }
+
+    #[test]
+    fn try_clone_failure_drops_partially_cloned_elements() {
+        let ledger = StdArc::new(Ledger::new());
+        // Two successful element clones, then every further clone fails.
+        let budget = CloneBudget::new(2);
+        let mut v: Vec<TrackedItem<CloneBudget>, BudgetedAlloc> =
+            Vec::new_in(BudgetedAlloc::new(16));
+        for _ in 0..4 {
+            v.try_push(TrackedItem::construct(&ledger, budget.share()))
+                .unwrap();
+        }
+
+        let mut it = v.into_iter();
+        let _ = it.next(); // the front element drops immediately
+
+        // The clone loop succeeds for two of the three remaining elements and
+        // then hits the exhausted budget. The partially built iterator must
+        // drop what it already cloned on the way out.
+        assert!(it.try_clone().is_err());
+
+        // Exactly the three live originals remain.
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.live_ids().len(), 3, "only the originals live");
+
+        // Draining the original cleans up the rest: every id minted during
+        // the test died exactly once.
+        for _ in 0..3 {
+            it.next();
+        }
+        assert!(it.next().is_none());
+
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped ids: {:?}",
+            ledger.double_dropped()
+        );
+        assert!(
+            ledger.all_dropped_once(0..ledger.total_allocated()),
+            "drop counts: {:?}",
+            ledger.drop_counts()
+        );
+    }
+
+    #[test]
+    fn default_and_try_default_are_empty() {
+        let it: IntoIter<u32> = Default::default();
+        assert_eq!(it.count(), 0);
+        let it2: IntoIter<u32> = TryDefault::try_default().unwrap();
+        assert_eq!(it2.count(), 0);
     }
 }

@@ -8,10 +8,11 @@
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 use super::String;
-use crate::alloc::{Allocator, AllocatorTryClone, Global};
+use crate::alloc::{Allocator, AllocatorTryClone, AllocatorTryDefault, Global};
 use core::fmt;
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
 use core::ptr;
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 /// An owning iterator over the characters of a consumed [`String`](super::String).
 ///
@@ -149,5 +150,33 @@ impl<A: Allocator> fmt::Debug for IntoChars<A> {
         f.debug_struct("IntoChars")
             .field("remaining", &self.as_str())
             .finish_non_exhaustive()
+    }
+}
+
+impl Default for IntoChars<Global> {
+    #[inline]
+    fn default() -> Self {
+        Self::new(String::new_in(Global))
+    }
+}
+
+impl<A: AllocatorTryDefault> TryDefault for IntoChars<A> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::new(String::new_in(A::try_default()?)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use olive_core::try_traits::try_default::TryDefault;
+
+    #[test]
+    fn default_and_try_default_are_empty() {
+        let ic: IntoChars = Default::default();
+        assert_eq!(ic.count(), 0);
+        let ic: IntoChars = TryDefault::try_default().unwrap();
+        assert_eq!(ic.count(), 0);
     }
 }

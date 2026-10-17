@@ -6,7 +6,7 @@ use super::BTreeSet;
 use crate::alloc::{Allocator, Global};
 use core::fmt;
 use core::iter::{DoubleEndedIterator, ExactSizeIterator, FusedIterator, Iterator};
-use olive_core::try_traits::{TryClone, TryCloneError};
+use olive_core::try_traits::{TryClone, TryCloneError, TryDefault, TryDefaultError};
 
 // ── Iter ─────────────────────────────────────────────────────────────────────
 
@@ -167,12 +167,28 @@ impl<'a, T, A: Allocator> IntoIterator for &'a BTreeSet<T, A> {
     }
 }
 
+impl<'a, T: 'a> Default for Iter<'a, T> {
+    fn default() -> Self {
+        Iter {
+            iter: MapIter::default(),
+        }
+    }
+}
+
+impl<T> TryDefault for Iter<'_, T> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(Self::default())
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     extern crate std;
     use super::*;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
+    use olive_core::try_traits::try_default::TryDefault;
     use std::vec::Vec;
 
     /// Smoke test for the iterator wiring. The underlying traversal logic is
@@ -200,5 +216,32 @@ mod tests {
         // Owned iteration consumes the set and yields values in order.
         let owned: Vec<i32> = set.into_iter().collect();
         assert_eq!(owned, [1, 2, 3, 4, 5, 6, 9]);
+    }
+
+    #[test]
+    fn iter_default_is_empty() {
+        let s: Iter<'static, u32> = Default::default();
+        assert_eq!(s.count(), 0);
+    }
+
+    #[test]
+    fn iter_try_default_is_empty() {
+        let s: Iter<'static, u32> = TryDefault::try_default().unwrap();
+        assert_eq!(s.count(), 0);
+    }
+
+    // Compile-time auto-trait probe.
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn into_iter_propagates_auto_traits() {
+        assert_send::<IntoIter<i32>>();
+        assert_sync::<IntoIter<i32>>();
+        assert_unwind_safe::<IntoIter<i32>>();
+        assert_ref_unwind_safe::<IntoIter<i32>>();
     }
 }

@@ -4,7 +4,7 @@
 ///
 /// Builds a value from an iterator, returning a [`Result`] if any step (typically
 /// a capacity reservation) fails. Unlike [`FromIterator`], the builder does not
-/// panic on out-of-memory.
+/// panic/abort on out-of-memory.
 pub trait TryFromIterator<Item>: Sized {
     /// The error type defined by the implementation.
     type Error;
