@@ -553,3 +553,9 @@ fn test_box_try_default_allocator_failure_propagates() {
     let e = Box::<str, FailDefaultAlloc>::try_default().unwrap_err();
     assert!(matches!(e, TryDefaultError::Other(_)));
 }
+
+#[test]
+fn test_box_try_default_sized_allocator_failure_propagates() {
+    let e = Box::<u32, FailDefaultAlloc>::try_default().unwrap_err();
+    assert!(matches!(e, TryDefaultError::Other(_)));
+}

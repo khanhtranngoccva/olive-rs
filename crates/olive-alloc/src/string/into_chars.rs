@@ -171,6 +171,7 @@ impl<A: AllocatorTryDefault> TryDefault for IntoChars<A> {
 mod tests {
     use super::*;
     use olive_core::try_traits::try_default::TryDefault;
+    use olive_test_helpers::FailDefaultAlloc;
 
     #[test]
     fn default_and_try_default_are_empty() {
@@ -178,5 +179,14 @@ mod tests {
         assert_eq!(ic.count(), 0);
         let ic: IntoChars = TryDefault::try_default().unwrap();
         assert_eq!(ic.count(), 0);
+    }
+
+    #[test]
+    fn into_chars_try_default_allocator_failure_propagates() {
+        let e = <IntoChars<FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

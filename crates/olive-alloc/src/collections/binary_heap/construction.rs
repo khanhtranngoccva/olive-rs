@@ -116,7 +116,8 @@ impl<T> Default for BinaryHeap<T, Global> {
 mod tests {
     extern crate std;
     use super::*;
-    use olive_test_helpers::{Counter, DropCountingAlloc, FailAlloc};
+    use olive_core::try_traits::try_default::TryDefaultError;
+    use olive_test_helpers::{Counter, DropCountingAlloc, FailAlloc, FailDefaultAlloc};
     use std::sync::Arc;
 
     // --- new / new_in --------------------------------------------------------
@@ -228,6 +229,15 @@ mod tests {
         let d: BinaryHeap<i32, Global> = TryDefault::try_default().expect("infallible");
         assert!(d.is_empty());
         assert_eq!(d.capacity(), 0);
+    }
+
+    #[test]
+    fn binary_heap_try_default_allocator_failure_propagates() {
+        let e = <BinaryHeap<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     // --- Cross-checks ----------------------------------------------------------

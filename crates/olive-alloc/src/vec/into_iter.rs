@@ -269,8 +269,10 @@ mod tests {
 
     use crate::vec::{IntoIter, Vec};
     use olive_core::try_traits::try_clone::TryClone;
-    use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, Ledger, TrackedItem};
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+    use olive_test_helpers::{
+        BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc, Ledger, TrackedItem,
+    };
     use std::sync::Arc as StdArc;
 
     fn make_vec(alloc: BudgetedAlloc) -> Vec<u32, BudgetedAlloc> {
@@ -415,5 +417,14 @@ mod tests {
         assert_eq!(it.count(), 0);
         let it2: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(it2.count(), 0);
+    }
+
+    #[test]
+    fn try_default_allocator_failure_propagates() {
+        let e = <IntoIter<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

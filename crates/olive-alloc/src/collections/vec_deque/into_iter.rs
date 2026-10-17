@@ -135,7 +135,7 @@ mod tests {
     use super::*;
     use olive_core::try_traits::try_clone::TryClone;
     use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc};
+    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc};
     use std::sync::Arc;
 
     fn build(n: usize) -> VecDeque<i32> {
@@ -252,5 +252,17 @@ mod tests {
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);
+    }
+
+    #[test]
+    fn into_iter_try_default_allocator_failure_propagates() {
+        let e = match <IntoIter<u32, FailDefaultAlloc> as TryDefault>::try_default() {
+            Ok(_) => panic!("expected allocator default failure"),
+            Err(e) => e,
+        };
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

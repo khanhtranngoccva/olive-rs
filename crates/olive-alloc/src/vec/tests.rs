@@ -10,14 +10,15 @@ use core::alloc::Layout;
 use olive_core::TryClone;
 use olive_core::try_traits::try_clone::TryCloneError;
 use olive_core::try_traits::try_collect::TryCollect;
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 use olive_core::try_traits::try_from_iterator::TryFromIterator;
 
 use super::*;
 use crate::borrow::Cow;
 use olive_test_helpers::{
-    CloneBudget, Counter, DropCountingAlloc, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
-    PanicArmer,
+    CloneBudget, Counter, DropCountingAlloc, FailAlloc, FailDefaultAlloc, FlakyClone,
+    FlakyCloneTrackedItem, Ledger, PanicArmer,
 };
 use std::format;
 use std::sync::Arc;
@@ -2913,4 +2914,13 @@ fn into_iter_debug_matches_std_format() {
     assert_eq!(std::format!("{it:?}"), "IntoIter([1, 2])");
     let _ = it.next_back();
     assert_eq!(std::format!("{it:?}"), "IntoIter([1])");
+}
+
+#[test]
+fn vec_try_default_allocator_failure_propagates() {
+    let e = <Vec<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+    assert!(matches!(
+        e,
+        TryDefaultError::Other("allocator default failed")
+    ));
 }

@@ -59,7 +59,7 @@ mod tests {
     extern crate std;
 
     use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::FailAlloc;
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
 
     use super::*;
     use crate::alloc::AllocError;
@@ -95,5 +95,14 @@ mod tests {
         let t: LinkedList<i32, Global> = TryDefault::try_default().expect("infallible for Global");
         assert!(t.is_empty());
         assert_eq!(t.len(), 0);
+    }
+
+    #[test]
+    fn linked_list_try_default_allocator_failure_propagates() {
+        let e = <LinkedList<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

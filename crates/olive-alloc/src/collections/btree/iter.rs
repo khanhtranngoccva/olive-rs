@@ -858,7 +858,7 @@ mod tests {
     use crate::alloc::Global;
     use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::{Ledger, TrackedItem};
+    use olive_test_helpers::{FailDefaultAlloc, Ledger, TrackedItem};
     use std::sync::Arc;
 
     /// A simple comparable wrapper around a fixed-size array, used in place of
@@ -1263,6 +1263,16 @@ mod tests {
         assert_eq!(m.count(), 0);
     }
 
+    #[test]
+    fn into_iter_try_default_allocator_failure_propagates() {
+        let e = <IntoIter<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+    
+
     // ── Keys tests ────────────────────────────────────────────────────────────
 
     #[test]
@@ -1626,6 +1636,18 @@ mod tests {
         assert_eq!(m.count(), 0);
     }
 
+     #[test]
+    fn into_keys_try_default_allocator_failure_propagates() {
+        let e = <IntoKeys<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+
+
+
     // ── IntoValues tests ──────────────────────────────────────────────────────
 
     #[test]
@@ -1713,6 +1735,15 @@ mod tests {
     fn into_values_try_default_is_empty() {
         let m: IntoValues<u32, u32> = TryDefault::try_default().unwrap();
         assert_eq!(m.count(), 0);
+    }
+
+        #[test]
+    fn into_values_try_default_allocator_failure_propagates() {
+        let e = <IntoValues<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     #[test]

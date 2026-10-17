@@ -138,9 +138,10 @@ mod tests {
     use super::*;
     use crate::alloc::{AllocError, Layout};
     use core::mem::size_of;
+    use olive_core::try_traits::try_default::TryDefaultError;
     use olive_test_helpers::Counter;
     use olive_test_helpers::DropCountingAlloc;
-    use olive_test_helpers::FailAlloc;
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
     use std::sync::Arc;
 
     // --- new / new_in --------------------------------------------------------
@@ -278,6 +279,15 @@ mod tests {
         let d: VecDeque<i32, Global> = TryDefault::try_default().unwrap();
         assert!(d.is_empty());
         assert_eq!(d.capacity(), 0);
+    }
+
+    #[test]
+    fn vec_deque_try_default_allocator_failure_propagates() {
+        let e = <VecDeque<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     // --- Cross-checks ---------------------------------------------------------

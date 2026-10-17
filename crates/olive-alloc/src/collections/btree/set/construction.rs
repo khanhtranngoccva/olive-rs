@@ -41,6 +41,8 @@ impl<T: Ord, A: AllocatorTryDefault> TryDefault for BTreeSet<T, A> {
 mod tests {
     use super::*;
 
+    use olive_test_helpers::FailDefaultAlloc;
+
     #[test]
     fn new_constructs_a_set() {
         let _set: BTreeSet<i32> = BTreeSet::new();
@@ -82,5 +84,14 @@ mod tests {
     #[test]
     fn try_default_constructs_a_set() {
         let _set: BTreeSet<i32, Global> = TryDefault::try_default().expect("default ok");
+    }
+
+    #[test]
+    fn btree_set_try_default_allocator_failure_propagates() {
+        let e = <BTreeSet<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

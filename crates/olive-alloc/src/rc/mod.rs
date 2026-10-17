@@ -1842,9 +1842,9 @@ impl<T: ?Sized, A: Allocator> Borrow<T> for Rc<T, A> {
 // Default construction (sized)
 // ---------------------------------------------------------------------------
 
-impl<T: TryDefault> TryDefault for Rc<T, Global> {
+impl<T: TryDefault, A: AllocatorTryDefault> TryDefault for Rc<T, A> {
     fn try_default() -> Result<Self, TryDefaultError> {
-        let uninit = Self::try_new_uninit().map_err(TryDefaultError::Alloc)?;
+        let uninit = Self::try_new_uninit_in(A::try_default()?).map_err(TryDefaultError::Alloc)?;
         let value = T::try_default()?;
         // SAFETY: we just initialized the Rc with strong == 1 and weak == 0
         // (excluding the implicit ref).
@@ -2235,9 +2235,6 @@ impl<T: ?Sized, A: AllocatorTryDefault> TryDefault for Weak<T, A> {
     }
 }
 
-// NOTE: See the comment above the former "Auto-trait impls for Rc" section —
-// `Weak` is likewise neither `Send` nor `Sync`. Assertions in the test module.
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2247,8 +2244,8 @@ mod tests {
     extern crate std;
     use super::*;
     use core::panic::{RefUnwindSafe, UnwindSafe};
-    use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::FailAlloc;
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
     use static_assertions::assert_not_impl_any;
     use std::string::String;
 
@@ -2572,6 +2569,39 @@ mod tests {
     }
 
     #[test]
+    fn rc_try_default_sized_with_global() {
+        let r = <Rc<u32, Global> as TryDefault>::try_default().unwrap();
+        assert_eq!(*r, 0);
+    }
+
+    #[test]
+    fn rc_try_default_allocator_failure_propagates() {
+        let e = <Rc<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn rc_str_try_default_allocator_failure_propagates() {
+        let e = <Rc<str, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn rc_slice_try_default_allocator_failure_propagates() {
+        let e = <Rc<[u8], FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
     fn try_default_sized() {
         assert_eq!(*Rc::<u32>::try_default().unwrap(), 0);
     }
@@ -2606,6 +2636,15 @@ mod tests {
         // And the fallible twin agrees.
         let c: Weak<i32> = TryDefault::try_default().unwrap();
         assert!(c.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn rc_weak_try_default_allocator_failure_propagates() {
+        let e = <Weak<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     /// Regression: cloning a dangling `Weak` (from `Weak::new`) must not

@@ -289,9 +289,11 @@ mod tests {
     use super::{IntoIter, Iter};
     use crate::collections::binary_heap::BinaryHeap;
     use olive_core::try_traits::try_clone::TryClone;
-    use olive_core::try_traits::try_default::TryDefault;
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
-    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, PanicArmer, PanickyOrd};
+    use olive_test_helpers::{
+        BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc, PanicArmer, PanickyOrd,
+    };
     use std::sync::Arc;
     use std::{format, panic, vec, vec::Vec};
 
@@ -463,6 +465,15 @@ mod tests {
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);
+    }
+
+    #[test]
+    fn into_iter_try_default_allocator_failure_propagates() {
+        let e = <IntoIter<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     // --- borrowing Iter ------------------------------------------------------

@@ -51,6 +51,8 @@ impl<K: Ord, V, A: AllocatorTryDefault> TryDefault for BTreeMap<K, V, A> {
 mod tests {
     use super::*;
 
+    use olive_test_helpers::FailDefaultAlloc;
+
     #[test]
     fn new_creates_empty_map() {
         let map: BTreeMap<i32, i32> = BTreeMap::new();
@@ -150,5 +152,14 @@ mod tests {
         let map: BTreeMap<i32, i32, Global> = TryDefault::try_default().expect("default ok");
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn btree_map_try_default_allocator_failure_propagates() {
+        let e = <BTreeMap<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

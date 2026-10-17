@@ -515,7 +515,9 @@ mod tests {
     use super::*;
     use olive_core::try_traits::try_clone::TryClone;
     use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::{BudgetedAlloc, CloneBudget, FlakyCloneAlloc, Ledger, TrackedItem};
+    use olive_test_helpers::{
+        BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc, Ledger, TrackedItem,
+    };
     use std::format;
     use std::sync::Arc;
     use std::vec::Vec;
@@ -929,6 +931,15 @@ mod tests {
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);
+    }
+
+    #[test]
+    fn into_iter_try_default_allocator_failure_propagates() {
+        let e = <IntoIter<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 
     #[test]

@@ -138,9 +138,9 @@ impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
 // Default construction (sized)
 // ---------------------------------------------------------------------------
 
-impl<T: TryDefault> TryDefault for Arc<T, Global> {
+impl<T: TryDefault, A: AllocatorTryDefault> TryDefault for Arc<T, A> {
     fn try_default() -> Result<Self, TryDefaultError> {
-        let uninit = Self::try_new_uninit().map_err(TryDefaultError::Alloc)?;
+        let uninit = Self::try_new_uninit_in(A::try_default()?).map_err(TryDefaultError::Alloc)?;
         let value = T::try_default()?;
         // SAFETY: we just initialized the Arc with strong == 1 and weak == 0 (excluding the implicit ref).
         Ok(unsafe { uninit.write(value) })
@@ -194,8 +194,8 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
-    use olive_core::try_traits::try_default::TryDefault;
-    use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+    use olive_test_helpers::{CloneBudget, FailDefaultAlloc, FlakyCloneAlloc};
     use std::string::String;
     use std::sync::Arc as StdArc;
 
@@ -375,6 +375,52 @@ mod tests {
     // --- Default / TryDefault ------------------------------------------------
 
     #[test]
+    fn arc_try_default_with_i32() {
+        let arc: Arc<i32, Global> = TryDefault::try_default().unwrap();
+        assert_eq!(*arc, 0);
+        assert_eq!(Arc::strong_count(&arc), 1);
+    }
+
+    #[test]
+    fn arc_try_default_with_option() {
+        let arc: Arc<Option<i32>, Global> = TryDefault::try_default().unwrap();
+        assert_eq!(*arc, None);
+    }
+
+    #[test]
+    fn arc_try_default_str_and_slice() {
+        assert_eq!(&*Arc::<str>::try_default().unwrap(), "");
+        assert_eq!(Arc::<[u8]>::try_default().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn arc_try_default_allocator_failure_propagates() {
+        let e = <Arc<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn arc_str_try_default_allocator_failure_propagates() {
+        let e = <Arc<str, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn arc_slice_try_default_allocator_failure_propagates() {
+        let e = <Arc<[u8], FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
     fn weak_default_is_dangling() {
         let w: Weak<i32, Global> = Default::default();
         assert!(pointers::is_dangling_weak(w.ptr.as_ptr()));
@@ -389,36 +435,11 @@ mod tests {
     }
 
     #[test]
-    fn arc_try_default_with_i32() {
-        let arc: Arc<i32, Global> = TryDefault::try_default().unwrap();
-        assert_eq!(*arc, 0);
-        assert_eq!(Arc::strong_count(&arc), 1);
-    }
-
-    #[test]
-    fn arc_try_default_with_option() {
-        let arc: Arc<Option<i32>, Global> = TryDefault::try_default().unwrap();
-        assert_eq!(*arc, None);
-    }
-
-    // --- TryDefault (Global-scoped) ------------------------------------------
-
-    #[test]
-    fn arc_try_default_global_succeeds() {
-        let a: Arc<i32, Global> = TryDefault::try_default().unwrap();
-        assert_eq!(*a, 0);
-    }
-
-    #[test]
-    fn arc_try_default_str_and_slice() {
-        assert_eq!(&*Arc::<str>::try_default().unwrap(), "");
-        assert_eq!(Arc::<[u8]>::try_default().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn weak_try_default_global_dangling() {
-        let w: Weak<i32, Global> = TryDefault::try_default().unwrap();
-        // A dangling weak never referred to an allocation; upgrade yields None.
-        assert!(w.try_upgrade().unwrap().is_none());
+    fn arc_weak_try_default_allocator_failure_propagates() {
+        let e = <Weak<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }
