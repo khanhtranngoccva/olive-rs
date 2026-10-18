@@ -3,7 +3,7 @@
 use super::entry::Entry;
 use super::map::BTreeMap;
 use core::borrow::Borrow;
-use core::mem::ManuallyDrop;
+use core::mem::{self, ManuallyDrop};
 
 use crate::alloc::Allocator;
 
@@ -17,12 +17,11 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
             let alloc = &*self.alloc;
             let ephemeral = BTreeMap::<K, V, &A> {
                 root: self.root.take(),
-                length: self.length,
+                length: mem::take(&mut self.length),
                 alloc: ManuallyDrop::new(alloc),
             };
             drop(ephemeral);
         }
-        self.length = 0;
     }
 
     /// Pops the first key-value pair out of the map.
@@ -102,7 +101,7 @@ mod tests {
 
     use super::*;
     use crate::alloc::Global;
-    use olive_test_helpers::{Ledger, TestRng, TrackedItem};
+    use olive_test_helpers::{Ledger, PanicArmer, PanickyDrop, TestRng, TrackedItem};
 
     /// Inserts a tracked key + tracked value pair into the map, registering both
     /// ids with the ledger up front so drops are observable.
@@ -222,6 +221,68 @@ mod tests {
         );
         assert_eq!(ledger.total_allocated(), 400);
         assert!(ledger.all_dropped_once(0..400));
+    }
+
+    /// Regression test: a payload destructor panicking mid-`clear` must not
+    /// leave the map with broken invariants. `clear` must hand the old root and
+    /// length to an ephemeral map and clear its own fields, and only then drop it.
+    ///
+    /// Previously, panicking leaves a stale length.
+    #[test]
+    fn clear_panic_in_destructor_leaves_map_consistent() {
+        let armer = Arc::new(PanicArmer::new());
+        let ledger = Arc::new(Ledger::new());
+
+        // 80 values give a multi-level tree, so the panic lands after several
+        // payloads and nodes are already torn down.
+        const N: u32 = 80;
+        let mut map: BTreeMap<u32, TrackedItem<PanickyDrop>> = BTreeMap::new_in(Global);
+        for i in 0..N {
+            let guard = TrackedItem::construct(&ledger, PanickyDrop::new(armer.clone()));
+            map.try_insert(i, guard).unwrap();
+        }
+        assert!(map.root.as_ref().is_some_and(|r| r.height() >= 1));
+        assert_eq!(map.len(), N as usize);
+
+        armer.arm();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| map.clear()));
+        assert!(panicked.is_err(), "expected clear's teardown to panic");
+
+        // The map must not be left in a broken state: rootless, zero length,
+        // and every former key absent.
+        assert_eq!(map.len(), 0, "stale length after a panicking clear");
+        assert!(map.is_empty());
+        check_tree_invariant(&map);
+        check_ascending_keys(&map);
+        for i in 0..N {
+            assert!(map.get(&i).is_none(), "key {i} still reachable after clear");
+        }
+
+        assert!(!armer.is_armed(), "firing must have consumed the arming");
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked ids: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(
+            ledger.double_dropped().is_empty(),
+            "double-dropped: {:?}",
+            ledger.double_dropped()
+        );
+        assert_eq!(ledger.total_allocated(), N);
+        assert!(ledger.all_dropped_once(0..N));
+
+        // The map must remain fully usable afterwards.
+        map.try_insert(
+            1,
+            TrackedItem::construct(&ledger, PanickyDrop::new(armer.clone())),
+        )
+        .unwrap();
+        assert_eq!(map.len(), 1);
+        map.clear();
+        // The reinserted guard id (N) is now dropped once too, silently.
+        assert_eq!(ledger.total_allocated(), N + 1);
+        assert!(ledger.all_dropped_once(0..N + 1));
     }
 
     #[test]

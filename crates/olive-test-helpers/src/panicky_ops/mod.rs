@@ -3,13 +3,16 @@
 
 extern crate std;
 
+pub mod panicky_drop;
 pub mod panicky_ord;
+pub use panicky_drop::PanickyDrop;
 pub use panicky_ord::PanickyOrd;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A per-test panic armer. Starts disarmed; the test arms it before triggering
-/// the code path under test and can disarm it afterwards.
+/// the code path under test and can disarm it afterwards. This armer does not 
+/// aim to synchronize anything else.
 #[derive(Debug, Default)]
 pub struct PanicArmer {
     armed: AtomicBool,
@@ -34,5 +37,11 @@ impl PanicArmer {
     /// Whether the armer is currently armed.
     pub fn is_armed(&self) -> bool {
         self.armed.load(Ordering::Relaxed)
+    }
+
+    /// Atomically disarms the armer, returning whether it was armed.
+    /// This helps prevent the double-panic scenario.
+    pub fn fetch_and_disarm(&self) -> bool {
+        self.armed.swap(false, Ordering::Relaxed)
     }
 }

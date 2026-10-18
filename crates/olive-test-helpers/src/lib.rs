@@ -15,5 +15,5 @@ pub use counters::Counter;
 pub use fallible_ops::{CloneBudget, FailArmer, FlakyClone, MaybeUnclonable, NoDefault};
 #[allow(unused_imports)]
 pub use ledger::{FlakyCloneTrackedItem, Ledger, TrackedItem};
-pub use panicky_ops::{PanicArmer, PanickyOrd};
+pub use panicky_ops::{PanicArmer, PanickyDrop, PanickyOrd};
 pub use rng::TestRng;
