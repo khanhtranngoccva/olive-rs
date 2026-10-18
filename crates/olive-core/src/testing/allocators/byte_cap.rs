@@ -19,6 +19,7 @@ pub struct ByteCapAlloc {
 
 impl ByteCapAlloc {
     /// Builds an allocator that permits single allocations up to `max_bytes`.
+    #[must_use]
     pub const fn new(max_bytes: usize) -> Self {
         Self { max_bytes }
     }

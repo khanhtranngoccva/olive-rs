@@ -122,3 +122,7 @@ pub use core::*;
 
 // proc-macro names can co-exist with trait names.
 pub use olive_macros::{TryClone, TryDefault};
+
+// Shared testing helpers for the whole Olive stack.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;

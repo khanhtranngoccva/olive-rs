@@ -38,11 +38,13 @@ pub struct FailArmer {
 
 impl FailArmer {
     /// Creates an armer in the disarmed state (the operation is allowed).
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Creates an armer in the armed state (the operation fails).
+    #[must_use]
     pub fn armed() -> Self {
         let armer = Self::default();
         armer.arm();

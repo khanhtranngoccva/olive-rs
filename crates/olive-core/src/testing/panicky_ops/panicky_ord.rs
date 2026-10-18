@@ -39,6 +39,10 @@ impl<T> PanickyOrd<T> {
 
 impl<T: Ord> Ord for PanickyOrd<T> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        #[allow(
+            clippy::manual_assert,
+            reason = "this is not an assertion but intentional testing behavior"
+        )]
         if self.is_armed() || other.is_armed() {
             panic!("comparison requested a panic");
         }

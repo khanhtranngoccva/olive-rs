@@ -1,13 +1,9 @@
 //! Deterministic pseudo-random number generator for reproducible tests.
-//!
-//! Uses the SplitMix64 algorithm: fast, well-distributed, and trivially
-//! seedable. Each test constructs its own [`TestRng`] with a fixed seed so
-//! that randomized test sequences are fully deterministic across runs and
-//! platforms.
 
 extern crate std;
+use std::vec::Vec;
 
-/// A minimal deterministic PRNG (SplitMix64) for reproducible test sequences.
+/// A minimal deterministic PRNG (`SplitMix64`) for reproducible test sequences.
 ///
 /// # Example
 /// ```ignore
@@ -24,6 +20,7 @@ pub struct TestRng {
 impl TestRng {
     /// Creates a new RNG seeded with `seed`. The same seed always produces
     /// the same sequence.
+    #[must_use]
     pub const fn new(seed: u64) -> Self {
         Self { state: seed }
     }
@@ -67,11 +64,16 @@ impl TestRng {
     fn below(&mut self, limit: u64) -> u64 {
         assert!(limit > 0, "TestRng::below called with limit == 0");
         // Powers of two divide 2^64 evenly, so masking is already unbiased.
+        #[allow(clippy::arithmetic_side_effects, reason = "limit > 0 above")]
         if limit.is_power_of_two() {
             return self.next_u64() & (limit - 1);
         }
         // Size of the uneven tail: m = 2^64 % limit.
         // Since 2^64 overflows u64, compute via (u64::MAX % limit) + 1.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "limit <= u64::MAX, the modulo is always < u64::MAX"
+        )]
         let rem = u64::MAX % limit + 1;
         debug_assert_ne!(rem, limit, "power-of-two limit should have hit fast path");
         loop {
@@ -84,6 +86,7 @@ impl TestRng {
             if !r < rem {
                 continue;
             }
+            #[allow(clippy::arithmetic_side_effects, reason = "limit > 0 above")]
             return r % limit;
         }
     }
@@ -91,6 +94,8 @@ impl TestRng {
     /// In-place Fisher-Yates shuffle using this RNG's state.
     fn shuffle_in_place<T>(&mut self, slice: &mut [T]) {
         let len = slice.len();
+        #[allow(clippy::arithmetic_side_effects, reason = "i < len, i + 1 <= len")]
+        #[allow(clippy::cast_possible_truncation, reason = "i < len")]
         for i in (1..len).rev() {
             let j = self.below((i + 1) as u64) as usize;
             slice.swap(i, j);

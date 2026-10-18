@@ -5,10 +5,7 @@
 //! verifying a block is freed even when a pointee's destructor panics —
 //! can share one well-known implementation.
 //!
-//! Allocation hooks ignore zero-sized layouts: those never touch the heap,
-//! so they neither count (CountingAllocator), draw from a budget
-//! (BudgetedAlloc), trip the cap (ByteCapAlloc, by construction) nor fail
-//! (FailAlloc); they delegate straight to `Global`.
+//! Allocation hooks ignore zero-sized layouts: for these never touch the heap.
 
 pub mod budgeted;
 pub mod byte_cap;

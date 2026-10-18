@@ -10,7 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-olive-core = { workspace = true }
+olive-core = { workspace = true, features = ["testing"] }
 allocator-api2 = { workspace = true }
 
 [lints]

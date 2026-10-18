@@ -15,5 +15,9 @@ allocator-api2 = { workspace = true }
 [build-dependencies]
 olive-build = { workspace = true }
 
+[features]
+# Exposes the test helper API for use in various tests.
+testing = []
+
 [lints]
 workspace = true

@@ -11,7 +11,7 @@ use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use std::sync::Arc;
 
-use crate::fallible_ops::CloneBudget;
+use super::super::fallible_ops::CloneBudget;
 
 /// An [`Allocator`] whose allocation forwards to `Global` but whose
 /// [`TryClone`] succeeds only while a shared [`CloneBudget`] has remaining units.
@@ -22,6 +22,7 @@ pub struct FlakyCloneAlloc {
 
 impl FlakyCloneAlloc {
     /// Builds an allocator sharing one clone budget with the test.
+    #[must_use]
     pub fn new(budget: Arc<CloneBudget>) -> Self {
         Self { budget }
     }

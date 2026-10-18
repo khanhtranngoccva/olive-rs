@@ -19,6 +19,7 @@ pub struct FlakyClone {
 impl FlakyClone {
     /// Shorthand constructor for the common case of starting at 0: the element
     /// clones successfully `threshold` times, then fails forever.
+    #[must_use]
     pub const fn new(threshold: u32) -> Self {
         Self {
             count: 0,
@@ -32,12 +33,14 @@ impl FlakyClone {
     ///
     /// This is the explicit form of the struct literal that call sites used to
     /// write by hand.
+    #[must_use]
     pub const fn at(count: u32, threshold: u32) -> Self {
         Self { count, threshold }
     }
 
     /// An element that has already exhausted its budget: its very first clone
     /// fails.
+    #[must_use]
     pub const fn exhausted() -> Self {
         Self {
             count: 0,
@@ -51,6 +54,7 @@ impl TryClone for FlakyClone {
         if self.count >= self.threshold {
             Err(TryCloneError::Other("flaky"))
         } else {
+            #[allow(clippy::arithmetic_side_effects, reason = "count + 1 <= threshold")]
             Ok(Self {
                 count: self.count + 1,
                 threshold: self.threshold,

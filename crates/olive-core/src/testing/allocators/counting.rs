@@ -25,6 +25,7 @@ impl Default for CountingAllocator {
 impl CountingAllocator {
     /// Creates a freshly-zeroed counter.
     #[inline]
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             allocations: AtomicUsize::new(0),

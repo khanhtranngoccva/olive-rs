@@ -19,6 +19,7 @@ pub struct CloneBudget {
 
 impl CloneBudget {
     /// Creates a budget allowing `remaining` successful clones before failing.
+    #[must_use]
     pub fn new(remaining: u32) -> Self {
         Self {
             remaining: Arc::new(AtomicU32::new(remaining)),
@@ -28,11 +29,13 @@ impl CloneBudget {
     /// Attempts to consume one unit of budget. Returns `true` if a clone is
     /// allowed, `false` if the budget is exhausted. Atomic so concurrent
     /// consumers can't overdraw the shared budget.
+    #[must_use]
     pub fn try_consume(&self) -> bool {
         // `fetch_update` retries on contention; the closure rejects only when
         // the counter is already zero, so the sole failure value is `Err(0)`.
         self.remaining
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                #[allow(clippy::arithmetic_side_effects, reason = "asserted cur > 0")]
                 if cur > 0 { Some(cur - 1) } else { None }
             })
             .is_ok()
@@ -43,6 +46,7 @@ impl CloneBudget {
     /// creating the payload must not count against the clone budget — only
     /// actual [`TryClone`]s do.
     #[inline]
+    #[must_use]
     pub fn share(&self) -> Self {
         Self {
             remaining: self.remaining.clone(),

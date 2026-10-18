@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::vec::Vec;
 
-use crate::fallible_ops::CloneBudget;
+use super::CloneBudget;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 /// A tracked item carrying a unique [`Ledger`] id plus a pluggable inner payload
@@ -95,7 +95,7 @@ impl<C: core::fmt::Debug> core::fmt::Debug for TrackedItem<C> {
         f.debug_struct("TrackedItem")
             .field("id", &self.id)
             .field("inner", &self.inner)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -175,6 +175,7 @@ pub struct Ledger {
 
 impl Ledger {
     /// Creates an empty ledger with no ids allocated.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             live: RwLock::new(HashSet::new()),
@@ -197,6 +198,10 @@ impl Ledger {
     }
 
     /// Registers an id as currently alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
     pub fn register(&self, id: u32) {
         self.live.write().unwrap().insert(id);
     }
@@ -204,12 +209,27 @@ impl Ledger {
     /// Records that `id` was dropped: bumps its drop count and clears its live
     /// flag. Called from `Drop` impls. Calling this twice for the same id is
     /// what makes double-frees observable (the count goes to 2+).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
     pub fn unregister(&self, id: u32) {
-        *self.drop_counts.write().unwrap().entry(id).or_insert(0) += 1;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "tests usually do not go all the way to usize::MAX"
+        )]
+        {
+            *self.drop_counts.write().unwrap().entry(id).or_insert(0) += 1;
+        }
         self.live.write().unwrap().remove(&id);
     }
 
     /// Number of times `id` has been dropped (0 if never).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
+    #[must_use]
     pub fn drop_count(&self, id: u32) -> usize {
         self.drop_counts
             .read()
@@ -220,11 +240,21 @@ impl Ledger {
     }
 
     /// Map of every id that has been dropped at least once, to its count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
+    #[must_use]
     pub fn drop_counts(&self) -> HashMap<u32, usize> {
         self.drop_counts.read().unwrap().clone()
     }
 
     /// Snapshot of currently-live ids (non-empty ⇒ leak).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
+    #[must_use]
     pub fn live_ids(&self) -> Vec<u32> {
         let mut v: Vec<u32> = self.live.read().unwrap().iter().copied().collect();
         v.sort_unstable();
@@ -240,6 +270,11 @@ impl Ledger {
     }
 
     /// Ids dropped more than once. Empty ⇒ no double-free.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
+    #[must_use]
     pub fn double_dropped(&self) -> Vec<u32> {
         let mut v: Vec<u32> = self
             .drop_counts
@@ -256,6 +291,11 @@ impl Ledger {
     /// True iff every id in `expected` was dropped exactly once and nothing
     /// else was dropped. Handy for the common "these N elements must each die
     /// exactly once" assertion.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ledger is poisoned due to a previous panic, which should not happen.
+    #[must_use]
     pub fn all_dropped_once(&self, expected: impl IntoIterator<Item = u32>) -> bool {
         let counts = self.drop_counts.read().unwrap();
         let n_expected: usize = expected.into_iter().count();

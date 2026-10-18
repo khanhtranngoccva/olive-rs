@@ -22,6 +22,7 @@ pub struct BudgetedAlloc {
 
 impl BudgetedAlloc {
     /// Builds an allocator allowing exactly `budget` successful allocations.
+    #[must_use]
     pub fn new(budget: usize) -> Self {
         Self {
             remaining: Arc::new(AtomicUsize::new(budget)),
@@ -45,6 +46,7 @@ impl BudgetedAlloc {
     /// The number of allocations still permitted. Reads the shared counter, so
     /// every handle observing this budget sees the same value.
     #[inline]
+    #[must_use]
     pub fn remaining(&self) -> usize {
         self.remaining.load(Ordering::SeqCst)
     }
@@ -65,6 +67,7 @@ unsafe impl Allocator for BudgetedAlloc {
         let had_budget = self
             .remaining
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                #[allow(clippy::arithmetic_side_effects, reason = "asserted cur > 0")]
                 if cur > 0 { Some(cur - 1) } else { None }
             })
             .is_ok();

@@ -3,7 +3,7 @@
 
 extern crate std;
 
-use crate::panicky_ops::PanicArmer;
+use super::PanicArmer;
 use std::sync::Arc;
 
 /// A drop guard that panics when the shared [`PanicArmer`] is armed.
@@ -29,6 +29,10 @@ impl Drop for PanickyDrop {
     fn drop(&mut self) {
         // Disarm *before* panicking: drops that run during the unwind must
         // observe the disarmed state, or the process aborts (double panic).
+        #[allow(
+            clippy::manual_assert,
+            reason = "this is not an assertion but intentional testing behavior"
+        )]
         if self.armer.fetch_and_disarm() {
             panic!("PanickyDrop fired");
         }

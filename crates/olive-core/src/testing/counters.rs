@@ -20,6 +20,7 @@ pub struct Counter {
 
 impl Counter {
     /// Creates a counter at zero.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -37,6 +38,7 @@ impl Counter {
 
     /// Convenience: creates an [`Arc`] handle suitable for embedding in
     /// collection elements that share the counter.
+    #[must_use]
     pub fn shared() -> Arc<Self> {
         Arc::new(Self::default())
     }

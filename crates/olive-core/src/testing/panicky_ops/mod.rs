@@ -20,6 +20,7 @@ pub struct PanicArmer {
 
 impl PanicArmer {
     /// Creates an armer in the disarmed state.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

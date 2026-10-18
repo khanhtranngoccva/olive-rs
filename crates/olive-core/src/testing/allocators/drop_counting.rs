@@ -6,13 +6,12 @@ extern crate std;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
+use super::super::counters::Counter;
 use allocator_api2::alloc::Global;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 use std::sync::Arc;
-
-use crate::counters::Counter;
 
 /// A pass-through allocator whose own `Drop` is recorded by a shared counter, so
 /// a test can verify the allocator instance was destroyed exactly once (neither
