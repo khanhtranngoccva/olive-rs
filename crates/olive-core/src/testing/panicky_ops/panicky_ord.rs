@@ -9,6 +9,10 @@ use std::sync::Arc;
 
 /// An ordered newtype over `T` whose comparisons panic while an attached
 /// [`PanicArmer`] is armed.
+///
+/// Firing atomically *auto-disarms* the armer with a single fetch-and-set swap by
+/// the time the panic starts, so drops that run during the unwind observe the
+/// disarmed state instead of aborting the process with a second panic.
 #[derive(Debug)]
 pub struct PanickyOrd<T> {
     /// The wrapped value, ordered by delegation.
@@ -30,20 +34,25 @@ impl<T> PanickyOrd<T> {
             armer: Some(armer),
         }
     }
-
-    /// Whether a comparison involving this value would panic right now.
-    fn is_armed(&self) -> bool {
-        self.armer.as_deref().is_some_and(PanicArmer::is_armed)
-    }
 }
 
 impl<T: Ord> Ord for PanickyOrd<T> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // Disarm *before* panicking: drops that run during the unwind must
+        // observe the disarmed state, or the process aborts (double panic).
+        let self_fires = self
+            .armer
+            .as_deref()
+            .is_some_and(PanicArmer::fetch_and_disarm);
+        let other_fires = other
+            .armer
+            .as_deref()
+            .is_some_and(PanicArmer::fetch_and_disarm);
         #[allow(
             clippy::manual_assert,
             reason = "this is not an assertion but intentional testing behavior"
         )]
-        if self.is_armed() || other.is_armed() {
+        if self_fires || other_fires {
             panic!("comparison requested a panic");
         }
         self.value.cmp(&other.value)
@@ -84,5 +93,40 @@ impl<T: TryClone> TryClone for PanickyOrd<T> {
             value: self.value.try_clone()?,
             armer: self.armer.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    /// A firing comparison auto-disarms the armer, so drops running during
+    /// the unwind cannot fire it a second time (which would abort). The
+    /// disarmed comparison is silent again, and re-arming fires once more.
+    #[test]
+    fn firing_auto_disarms() {
+        let armer = Arc::new(PanicArmer::new());
+        let a = PanickyOrd::new(1, Arc::clone(&armer));
+        let b = PanickyOrd::calm(1);
+
+        armer.arm();
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            let _ = a.cmp(&b);
+        }));
+        assert!(res.is_err(), "armed comparison must panic");
+        assert!(!armer.is_armed(), "firing must auto-disarm the armer");
+
+        assert_eq!(a.cmp(&b), core::cmp::Ordering::Equal);
+
+        armer.arm();
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            let _ = b.cmp(&a);
+        }));
+        assert!(
+            res.is_err(),
+            "the armed element in the other operand position must fire a panic"
+        );
+        assert!(!armer.is_armed());
     }
 }

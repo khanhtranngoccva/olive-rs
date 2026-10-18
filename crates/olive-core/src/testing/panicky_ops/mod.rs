@@ -1,10 +1,12 @@
-//! Newtypes whose trait operations blow up on command via *panics*, for tests that
-//! must break an algorithm mid-flight.
+//! Fixtures whose trait operations blow up on command via *panics*, for tests
+//! that must break an algorithm mid-flight.
 
 extern crate std;
 
+pub mod panicky_clone;
 pub mod panicky_drop;
 pub mod panicky_ord;
+pub use panicky_clone::PanickyClone;
 pub use panicky_drop::PanickyDrop;
 pub use panicky_ord::PanickyOrd;
 
