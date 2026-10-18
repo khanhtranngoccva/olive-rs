@@ -86,55 +86,12 @@ impl<T: TryClone> TryClone for Bound<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::try_traits::try_default::TryDefaultError;
-
-    /// A local stand-in for `olive_test_helpers::MaybeUnclonable`.
-    struct MaybeUnclonable<T> {
-        inner: T,
-        clonable: bool,
-    }
-
-    impl<T> MaybeUnclonable<T> {
-        #[allow(unused)]
-        fn clonable(inner: T) -> Self {
-            Self {
-                inner,
-                clonable: true,
-            }
-        }
-
-        fn unclonable(inner: T) -> Self {
-            Self {
-                inner,
-                clonable: false,
-            }
-        }
-    }
-
-    impl<T: TryClone> TryClone for MaybeUnclonable<T> {
-        fn try_clone(&self) -> Result<Self, TryCloneError> {
-            if !self.clonable {
-                return Err(TryCloneError::Other("unclonable"));
-            }
-            Ok(Self {
-                inner: self.inner.try_clone()?,
-                clonable: self.clonable,
-            })
-        }
-    }
-
-    struct Marker(u8);
-
-    impl TryClone for Marker {
-        fn try_clone(&self) -> Result<Self, TryCloneError> {
-            Ok(Marker(self.0))
-        }
-    }
+    use crate::testing::{MaybeUnclonable, NoDefault};
 
     #[test]
     fn range_from_try_clone_preserves_start() {
-        let rf = Marker(42u8)..;
-        assert_eq!(rf.try_clone().unwrap().start.0, 42);
+        let rf = MaybeUnclonable::clonable(42u8)..;
+        assert_eq!(rf.try_clone().unwrap().start.inner, 42);
     }
 
     #[test]
@@ -145,8 +102,8 @@ mod tests {
 
     #[test]
     fn range_to_try_clone_preserves_end() {
-        let rt = ..Marker(42u8);
-        assert_eq!(rt.try_clone().unwrap().end.0, 42);
+        let rt = ..MaybeUnclonable::clonable(42u8);
+        assert_eq!(rt.try_clone().unwrap().end.inner, 42);
     }
 
     #[test]
@@ -163,8 +120,8 @@ mod tests {
 
     #[test]
     fn range_to_inclusive_try_clone_preserves_end() {
-        let rt = ..=Marker(42u8);
-        assert_eq!(rt.try_clone().unwrap().end.0, 42);
+        let rt = ..=MaybeUnclonable::clonable(42u8);
+        assert_eq!(rt.try_clone().unwrap().end.inner, 42);
     }
 
     #[test]
@@ -175,17 +132,18 @@ mod tests {
 
     #[test]
     fn range_try_clone_preserves_endpoints() {
-        let r = Marker(42u8)..Marker(43u8);
-        assert_eq!(r.try_clone().unwrap().start.0, 42);
-        assert_eq!(r.try_clone().unwrap().end.0, 43);
+        let r = MaybeUnclonable::clonable(42u8)..MaybeUnclonable::clonable(43u8);
+        let cloned = r.try_clone().unwrap();
+        assert_eq!(cloned.start.inner, 42);
+        assert_eq!(cloned.end.inner, 43);
     }
 
     #[test]
     fn range_try_clone_copies_generic_endpoints() {
-        let r = Marker(1)..Marker(9);
+        let r = MaybeUnclonable::clonable(1)..MaybeUnclonable::clonable(9);
         let cloned = r.try_clone().unwrap();
-        assert_eq!(cloned.start.0, 1);
-        assert_eq!(cloned.end.0, 9);
+        assert_eq!(cloned.start.inner, 1);
+        assert_eq!(cloned.end.inner, 9);
     }
 
     #[test]
@@ -197,16 +155,20 @@ mod tests {
     #[test]
     fn bound_try_clone_preserves_variants() {
         assert!(matches!(
-            Bound::Included(Marker(42u8)).try_clone().unwrap(),
-            Bound::Included(Marker(42u8))
+            Bound::Included(MaybeUnclonable::clonable(42u8))
+                .try_clone()
+                .unwrap(),
+            Bound::Included(m) if m.inner == 42
         ));
         assert!(matches!(
-            Bound::Excluded(Marker(42u8)).try_clone().unwrap(),
-            Bound::Excluded(Marker(42))
+            Bound::Excluded(MaybeUnclonable::clonable(42u8))
+                .try_clone()
+                .unwrap(),
+            Bound::Excluded(m) if m.inner == 42
         ));
         assert!(matches!(
-            Bound::<Marker>::Unbounded.try_clone().unwrap(),
-            Bound::<Marker>::Unbounded
+            Bound::<MaybeUnclonable<u8>>::Unbounded.try_clone().unwrap(),
+            Bound::<MaybeUnclonable<u8>>::Unbounded
         ));
     }
 
@@ -237,14 +199,6 @@ mod tests {
 
     #[test]
     fn range_try_default_propagates_endpoint_failure() {
-        struct FailingDefault;
-
-        impl TryDefault for FailingDefault {
-            fn try_default() -> Result<Self, TryDefaultError> {
-                Err(TryDefaultError::Other("no canonical value"))
-            }
-        }
-
-        assert!(Range::<FailingDefault>::try_default().is_err());
+        assert!(Range::<NoDefault<u8>>::try_default().is_err());
     }
 }
