@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn try_clone_carries_state() {
-        let mut it = (1..=4).double_ended_peekable();
+        let mut it = (1..5).double_ended_peekable();
         let _ = it.peek_front();
         let mut cloned = it.try_clone().expect("infallible clone");
         // Both views share the same logical position.

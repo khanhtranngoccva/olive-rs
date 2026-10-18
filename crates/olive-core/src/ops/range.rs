@@ -1,17 +1,14 @@
-//! Foundational-trait impls for the [`core::ops`] range types.
-use core::ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeTo};
+//! Foundational-trait impls for the [`core::ops`] range types and `Bound`.
+use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeTo, RangeToInclusive};
 
 use crate::try_traits::try_clone::{TryClone, TryCloneError};
+use crate::try_traits::try_default::{TryDefault, TryDefaultError};
 
 // ---------------------------------------------------------------------------
 // Single-endpoint / full ranges
 // ---------------------------------------------------------------------------
 
-/// Cloning a `RangeFrom(a..)` copies its endpoint via [`TryClone`] — no
-/// allocation beyond what the endpoint itself requires, no failure unless the
-/// endpoint's own clone fails.
 impl<T: TryClone> TryClone for RangeFrom<T> {
-    #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         Ok(RangeFrom {
             start: self.start.try_clone()?,
@@ -19,11 +16,7 @@ impl<T: TryClone> TryClone for RangeFrom<T> {
     }
 }
 
-/// Cloning a `RangeTo(..b)` copies its endpoint via [`TryClone`] — no
-/// allocation beyond what the endpoint itself requires, no failure unless the
-/// endpoint's own clone fails.
 impl<T: TryClone> TryClone for RangeTo<T> {
-    #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         Ok(RangeTo {
             end: self.end.try_clone()?,
@@ -31,11 +24,23 @@ impl<T: TryClone> TryClone for RangeTo<T> {
     }
 }
 
-/// `RangeFull(..)` carries no data at all.
 impl TryClone for RangeFull {
-    #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         Ok(*self)
+    }
+}
+
+impl TryDefault for RangeFull {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(RangeFull)
+    }
+}
+
+impl<T: TryClone> TryClone for RangeToInclusive<T> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(RangeToInclusive {
+            end: self.end.try_clone()?,
+        })
     }
 }
 
@@ -43,85 +48,203 @@ impl TryClone for RangeFull {
 // Two-endpoint ranges
 // ---------------------------------------------------------------------------
 
-/// Cloning a `Range<a..b>` copies both endpoints via [`TryClone`].
-impl<Idx: TryClone> TryClone for Range<Idx> {
-    #[inline]
+impl<T: TryClone> TryClone for Range<T> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        let start = self.start.try_clone()?;
-        let end = self.end.try_clone()?;
+        Ok(Range {
+            start: self.start.try_clone()?,
+            end: self.end.try_clone()?,
+        })
+    }
+}
+
+impl<Idx: TryDefault> TryDefault for Range<Idx> {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        let start = Idx::try_default()?;
+        let end = Idx::try_default()?;
         Ok(Range { start, end })
     }
 }
 
-/// Cloning a `RangeInclusive<a..=b>` copies both endpoints via [`TryClone`].
-impl<Idx: TryClone> TryClone for RangeInclusive<Idx> {
-    #[inline]
+impl<T: TryClone> TryClone for Bound<T> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
-        // Clone each endpoint independently through `TryClone`, then rebuild.
-        // If either fails, no new range is constructed and `self` is untouched.
-        let start = self.start().try_clone()?;
-        let end = self.end().try_clone()?;
-        Ok(RangeInclusive::new(start, end))
+        match self {
+            Bound::Included(t) => t.try_clone().map(Bound::Included),
+            Bound::Excluded(t) => t.try_clone().map(Bound::Excluded),
+            Bound::Unbounded => Ok(Bound::Unbounded),
+        }
     }
 }
 
+// `RangeInclusive` deliberately has no `TryClone`. std's derived `Clone`
+// copies the private `exhausted` flag alongside the endpoints, but we cannot
+// do the same (at least without the dark layout magic).
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
-    extern crate std;
     use super::*;
+    use crate::try_traits::try_default::TryDefaultError;
 
-    /// A custom fallible type to exercise the generic non-`Copy` endpoint path.
-    struct Failing;
-    impl TryClone for Failing {
-        fn try_clone(&self) -> Result<Self, TryCloneError> {
-            Err(TryCloneError::Other("always fails"))
+    /// A local stand-in for `olive_test_helpers::MaybeUnclonable`.
+    struct MaybeUnclonable<T> {
+        inner: T,
+        clonable: bool,
+    }
+
+    impl<T> MaybeUnclonable<T> {
+        #[allow(unused)]
+        fn clonable(inner: T) -> Self {
+            Self {
+                inner,
+                clonable: true,
+            }
         }
+
+        fn unclonable(inner: T) -> Self {
+            Self {
+                inner,
+                clonable: false,
+            }
+        }
+    }
+
+    impl<T: TryClone> TryClone for MaybeUnclonable<T> {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            if !self.clonable {
+                return Err(TryCloneError::Other("unclonable"));
+            }
+            Ok(Self {
+                inner: self.inner.try_clone()?,
+                clonable: self.clonable,
+            })
+        }
+    }
+
+    struct Marker(u8);
+
+    impl TryClone for Marker {
+        fn try_clone(&self) -> Result<Self, TryCloneError> {
+            Ok(Marker(self.0))
+        }
+    }
+
+    #[test]
+    fn range_from_try_clone_preserves_start() {
+        let rf = Marker(42u8)..;
+        assert_eq!(rf.try_clone().unwrap().start.0, 42);
+    }
+
+    #[test]
+    fn range_from_try_clone_propagates_failure() {
+        let rf = MaybeUnclonable::unclonable(42u8)..;
+        assert!(rf.try_clone().is_err());
+    }
+
+    #[test]
+    fn range_to_try_clone_preserves_end() {
+        let rt = ..Marker(42u8);
+        assert_eq!(rt.try_clone().unwrap().end.0, 42);
+    }
+
+    #[test]
+    fn range_to_try_clone_propagates_failure() {
+        let rt = ..MaybeUnclonable::unclonable(42u8);
+        assert!(rt.try_clone().is_err());
+    }
+
+    #[test]
+    fn range_full_try_clone_copies() {
+        let rfull = RangeFull;
+        assert_eq!(rfull.try_clone().unwrap(), rfull);
+    }
+
+    #[test]
+    fn range_to_inclusive_try_clone_preserves_end() {
+        let rt = ..=Marker(42u8);
+        assert_eq!(rt.try_clone().unwrap().end.0, 42);
+    }
+
+    #[test]
+    fn range_to_inclusive_try_clone_propagates_failure() {
+        let rt = ..=MaybeUnclonable::unclonable(42u8);
+        assert!(rt.try_clone().is_err());
     }
 
     #[test]
     fn range_try_clone_preserves_endpoints() {
-        let r = 1..5usize;
-        assert_eq!(r.try_clone().unwrap(), r);
-
-        let rf = 3..;
-        assert_eq!(rf.try_clone().unwrap(), rf);
-
-        let rt = ..7u8;
-        assert_eq!(rt.try_clone().unwrap(), rt);
-
-        let rf_full = ..;
-        assert_eq!(rf_full.try_clone().unwrap(), rf_full);
+        let r = Marker(42u8)..Marker(43u8);
+        assert_eq!(r.try_clone().unwrap().start.0, 42);
+        assert_eq!(r.try_clone().unwrap().end.0, 43);
     }
 
     #[test]
-    fn range_inclusive_try_clone_preserves_endpoints() {
-        let ri = 1..=5usize;
-        assert_eq!(ri.try_clone().unwrap(), ri);
+    fn range_try_clone_copies_generic_endpoints() {
+        let r = Marker(1)..Marker(9);
+        let cloned = r.try_clone().unwrap();
+        assert_eq!(cloned.start.0, 1);
+        assert_eq!(cloned.end.0, 9);
     }
 
     #[test]
-    fn range_inclusive_generic_endpoint_path() {
-        // Exercise the generic path with a non-Copy `TryClone` endpoint by using
-        // a pair of small structs that implement `TryClone` infallibly.
-        #[derive(Clone, Copy, PartialEq, Debug)]
-        struct Marker(u8);
-        impl TryClone for Marker {
-            fn try_clone(&self) -> Result<Self, TryCloneError> {
-                Ok(*self)
+    fn range_try_clone_propagates_failure() {
+        let r = MaybeUnclonable::unclonable(1)..MaybeUnclonable::unclonable(9);
+        assert!(r.try_clone().is_err());
+    }
+
+    #[test]
+    fn bound_try_clone_preserves_variants() {
+        assert!(matches!(
+            Bound::Included(Marker(42u8)).try_clone().unwrap(),
+            Bound::Included(Marker(42u8))
+        ));
+        assert!(matches!(
+            Bound::Excluded(Marker(42u8)).try_clone().unwrap(),
+            Bound::Excluded(Marker(42))
+        ));
+        assert!(matches!(
+            Bound::<Marker>::Unbounded.try_clone().unwrap(),
+            Bound::<Marker>::Unbounded
+        ));
+    }
+
+    #[test]
+    fn bound_try_clone_propagates_failure() {
+        assert!(
+            Bound::Included(MaybeUnclonable::unclonable(42))
+                .try_clone()
+                .is_err()
+        );
+        assert!(
+            Bound::Excluded(MaybeUnclonable::unclonable(42))
+                .try_clone()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn range_full_try_default_is_infallible() {
+        assert_eq!(RangeFull::try_default().unwrap(), RangeFull);
+    }
+
+    #[test]
+    fn range_try_default_matches_default_endpoints() {
+        let r: Range<u32> = Range::try_default().unwrap();
+        assert_eq!(r, 0..0);
+    }
+
+    #[test]
+    fn range_try_default_propagates_endpoint_failure() {
+        struct FailingDefault;
+
+        impl TryDefault for FailingDefault {
+            fn try_default() -> Result<Self, TryDefaultError> {
+                Err(TryDefaultError::Other("no canonical value"))
             }
         }
-        let ri = Marker(1)..=Marker(9);
-        let cloned = ri.try_clone().unwrap();
-        assert_eq!(cloned.start(), &Marker(1));
-        assert_eq!(cloned.end(), &Marker(9));
-    }
 
-    #[test]
-    fn failing_inner_range_leaves_source_untouched() {
-        let ri = Failing..Failing;
-        let res = ri.try_clone();
-        assert!(res.is_err());
-        // The source range is undisturbed: its endpoints are still accessible.
-        let _ = (&ri.start, &ri.end);
+        assert!(Range::<FailingDefault>::try_default().is_err());
     }
 }

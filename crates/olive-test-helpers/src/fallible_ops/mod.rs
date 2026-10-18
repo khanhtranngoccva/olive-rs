@@ -27,7 +27,7 @@ pub use maybe_unclonable::MaybeUnclonable;
 pub use no_default::NoDefault;
 
 /// An atomically-toggled switch controlling whether the elements holding
-/// it will fail their fallible operation. This armer does not 
+/// it will fail their fallible operation. This armer does not
 /// aim to synchronize anything else.
 ///
 /// To make it shared, wrap it in an Arc.

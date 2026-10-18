@@ -1,9 +1,7 @@
 //! Foundational-trait impls for the wrapping numeric newtype ([`core::num::Wrapping`]).
+use crate::try_traits::try_clone::{TryClone, TryCloneError};
 use core::num::Wrapping;
 
-use crate::try_traits::try_clone::{TryClone, TryCloneError};
-
-/// Cloning a [`Wrapping`] clones the wrapped value via [`TryClone`].
 impl<T: TryClone> TryClone for Wrapping<T> {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {

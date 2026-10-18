@@ -3,7 +3,6 @@ use core::num::Saturating;
 
 use crate::try_traits::try_clone::{TryClone, TryCloneError};
 
-/// Cloning a [`Saturating`] clones the wrapped value via [`TryClone`].
 impl<T: TryClone> TryClone for Saturating<T> {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {

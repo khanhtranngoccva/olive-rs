@@ -11,7 +11,7 @@ pub use panicky_ord::PanickyOrd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A per-test panic armer. Starts disarmed; the test arms it before triggering
-/// the code path under test and can disarm it afterwards. This armer does not 
+/// the code path under test and can disarm it afterwards. This armer does not
 /// aim to synchronize anything else.
 #[derive(Debug, Default)]
 pub struct PanicArmer {

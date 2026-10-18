@@ -1,3 +1,5 @@
+//! Re-exports of [`core::mem`] and additional `olive`-specific API extensions.
+
 /// [`MaybeUninitUnsized`](maybe_uninit_unsized::MaybeUninitUnsized) — a
 /// [`core::mem::MaybeUninit`] shim for unsized types.
 pub mod maybe_uninit_unsized;

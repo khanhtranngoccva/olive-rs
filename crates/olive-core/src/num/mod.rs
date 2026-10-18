@@ -3,9 +3,11 @@
 //!
 //! This module also re-exports numeric types and other items from the original
 //! [`core`] crate, allowing these items to be accessible from the Olive namespace.
+
+/// Re-exports of [`core::num`] API items.
 pub use core::num::*;
 
-// These modules only contain trait implementations, so they can be private.
+// These modules only contain trait implementations and is private on stock `core`, so they can be private.
 mod error;
 mod float_parse;
 mod nonzero;

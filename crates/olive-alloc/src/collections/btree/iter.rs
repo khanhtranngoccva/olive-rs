@@ -1271,7 +1271,6 @@ mod tests {
             TryDefaultError::Other("allocator default failed")
         ));
     }
-    
 
     // ── Keys tests ────────────────────────────────────────────────────────────
 
@@ -1636,7 +1635,7 @@ mod tests {
         assert_eq!(m.count(), 0);
     }
 
-     #[test]
+    #[test]
     fn into_keys_try_default_allocator_failure_propagates() {
         let e = <IntoKeys<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
         assert!(matches!(
@@ -1644,9 +1643,6 @@ mod tests {
             TryDefaultError::Other("allocator default failed")
         ));
     }
-
-
-
 
     // ── IntoValues tests ──────────────────────────────────────────────────────
 
@@ -1737,7 +1733,7 @@ mod tests {
         assert_eq!(m.count(), 0);
     }
 
-        #[test]
+    #[test]
     fn into_values_try_default_allocator_failure_propagates() {
         let e = <IntoValues<u32, u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
         assert!(matches!(

@@ -1,12 +1,9 @@
 //! Foundational-trait impls for floating point number parsing types,
 //! for example, [`core::num::ParseFloatError`].
 
+use crate::try_traits::try_clone::{TryClone, TryCloneError};
 use core::num::ParseFloatError;
 
-use crate::try_traits::try_clone::{TryClone, TryCloneError};
-
-/// Cloning a [`ParseFloatError`] reproduces the same value. It carries no
-/// allocation, so it can never fail; we forward to the std-derived `Clone`.
 impl TryClone for ParseFloatError {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {

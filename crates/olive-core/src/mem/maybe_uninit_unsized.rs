@@ -12,11 +12,8 @@ use core::mem::ManuallyDrop;
 ///
 /// # Layout
 ///
-/// Like std's `MaybeUninit`, this is a `#[repr(transparent)]` wrapper whose sole
-/// payload is a [`core::mem::ManuallyDrop<T>`]. Because a transparent single-field
-/// wrapper inherits its field's size, alignment, *and* fat pointer metadata if any,
-/// a fat pointer of type `*const T` casts losslessly to `*const Self` (and vice versa):
-/// both are fat pointers of identical width carrying the same metadata word.
+/// Like std's `MaybeUninit`, this is a `#[repr(transparent)]` wrapper over [`ManuallyDrop`]
+/// that allows losslessly casting to and from raw pointers.
 ///
 /// # Rationale
 ///
@@ -60,10 +57,6 @@ impl<T: ?Sized> MaybeUninitUnsized<T> {
     /// memory region carrying `T`'s layout and metadata, yielding a shared
     /// reference to this wrapper.
     ///
-    /// This is the named, documented form of `unsafe { &*ptr }`: it makes the
-    /// preconditions explicit rather than burying them in an anonymous cast at
-    /// the call site.
-    ///
     /// # Safety
     ///
     /// The caller must guarantee that `ptr` is valid for reads of a `T` for the
@@ -79,15 +72,11 @@ impl<T: ?Sized> MaybeUninitUnsized<T> {
     /// memory region carrying `T`'s layout and metadata, yielding a mutable
     /// reference to this wrapper.
     ///
-    /// This is the named, documented form of `unsafe { &mut *ptr }`: it makes
-    /// the preconditions explicit rather than burying them in an anonymous cast
-    /// at the call site.
-    ///
     /// # Safety
     ///
     /// The caller must guarantee that `ptr` is valid for reads and writes of a
     /// `T` for the duration `'a` (properly aligned, non-null, with correct
-    /// metadata), and that no other reference or pointer alias to the same
+    /// metadata), and that no other reference or pointer to the same
     /// memory not derived from this reference is used during `'a`.
     #[inline]
     pub const unsafe fn from_mut_ptr<'a>(ptr: *mut T) -> &'a mut Self {
@@ -130,8 +119,6 @@ impl<T: ?Sized> MaybeUninitUnsized<T> {
     /// Use [`assume_init_ref`](Self::assume_init_ref) if you need a typed
     /// `&T` instead.
     ///
-    /// # Safety
-    ///
     /// It is undefined behavior to turn this into a reference unless the value is fully initialized.
     #[inline]
     pub const fn as_ptr(&self) -> *const T {
@@ -158,7 +145,7 @@ impl<T: ?Sized> MaybeUninitUnsized<T> {
     ///
     /// # Safety
     ///
-    /// It is your responsibility to ensure that self is actually initialized.
+    /// It is your responsibility to ensure that `self` is actually initialized.
     #[inline]
     pub unsafe fn assume_init_ref(&self) -> &T {
         // SAFETY: caller guarantees initialization; `as_ptr` carries `T`'s
@@ -170,7 +157,7 @@ impl<T: ?Sized> MaybeUninitUnsized<T> {
     ///
     /// # Safety
     ///
-    /// It is your responsibility to ensure that self is actually initialized.
+    /// It is your responsibility to ensure that `self` is actually initialized.
     #[inline]
     pub unsafe fn assume_init_mut(&mut self) -> &mut T {
         // SAFETY: caller guarantees initialization; see `assume_init_ref`.
@@ -193,10 +180,11 @@ mod tests {
     use crate::alloc::{Layout, LayoutExt};
 
     /// The canonical consumer idiom: route an unsized fat pointer through
-    /// [`LayoutExt::for_value_pointer`] and recover the pointee's layout. This
-    /// exercises the stable (non-bootstrap) path that casts `*const T` to
-    /// `*const MaybeUninitUnsized<T>` and reads the layout off a reference —
-    /// proving the wrapper carries `T`'s metadata correctly.
+    /// [`LayoutExt::for_value_pointer`] and recover the pointee's layout.
+    ///
+    /// This exercises the stable (non-bootstrap and non-nightly) path that
+    /// casts `*const T` to `&MaybeUninitUnsized<T>` and reads the layout off
+    /// a reference.
     #[test]
     fn for_value_pointer_recovers_slice_layout() {
         let data: [u8; 4] = [1, 2, 3, 4];
@@ -209,7 +197,7 @@ mod tests {
         assert_eq!(layout.align(), 1);
     }
 
-    /// Same idiom for a `dyn Trait` payload, confirming the vtable-bearing
+    /// Same idiom for a `dyn Trait` payload, confirming the vtable-containing
     /// metadata survives the round-trip through the wrapper.
     #[test]
     fn for_value_pointer_recovers_dyn_trait_layout() {
@@ -240,6 +228,7 @@ mod tests {
         assert_eq!(recovered.addr(), orig.addr());
         // Metadata (length) must match too.
         let len: usize;
+        // SAFETY: the backing array is initialized.
         #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
             len = unsafe { (&*recovered).len() };
@@ -261,44 +250,44 @@ mod tests {
         assert_eq!(recovered.as_mut_ptr().addr(), orig_addr);
     }
 
-    /// `from_ptr` / `from_mut_ptr` now yield references directly (the named,
-    /// documented form of `&*ptr`). The returned wrapper reference must alias
-    /// the exact memory the input pointer addressed, carrying the same data
-    /// word and metadata, so routing it through `as_ptr` recovers the original
-    /// pointer bit-for-bit.
+    /// `from_ptr` / `from_mut_ptr` should yield references directly.
     #[test]
     fn from_ptr_yields_aliasing_reference() {
         let mut data: [u8; 4] = [1, 2, 3, 4];
-        let slice: &[u8] = &data[..];
-        let ptr: *const [u8] = slice as *const [u8];
 
         // SAFETY: `ptr` is valid for reads of `[u8]` for this scope, aligned,
         // with correct length metadata; no conflicting alias occurs here.
-        let wrapped: &MaybeUninitUnsized<[u8]> = unsafe { MaybeUninitUnsized::from_ptr(ptr) };
-        // The wrapper ref must point at the same memory as the input pointer.
-        let recovered = wrapped.as_ptr();
-        assert_eq!(recovered.addr(), ptr.addr());
-        // Metadata (length) must survive the round-trip.
-        let len: usize;
-        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            len = unsafe { (&*recovered).len() };
+            let slice: &[u8] = &data[..];
+            let ptr: *const [u8] = slice as *const [u8];
+            let wrapped: &MaybeUninitUnsized<[u8]> = unsafe { MaybeUninitUnsized::from_ptr(ptr) };
+            // The wrapper ref must point at the same memory as the input pointer.
+            let recovered = wrapped.as_ptr();
+            assert_eq!(recovered.addr(), ptr.addr());
+            // Metadata (length) must survive the round-trip.
+            let len: usize;
+            #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+            {
+                len = unsafe { (&*recovered).len() };
+            }
+            assert_eq!(len, 4);
         }
-        assert_eq!(len, 4);
 
-        let mptr: *mut [u8] = &mut data[..] as *mut [u8];
-        // SAFETY: `mptr` is valid for reads/writes of `[u8]` for this scope,
-        // uniquely aliased; no other reference to `data` is live here.
-        let mwrapped: &mut MaybeUninitUnsized<[u8]> =
-            unsafe { MaybeUninitUnsized::from_mut_ptr(mptr) };
-        let mrecovered = mwrapped.as_mut_ptr();
-        assert_eq!(mrecovered.addr(), mptr.addr());
-        let mlen: usize;
-        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            mlen = unsafe { (&*mrecovered).len() };
+            let mptr: *mut [u8] = &mut data[..] as *mut [u8];
+            // SAFETY: `mptr` is valid for reads/writes of `[u8]` for this scope,
+            // uniquely aliased; no other reference to `data` is live here.
+            let mwrapped: &mut MaybeUninitUnsized<[u8]> =
+                unsafe { MaybeUninitUnsized::from_mut_ptr(mptr) };
+            let mrecovered = mwrapped.as_mut_ptr();
+            assert_eq!(mrecovered.addr(), mptr.addr());
+            let mlen: usize;
+            #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+            {
+                mlen = unsafe { (&*mrecovered).len() };
+            }
+            assert_eq!(mlen, 4);
         }
-        assert_eq!(mlen, 4);
     }
 
     /// `ptr_from_ptr` / `ptr_from_mut_ptr` are the borrow-free raw-pointer
@@ -307,33 +296,38 @@ mod tests {
     #[test]
     fn ptr_from_ptr_retags_losslessly() {
         let mut data: [u8; 4] = [1, 2, 3, 4];
-        let slice: &[u8] = &data[..];
-        let ptr: *const [u8] = slice as *const [u8];
 
-        // SAFETY: `ptr` is a valid, aligned `*const [u8]`.
-        let wrapped: *const MaybeUninitUnsized<[u8]> = MaybeUninitUnsized::ptr_from_ptr(ptr);
-        // Round-trip back to `*const [u8]` and compare both words.
-        let back: *const [u8] = wrapped as *const [u8];
-        assert_eq!(back.addr(), ptr.addr());
-        // SAFETY: `back` aliases `data`, which is alive and initialized.
-        let len: usize;
-        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            len = unsafe { (&*back).len() };
+            let slice: &[u8] = &data[..];
+            let ptr: *const [u8] = slice as *const [u8];
+            // SAFETY: `ptr` is a valid, aligned `*const [u8]`.
+            let wrapped: *const MaybeUninitUnsized<[u8]> = MaybeUninitUnsized::ptr_from_ptr(ptr);
+            // Round-trip back to `*const [u8]` and compare both words.
+            let back: *const [u8] = wrapped as *const [u8];
+            assert_eq!(back.addr(), ptr.addr());
+            // SAFETY: `back` aliases `data`, which is alive and initialized.
+            let len: usize;
+            #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+            {
+                len = unsafe { (&*back).len() };
+            }
+            assert_eq!(len, 4);
         }
-        assert_eq!(len, 4);
 
-        let mptr: *mut [u8] = &mut data[..] as *mut [u8];
-        // SAFETY: `mptr` is a valid, aligned `*mut [u8]`.
-        let mwrapped: *mut MaybeUninitUnsized<[u8]> = MaybeUninitUnsized::ptr_from_mut_ptr(mptr);
-        let mback: *mut [u8] = mwrapped as *mut [u8];
-        assert_eq!(mback.addr(), mptr.addr());
-        // SAFETY: `mback` aliases `data`, which is alive and initialized.
-        let mlen: usize;
-        #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
         {
-            mlen = unsafe { (&*mback).len() };
+            let mptr: *mut [u8] = &mut data[..] as *mut [u8];
+            // SAFETY: `mptr` is a valid, aligned `*mut [u8]`.
+            let mwrapped: *mut MaybeUninitUnsized<[u8]> =
+                MaybeUninitUnsized::ptr_from_mut_ptr(mptr);
+            let mback: *mut [u8] = mwrapped as *mut [u8];
+            assert_eq!(mback.addr(), mptr.addr());
+            // SAFETY: `mback` aliases `data`, which is alive and initialized.
+            let mlen: usize;
+            #[allow(clippy::needless_borrow, reason = "explicit & required for Miri")]
+            {
+                mlen = unsafe { (&*mback).len() };
+            }
+            assert_eq!(mlen, 4);
         }
-        assert_eq!(mlen, 4);
     }
 }

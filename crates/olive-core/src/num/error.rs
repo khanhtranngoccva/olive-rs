@@ -1,13 +1,9 @@
 //! Foundational-trait impls for the [`core::num`] integer-conversion error types.
 
+use crate::try_traits::try_clone::{TryClone, TryCloneError};
 use core::num::{IntErrorKind, ParseIntError, TryFromIntError};
 
-use crate::try_traits::try_clone::{TryClone, TryCloneError};
-
-/// Cloning an [`IntErrorKind`] reproduces the same variant. It is a fieldless
-/// marker enum, so no allocation or failure is possible; we forward to the
-/// std-derived `Clone`, which copies the discriminant, and wrap the result in
-/// `Ok`.
+// Cloning is trivial, it is a fieldless enum
 impl TryClone for IntErrorKind {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
@@ -15,8 +11,7 @@ impl TryClone for IntErrorKind {
     }
 }
 
-/// Cloning a [`ParseIntError`] copies its private kind discriminator. The clone
-/// performs no allocation, so it can never fail.
+// Cloning is trivial, it is a fieldless enum
 impl TryClone for ParseIntError {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
@@ -24,8 +19,7 @@ impl TryClone for ParseIntError {
     }
 }
 
-/// Cloning a [`TryFromIntError`] reproduces the same value. It is a `Copy` ZST,
-/// so we simply copy it; no allocation or failure is possible.
+// Cloning is trivial, it is a fieldless enum
 impl TryClone for TryFromIntError {
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
