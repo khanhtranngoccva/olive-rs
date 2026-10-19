@@ -441,7 +441,6 @@ mod tests {
 
     #[test]
     fn layout_borrowed_from_core() {
-        // Sanity: the borrowed core Layout behaves identically to std's.
         let l = Layout::array::<u128>(2).expect("valid");
         assert_eq!(l.size(), 32);
         assert_eq!(l.align(), 16);
@@ -453,9 +452,8 @@ mod tests {
 
     #[test]
     fn vec_still_works_through_global_path() {
-        // Proves that delegating to the standard `alloc` crate's exposed
-        // functions coexists cleanly with std's own allocations in the same
-        // process (same global allocator, no double-linking surprises).
+        // Proves that std's own allocations can exist in the same
+        // program using same global allocator, no double-linking surprises.
         let v: std::vec::Vec<i32> = (0..1000).collect();
         assert_eq!(v.iter().sum::<i32>(), (0..1000).sum::<i32>());
     }
@@ -477,7 +475,7 @@ mod tests {
     fn padding_need_for_agrees_with_extend_offset() {
         // The helper must reproduce exactly the offset `Layout::extend` reports
         // for placing the second layout after the first — that is the invariant
-        // `Rc::data_offset` relies on.
+        // `Rc/Arc::data_offset` relies on.
         let header = Layout::new::<[usize; 2]>();
         for align in [1usize, 2, 4, 8, 16, 32] {
             let value = Layout::from_size_align(7, align).expect("valid");

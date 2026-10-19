@@ -14,6 +14,8 @@
 //! with `std`, except that the value is returned to the caller instead of
 //! triggering an abort.
 
+use crate::try_traits::TryClone;
+use crate::try_traits::TryCloneError;
 use core::alloc::Layout;
 use core::error::Error;
 use core::fmt;
@@ -22,6 +24,12 @@ use core::fmt;
 // `crate::alloc`; re-export it here so callers can grab both error levels from
 // one path.
 pub use crate::alloc::AllocError;
+
+impl TryClone for AllocError {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(*self)
+    }
+}
 
 /// The kind of failure behind a [`TryReserveError`].
 ///
@@ -116,12 +124,13 @@ impl TryReserveError {
 
 impl fmt::Debug for TryReserveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
+        match &self.kind {
             TryReserveErrorKind::CapacityOverflow => {
                 f.write_str("TryReserveError::CapacityOverflow")
             }
-            TryReserveErrorKind::AllocError { .. } => f
+            TryReserveErrorKind::AllocError { layout, .. } => f
                 .debug_struct("TryReserveError::AllocError")
+                .field("layout", layout)
                 .finish_non_exhaustive(),
         }
     }
@@ -129,18 +138,28 @@ impl fmt::Debug for TryReserveError {
 
 impl fmt::Display for TryReserveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.kind {
+        match &self.kind {
             TryReserveErrorKind::CapacityOverflow => {
                 f.write_str("capacity overflow when reserving space for a collection")
             }
-            TryReserveErrorKind::AllocError { .. } => {
-                f.write_str("memory allocation failed when reserving capacity")
+            TryReserveErrorKind::AllocError { layout, .. } => {
+                write!(
+                    f,
+                    "memory allocation of {} byte(s) failed when reserving capacity",
+                    layout.size()
+                )
             }
         }
     }
 }
 
 impl Error for TryReserveError {}
+
+impl TryClone for TryReserveError {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        Ok(*self)
+    }
+}
 
 impl From<TryReserveErrorKind> for TryReserveError {
     #[inline]
@@ -156,7 +175,7 @@ mod tests {
     use std::format;
 
     #[test]
-    fn capacity_overflow_round_trip() {
+    fn capacity_overflow_in_reserve_error_round_trip() {
         let err = TryReserveError::new_capacity_overflow();
         assert!(err.is_capacity_overflow());
         assert!(!err.is_alloc());
@@ -164,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn alloc_error_carries_layout() {
+    fn alloc_error_in_reserve_error_carries_layout() {
         let layout = Layout::new::<u64>();
         let err = TryReserveError::new_alloc(layout);
         assert!(err.is_alloc());
