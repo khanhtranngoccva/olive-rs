@@ -26,6 +26,9 @@
 //! without losing data.
 //! `TryClone` and friends are atomic single-shot operations.
 
+/// A shared RAII guard for rolling back partially-initialized buffers.
+pub(crate) mod partial_init;
+
 pub mod try_clone;
 pub mod try_collect;
 pub mod try_default;

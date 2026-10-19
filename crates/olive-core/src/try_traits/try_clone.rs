@@ -5,6 +5,8 @@ use crate::alloc_errors::TryReserveError;
 use core::fmt;
 use core::ptr;
 
+use super::partial_init::PartialInitGuard;
+
 /// Error returned when a fallible clone operation fails.
 #[derive(Clone, PartialEq, Eq)]
 pub enum TryCloneError {
@@ -60,13 +62,18 @@ impl From<AllocError> for TryCloneError {
 ///
 /// # Scope
 ///
-/// This trait is made with out-of-memory conditions and basic logic errors in mind,
-/// and prioritizes chainability and derivability, and works best with lightweight
-/// containers (Rc/Arc, etc.), plain old data (POD) objects, and other objects that
-/// do not invoke bespoke logic during cloning.
+/// This trait  works best with lightweight containers (Rc/Arc, etc.),
+/// "plain old data" (POD) objects, and other objects that do not invoke
+/// any special logic during cloning.
 ///
 /// Complex objects like file handles are generally not suitable for implementing
 /// [`TryClone`], and should instead expose custom methods with better error reporting.
+///
+/// These limitations allow the error mode of [`TryClone`] to be the fixed
+/// [`TryCloneError`] return type (rather than an associated type). This
+/// enables uniform generic composition and `#[derive(TryDefault)]`
+/// support. In practice, clone failures are almost exclusively
+/// allocation-related, which the three variants cover.
 ///
 /// # Panic policy
 ///
@@ -178,11 +185,7 @@ impl<T: TryClone, const N: usize> TryClone for [T; N] {
         // backing block holds room for exactly `N` elements.
         let dst = uninit.as_mut_ptr().cast::<T>();
         // Guard rolls back any partially-written prefix on early exit.
-        let mut guard = PartialInitGuard {
-            base: dst,
-            written: 0,
-            _lifetime: &(),
-        };
+        let mut guard = PartialInitGuard::new(dst);
         for (i, elem) in self.iter().enumerate() {
             let cloned = elem.try_clone()?;
             // SAFETY: `i < N`; the slot at `dst + i` is inside the array and
@@ -298,56 +301,13 @@ unsafe impl<T: TryClone> TryCloneToUninit for T {
     }
 }
 
-/// RAII guard that drops the first `written` elements of a destination buffer
-/// if the enclosing clone operation exits early (via `?` or a returned error)
-/// before completing. On success the caller [`core::mem::forget`]s the guard,
-/// handing ownership of the fully-initialized data to the destination buffer
-/// instead of letting it be dropped.
-struct PartialInitGuard<'a, T> {
-    base: *mut T,
-    written: usize,
-    _lifetime: &'a (),
-}
-
-impl<T> PartialInitGuard<'_, T> {
-    /// Record that one more element has been initialized at `base + written`.
-    #[inline]
-    fn advance(&mut self) {
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "it is impossible to write more than u64::MAX elements"
-        )]
-        {
-            self.written += 1;
-        }
-    }
-}
-
-impl<T> Drop for PartialInitGuard<'_, T> {
-    fn drop(&mut self) {
-        if self.written > 0 {
-            // SAFETY: the first `written` slots were each initialized by a prior
-            // `ptr::write` before `advance()` was called, and the caller
-            // guaranteed the whole region is valid for `written` elements.
-            unsafe {
-                let prefix = ptr::slice_from_raw_parts_mut(self.base, self.written);
-                ptr::drop_in_place(prefix);
-            }
-        }
-    }
-}
-
 unsafe impl<T: TryClone> TryCloneToUninit for [T] {
     #[inline]
     unsafe fn try_clone_to_uninit(&self, dest: *mut u8) -> Result<(), TryCloneError> {
         let len = self.len();
         let dest_elems = dest.cast::<T>();
         // Guard rolls back any partially-written prefix on early exit.
-        let mut guard = PartialInitGuard {
-            base: dest_elems,
-            written: 0,
-            _lifetime: &(),
-        };
+        let mut guard = PartialInitGuard::new(dest_elems);
         #[allow(clippy::needless_range_loop)]
         for i in 0..len {
             let elem = self[i].try_clone()?;

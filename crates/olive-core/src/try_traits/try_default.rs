@@ -3,13 +3,11 @@
 use crate::alloc::AllocError;
 use crate::alloc_errors::TryReserveError;
 use core::fmt;
+use core::ptr;
+
+use super::partial_init::PartialInitGuard;
 
 /// Error returned when a fallible default construction fails.
-///
-/// Mirrors the shape of [`TryCloneError`](super::try_clone::TryCloneError):
-/// a fixed set of variants covering every realistic failure mode for
-/// constructing a default value, so that generic code and derive macros can
-/// reason about the error uniformly without an associated type.
 #[derive(Clone, PartialEq, Eq)]
 pub enum TryDefaultError {
     /// A capacity reservation on a collection failed (overflow or OOM) during
@@ -61,7 +59,7 @@ impl From<AllocError> for TryDefaultError {
 /// A fallible analogue of [`core::default::Default`].
 ///
 /// Unlike [`Default`], whose implementations are required to be infallible (and
-/// whose `Vec`-style constructors historically panic/abort on allocation failure),
+/// some of them pretend to be and historically panic/abort on allocation failure),
 /// [`TryDefault`] returns a [`Result`] so that construction of an empty or
 /// default value can fail gracefully when it must reserve capacity.
 ///
@@ -73,10 +71,10 @@ impl From<AllocError> for TryDefaultError {
 /// - Where building the value can fail (for example, due to allocation), only [`TryDefault`]
 ///   is implemented and std's aborting `Default` is not mirrored.
 ///
-/// Most types implement this infallibly — an empty value needs no allocation at
+/// Many types implement this infallibly — an empty value needs no allocation at
 /// all — but the error channel exists for the cases where "empty" still means
-/// "allocate something" (e.g. a map that eagerly sizes its buckets, or an
-/// allocator that pools blocks up front).
+/// "allocate something" (e.g. a slot map that eagerly reserves its first slot,
+/// or an allocator that pools blocks up front).
 ///
 /// # Scope and limitations
 ///
@@ -97,7 +95,7 @@ impl From<AllocError> for TryDefaultError {
 ///
 /// These limitations allow the error mode of [`TryDefault`] to be the fixed
 /// [`TryDefaultError`] return type (rather than an associated type). This
-/// enables uniform generic composition and future `#[derive(TryDefault)]`
+/// enables uniform generic composition and `#[derive(TryDefault)]`
 /// support. In practice, default-construction failures are almost exclusively
 /// allocation-related, which the three variants cover.
 pub trait TryDefault: Sized {
@@ -142,6 +140,34 @@ impl<T> TryDefault for Option<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(None)
+    }
+}
+
+// Arrays: default-construct each element left-to-right via [`TryDefault`],
+// short-circuiting on the first failure. An early error drops exactly the
+// constructed prefix.
+impl<T: TryDefault, const N: usize> TryDefault for [T; N] {
+    fn try_default() -> Result<Self, TryDefaultError> {
+        let mut uninit = core::mem::MaybeUninit::<[T; N]>::uninit();
+        // SAFETY: `uninit` is aligned for `[T; N]`, hence for `T`, and the
+        // backing block holds room for exactly `N` elements.
+        let dst = uninit.as_mut_ptr().cast::<T>();
+        // Guard rolls back any partially-written prefix on early exit.
+        let mut guard = PartialInitGuard::new(dst);
+        for i in 0..N {
+            let value = T::try_default()?;
+            // SAFETY: `i < N`; the slot at `dst + i` is inside the array and
+            // has not yet been initialized.
+            unsafe {
+                ptr::write(dst.add(i), value);
+            }
+            guard.advance();
+        }
+        // Every element is now initialized; forget the guard so it does not
+        // drop the freshly-written data, then hand the value over.
+        core::mem::forget(guard);
+        // SAFETY: all `N` elements have been initialized by the loop above.
+        Ok(unsafe { uninit.assume_init() })
     }
 }
 
@@ -196,6 +222,163 @@ mod tests {
                 .unwrap(),
             (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         );
+    }
+
+    mod arrays {
+        use super::*;
+        use core::cell::Cell;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::thread_local;
+
+        // `try_default` has no local data to store test states,
+        // so all state lives in thread-local variables; each test
+        // runs on its own thread and arms it explicitly.
+        thread_local! {
+            /// Remaining successful default constructions before the element
+            /// types below start failing or panicking.
+            static DEFAULT_BUDGET: Cell<u32> = const { Cell::new(0) };
+            /// Successful `FallibleDefault` constructions so far.
+            static FALLIBLE_CONSTRUCTED: Cell<u32> = const { Cell::new(0) };
+            /// `FallibleDefault` drops observed so far.
+            static FALLIBLE_DROPPED: Cell<u32> = const { Cell::new(0) };
+            /// Successful `PanickyDefault` constructions so far.
+            static PANICKY_CONSTRUCTED: Cell<u32> = const { Cell::new(0) };
+            /// `PanickyDefault` drops observed so far.
+            static PANICKY_DROPPED: Cell<u32> = const { Cell::new(0) };
+        }
+
+        /// Arms a budget of `remaining` successful constructions; once it is
+        /// exhausted, `CountingDefault` fails and `PanickyDefault` panics.
+        fn arm_budget(remaining: u32) {
+            DEFAULT_BUDGET.with(|budget| budget.set(remaining));
+        }
+
+        /// Consumes one unit of the shared budget, returning `false` when it
+        /// is exhausted.
+        fn consume_budget() -> bool {
+            DEFAULT_BUDGET.with(|budget| {
+                let remaining = budget.get();
+                if remaining == 0 {
+                    false
+                } else {
+                    budget.set(remaining - 1);
+                    true
+                }
+            })
+        }
+
+        /// An element type whose default fails (via the `Result` channel) once
+        /// the shared budget is exhausted, counting constructions and drops so
+        /// the test can observe exactly which prefix was rolled back.
+        struct FallibleDefault;
+
+        impl TryDefault for FallibleDefault {
+            fn try_default() -> Result<Self, TryDefaultError> {
+                if !consume_budget() {
+                    return Err(TryDefaultError::Other("counting default budget exhausted"));
+                }
+                FALLIBLE_CONSTRUCTED.with(|count| count.set(count.get() + 1));
+                Ok(Self)
+            }
+        }
+
+        impl Drop for FallibleDefault {
+            fn drop(&mut self) {
+                FALLIBLE_DROPPED.with(|count| count.set(count.get() + 1));
+            }
+        }
+
+        /// An element type whose default panics once the shared budget is
+        /// exhausted, with the same construction/drop observability.
+        struct PanickyDefault;
+
+        impl TryDefault for PanickyDefault {
+            fn try_default() -> Result<Self, TryDefaultError> {
+                if !consume_budget() {
+                    panic!("armed PanickyDefault::try_default panicked");
+                }
+                PANICKY_CONSTRUCTED.with(|count| count.set(count.get() + 1));
+                Ok(Self)
+            }
+        }
+
+        impl Drop for PanickyDefault {
+            fn drop(&mut self) {
+                PANICKY_DROPPED.with(|count| count.set(count.get() + 1));
+            }
+        }
+
+        #[test]
+        fn try_default_array_of_primitives() {
+            assert_eq!(<[u8; 3]>::try_default().unwrap(), [0, 0, 0]);
+            let empty: [i32; 0] = <[i32; 0]>::try_default().unwrap();
+            assert_eq!(empty, []);
+            // Nested arrays compose: the inner `[u8; 2]` is itself
+            // `TryDefault`, so the outer impl can default-construct each slot.
+            assert_eq!(<[[u8; 2]; 3]>::try_default().unwrap(), [[0, 0]; 3]);
+        }
+
+        #[test]
+        fn try_default_array_of_zerosized() {
+            assert_eq!(<[(); 4]>::try_default().unwrap(), [(), (), (), ()]);
+        }
+
+        #[test]
+        fn try_default_array_counts_and_drops_all() {
+            FALLIBLE_CONSTRUCTED.with(|count| count.set(0));
+            FALLIBLE_DROPPED.with(|count| count.set(0));
+            arm_budget(u32::MAX);
+            let arr = <[FallibleDefault; 4]>::try_default().unwrap();
+            assert_eq!(FALLIBLE_CONSTRUCTED.with(Cell::get), 4);
+            assert_eq!(FALLIBLE_DROPPED.with(Cell::get), 0);
+            drop(arr);
+            assert_eq!(FALLIBLE_DROPPED.with(Cell::get), 4);
+        }
+
+        #[test]
+        fn try_default_array_drops_prefix_on_failure() {
+            FALLIBLE_CONSTRUCTED.with(|count| count.set(0));
+            FALLIBLE_DROPPED.with(|count| count.set(0));
+            // A budget of 2: the first two element defaults succeed, the third
+            // fails.
+            arm_budget(2);
+            let res = <[FallibleDefault; 8]>::try_default();
+            assert!(res.is_err());
+            // Exactly the constructed prefix was dropped, each exactly once —
+            // no element leaked and nothing was dropped twice.
+            assert_eq!(FALLIBLE_CONSTRUCTED.with(Cell::get), 2);
+            assert_eq!(FALLIBLE_DROPPED.with(Cell::get), 2);
+        }
+
+        #[test]
+        fn try_default_array_drops_prefix_on_empty_budget() {
+            FALLIBLE_CONSTRUCTED.with(|count| count.set(0));
+            FALLIBLE_DROPPED.with(|count| count.set(0));
+            // No budget at all: the very first element fails, so nothing was
+            // ever constructed and the guard must drop nothing.
+            arm_budget(0);
+            let res = <[FallibleDefault; 8]>::try_default();
+            assert!(res.is_err());
+            assert_eq!(FALLIBLE_CONSTRUCTED.with(Cell::get), 0);
+            assert_eq!(FALLIBLE_DROPPED.with(Cell::get), 0);
+        }
+
+        #[test]
+        fn try_default_array_panics_drops_prefix_once() {
+            PANICKY_CONSTRUCTED.with(|count| count.set(0));
+            PANICKY_DROPPED.with(|count| count.set(0));
+            // A budget of 2: the first two element defaults succeed, the third
+            // panics.
+            arm_budget(2);
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                let _ = <[PanickyDefault; 8]>::try_default();
+            }));
+            assert!(res.is_err(), "the exhausted element default must panic");
+            // Unwinding rolled back exactly the constructed prefix, each
+            // element dropped exactly once.
+            assert_eq!(PANICKY_CONSTRUCTED.with(Cell::get), 2);
+            assert_eq!(PANICKY_DROPPED.with(Cell::get), 2);
+        }
     }
 
     mod perfect_derive {
