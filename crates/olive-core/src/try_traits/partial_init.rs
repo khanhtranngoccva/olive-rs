@@ -2,7 +2,7 @@
 
 /// RAII guard that drops the first `written` elements of a destination buffer
 /// if the enclosing bulk-construction operation exits early (via a
-/// returned error or panic) before completing. [`PartialInitGuard::advance`] 
+/// returned error or panic) before completing. [`PartialInitGuard::advance`]
 /// is called after each successful write. On success the caller
 /// [`core::mem::forget`]s the guard, handing ownership of the
 /// fully-initialized data to the destination buffer instead of letting it be

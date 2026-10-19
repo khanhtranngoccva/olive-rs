@@ -331,7 +331,6 @@ mod tests {
     use super::*;
     use crate::testing::{CloneBudget, Ledger, MaybeUnclonable, PanickyClone, TrackedItem};
     use core::mem::MaybeUninit;
-    use core::slice;
     use olive_macros::TryClone;
     use std::format;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -527,7 +526,7 @@ mod tests {
         let res = a.try_clone_from(&b);
         assert!(res.is_err());
         // `a` still exists and is unchanged (identity preserved by replace).
-        assert_eq!(a.inner, 2);
+        assert_eq!(a.inner, 1);
     }
 
     // --- TryCloneToUninit -------------------------------------------------
@@ -644,18 +643,16 @@ mod tests {
         let ledger = Arc::new(Ledger::new());
         type Test = TrackedItem<MaybeUnclonable<i32>>;
         let src: Test = TrackedItem::construct(&ledger, MaybeUnclonable::unclonable(7));
-        let mut buf = MaybeUninit::<Test>::zeroed();
 
-        // SAFETY: `buf` is a valid, aligned slot for one item.
-        let res = unsafe { src.try_clone_to_uninit(buf.as_mut_ptr().cast()) };
+        let mut buf = [0u8; size_of::<Test>()];
+        // SAFETY: `buf` is a valid slot of `size_of::<Test>()` bytes for one
+        // item; the failed clone writes nothing to it.
+        let res = unsafe { src.try_clone_to_uninit(buf.as_mut_ptr()) };
         assert!(res.is_err());
         assert_eq!(ledger.live_ids(), [0]);
         assert_eq!(ledger.drop_count(1), 0);
-        // SAFETY: we are interpreting raw bytes to ensure it is zeroed
-        assert_eq!(
-            unsafe { slice::from_raw_parts(buf.as_mut_ptr().cast::<u8>(), size_of::<Test>()) },
-            [0; size_of::<Test>()]
-        );
+        // Nothing was written: every byte must still be zero.
+        assert_eq!(buf, [0; size_of::<Test>()]);
     }
 
     // --- Derive: perfect-derive field-type bounds ---------------------------
