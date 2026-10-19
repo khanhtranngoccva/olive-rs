@@ -5,14 +5,17 @@ use crate::recovery::{ResumableSource, Resume};
 
 /// Fallibly extend a collection from an iterator source.
 ///
+/// # Atomicity and resumability
+///
 /// This trait is **resumable** and **non-atomic**: on failure the error
 /// carries a [`Resume`] wrapping the remainder of the source (plus any
 /// consumed-but-uncommitted element), which can be passed straight back into
-/// another `try_extend` call to retry.
+/// another `try_extend` call to retry once memory pressure eases.
 ///
-/// Because both plain iterators and [`Resume`] wrappers implement
-/// [`ResumableSource`] with the same inner type, the error type stays
-/// identical across retries - it never grows.
+/// Passing [`Resume`] as an argument to the extension function will not
+/// trigger an unbounded type growth, thus retries can be called without
+/// sacrificing ergonomics. The [`Resume::new`] can be used to explicitly
+/// generate a retryable source object.
 ///
 /// ```rust,ignore
 /// let mut v: Vec<i32> = Vec::new();
@@ -35,11 +38,19 @@ pub trait TryExtend<Item>: Sized {
     /// inner iterator so the caller can retry.
     type Error;
 
-    /// Fallibly extend `self` with all items produced by `source`.
+    /// Fallibly extend `self` with all items produced by `source`, which can either be
+    /// an iterator or a [`Resume`] object.
+    ///
+    /// # Atomicity and resumability
+    ///
+    /// This method is resumable but not atomic. See [`TryExtend`]'s
+    /// documentation for details.
     ///
     /// # Errors
+    ///
     /// - The accompanying [`Resume`] object containing the stranded element
-    ///   and the iterator.
+    ///   and the iterator. If a [`Resume`] was passed in as the argument,
+    ///   the API will return the exact same type.
     /// - The [`Self::Error`] type defined by the implementation.
     fn try_extend<S>(&mut self, source: S) -> Result<(), (Resume<S::Inner>, Self::Error)>
     where
@@ -48,8 +59,12 @@ pub trait TryExtend<Item>: Sized {
 
 /// Fallibly extend a collection by cloning elements from a slice.
 ///
-/// On failure the error is a tuple of the **remainder** (the unprocessed tail of
-/// the input slice) and the underlying error. Callers can retry with just the
+/// # Atomicity and resumability
+///
+/// This trait is **resumable** and **non-atomic**.
+///
+/// On failure the error is a tuple of the **remainder** (the unprocessed tail
+/// of the input slice) and the underlying error. Callers can retry with just the
 /// remainder once memory pressure has eased. A mid-way failure does not
 /// trigger a rollback.
 pub trait TryExtendFromSlice<Item>: Sized {
@@ -58,7 +73,13 @@ pub trait TryExtendFromSlice<Item>: Sized {
 
     /// Fallibly extend `self` by cloning each element of `other`.
     ///
+    /// # Atomicity and resumability
+    ///
+    /// This method is resumable but not atomic. See [`TryExtend`]'s
+    /// documentation for details.
+    ///
     /// # Errors
+    /// 
     /// - The accompanying slice of unprocessed items in the original slice.
     /// - The [`Self::Error`] type defined by the implementation.
     fn try_extend_from_slice<'s>(
