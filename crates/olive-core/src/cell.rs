@@ -1,14 +1,8 @@
 //! Re-exports of [`core::cell`] types and foundational-trait impls
 //! for these types.
 //!
-//! These are the fallible analogues of the standard library's infallible-by-
-//! assumption traits applied to interior-mutability cells:
-//!
-//! * [`TryClone`] — a fallible analogue of [`core::clone::Clone`]. Cloning a
-//!   cell reads its current value and clones it into a fresh, independent cell.
-//!
-//! Both cells live in `core`, so they ride along on this crate's glob re-export
-//! of `core::*`; only their Olive trait impls are added here.
+//! The covered cells include [`Cell`], [`RefCell`], and
+//! [`UnsafeCell`].
 //!
 //! # Semantics
 //!
@@ -34,10 +28,9 @@ use crate::try_traits::try_default::{TryDefault, TryDefaultError};
 // Cell
 // ---------------------------------------------------------------------------
 
-// Bounds are intentionally lax - since Copy never fails because it is meant
-// to represent bitwise copies, framework invariant is still honored.
+// Copy bound here is a std bound.
 impl<T: Copy> TryClone for Cell<T> {
-    /// Fallibly clone a [`Cell`], producing an independent cell holding a clone of
+    /// Infallibly clone a [`Cell`], producing an independent cell holding a clone of
     /// the current value.
     #[inline]
     fn try_clone(&self) -> Result<Self, TryCloneError> {
@@ -46,8 +39,7 @@ impl<T: Copy> TryClone for Cell<T> {
     }
 }
 
-// An empty `Cell` holds its payload inline with no allocation; when the payload
-// has a canonical default, construction is infallible.
+// A `Cell` holds its payload inline with no allocation.
 impl<T: TryDefault> TryDefault for Cell<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
@@ -59,22 +51,10 @@ impl<T: TryDefault> TryDefault for Cell<T> {
 // LazyCell
 // ---------------------------------------------------------------------------
 
-// A `LazyCell` defers its payload until first dereference, so a fallible
-// initializer is a natural fit: unlike [`Cell`] or [`RefCell`], whose payloads
-// are constructed eagerly at build time, here construction only *stores* the
-// closure and evaluation happens later. That lets us bound on [`TryDefault`]
-// rather than the infallible [`Default`]: a `T` whose canonical value may fail
-// to construct can still be lazily initialized, surfacing the failure at first
-// access instead of at build time. The stored closure returns
-// `Ok(T)` directly, so the cell resolves to `T` with no extra wrapping.
-impl<T: TryDefault> TryDefault for LazyCell<T> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(LazyCell::new(|| {
-            T::try_default().expect("lazy default failed")
-        }))
-    }
-}
+// NOTE: [`TryDefault`] is deliberately NOT implemented for [`LazyCell`].
+//
+// This cell type is built with the infallible lazy pattern in mind,
+// so it is unsuitable for the fallible pattern.
 
 // ---------------------------------------------------------------------------
 // OnceCell
@@ -105,7 +85,7 @@ impl<T: TryClone> TryClone for OnceCell<T> {
 }
 
 // An empty `OnceCell` carries no payload and performs no allocation, so its
-// default construction is infallible — mirroring std's `OnceCell::new`.
+// default construction is infallible.
 impl<T> TryDefault for OnceCell<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
@@ -125,7 +105,10 @@ impl<T: TryClone> TryClone for RefCell<T> {
     ///
     /// Returns [`TryCloneError::Other`] if the cell is currently mutably borrowed
     /// (so its value cannot be read), or propagates the inner value's [`TryCloneError`]
-    /// if cloning the value fails. This generally should not trigger, however.
+    /// if cloning the value fails.
+    ///
+    /// This generally should not trigger, however (as an error here is usually
+    /// indicative of a bug).
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         // `try_borrow` returns `Err(BorrowError)` when the cell is already
         // mutably borrowed. Surface that contention as a logic-level failure
@@ -141,9 +124,7 @@ impl<T: TryClone> TryClone for RefCell<T> {
     }
 }
 
-// A `RefCell` with a default payload performs no allocation at construction
-// time — the value is stored inline. The fallible channel exists for symmetry
-// with other container types whose "empty" state may still allocate.
+// A `RefCell` holds its payload inline with no allocation.
 impl<T: TryDefault> TryDefault for RefCell<T> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
@@ -154,23 +135,24 @@ impl<T: TryDefault> TryDefault for RefCell<T> {
 // ---------------------------------------------------------------------------
 // UnsafeCell
 // ---------------------------------------------------------------------------
-//
+
+// An `UnsafeCell` holds its payload inline with no allocation.
+impl<T: TryDefault> TryDefault for UnsafeCell<T> {
+    #[inline]
+    fn try_default() -> Result<Self, TryDefaultError> {
+        Ok(UnsafeCell::new(T::try_default()?))
+    }
+}
 
 #[cfg(test)]
 mod tests {
     extern crate std;
     use super::*;
+    use crate::testing::{MaybeUnclonable, NoDefault};
 
-    /// A small non-`Copy` type implementing [`TryClone`] infallibly, used to
-    /// exercise the `RefCell` borrow-then-clone path (which works for non-copy
-    /// payloads because `RefCell` borrows its value).
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    struct Payload(u32);
-    impl TryClone for Payload {
-        fn try_clone(&self) -> Result<Self, TryCloneError> {
-            Ok(*self)
-        }
-    }
+    // -----------------------------------------------------------------------
+    // Cell
+    // -----------------------------------------------------------------------
 
     #[test]
     fn cell_try_clone_produces_independent_copy() {
@@ -184,40 +166,18 @@ mod tests {
     }
 
     #[test]
-    fn refcell_try_clone_produces_independent_copy() {
-        let r = RefCell::new(Payload(1));
-        let cloned = r.try_clone().unwrap();
-        assert_eq!(*cloned.borrow(), Payload(1));
-        *cloned.borrow_mut() = Payload(2);
-        assert_eq!(*r.borrow(), Payload(1));
-        assert_eq!(*cloned.borrow(), Payload(2));
-    }
-
-    #[test]
-    fn refcell_try_clone_fails_when_mutably_borrowed() {
-        let r = RefCell::new(42u8);
-        let _mut_guard = r.try_borrow_mut().unwrap();
-        // While mutably borrowed, a clone must fail cleanly, not panic.
-        let res = r.try_clone();
-        assert!(res.is_err());
-        // The source cell is undisturbed.
-        drop(_mut_guard);
-        assert_eq!(*r.borrow(), 42);
-    }
-
-    #[test]
-    fn failing_inner_refcell_leaves_source_untouched() {
-        struct Failing;
-        impl TryClone for Failing {
-            fn try_clone(&self) -> Result<Self, TryCloneError> {
-                Err(TryCloneError::Other("always fails"))
-            }
+    fn cell_try_clone_copies_nested_copy_struct() {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        struct Point {
+            x: u8,
+            y: u8,
         }
-        let r = RefCell::new(Failing);
-        let res = r.try_clone();
-        assert!(res.is_err());
-        // The source cell is undisturbed: it can still be borrowed and read.
-        let _still_readable = r.try_borrow().expect("source cell must remain borrowable");
+        let c = Cell::new(Point { x: 1, y: 2 });
+        let cloned = c.try_clone().unwrap();
+        assert_eq!(cloned.get(), Point { x: 1, y: 2 });
+        // Mutating the clone must not affect the original.
+        cloned.set(Point { x: 3, y: 4 });
+        assert_eq!(c.get(), Point { x: 1, y: 2 });
     }
 
     #[test]
@@ -229,12 +189,16 @@ mod tests {
     }
 
     #[test]
-    fn lazy_cell_try_default_defers_evaluation() {
-        let lazy = LazyCell::<u32>::try_default().unwrap();
-        // The lazy cell is constructed without evaluating; first deref triggers
-        // the initializer which yields `T::default()`.
-        assert_eq!(*lazy, 0);
+    fn cell_try_default_propagates_inner_failure() {
+        assert!(matches!(
+            Cell::<NoDefault<u8>>::try_default(),
+            Err(TryDefaultError::Other("no canonical value"))
+        ));
     }
+
+    // -----------------------------------------------------------------------
+    // OnceCell
+    // -----------------------------------------------------------------------
 
     #[test]
     fn once_cell_try_clone_empty() {
@@ -247,12 +211,22 @@ mod tests {
     fn once_cell_try_clone_initialized() {
         let oc = OnceCell::new();
         oc.set(42).unwrap();
-        let cloned = oc.try_clone().unwrap();
+        let mut cloned = oc.try_clone().unwrap();
         assert_eq!(cloned.get(), Some(&42));
-        // Independent: mutating the clone doesn't affect the original.
-        // (OnceCell values are immutable once set, so independence is
-        // structural — they're separate allocations.)
+        *cloned.get_mut().unwrap() = 43;
+        assert_eq!(cloned.get(), Some(&43));
         assert_eq!(oc.get(), Some(&42));
+    }
+
+    #[test]
+    fn once_cell_try_clone_propagates_failure_and_leaves_source_intact() {
+        let oc = OnceCell::new();
+        oc.set(MaybeUnclonable::unclonable(1u32)).unwrap();
+        assert!(matches!(
+            oc.try_clone(),
+            Err(TryCloneError::Other("unclonable"))
+        ));
+        assert_eq!(oc.get().unwrap().inner, 1);
     }
 
     #[test]
@@ -262,8 +236,97 @@ mod tests {
     }
 
     #[test]
+    fn once_cell_try_default_takes_no_payload_bounds() {
+        // This struct has no TryDefault implementation, which stresses
+        // the ability to invoke TryDefault.
+        struct Plain;
+        let oc = OnceCell::<Plain>::try_default().unwrap();
+        assert!(oc.get().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // RefCell
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn refcell_try_clone_produces_independent_copy() {
+        let r = RefCell::new(1u32);
+        let cloned = r.try_clone().unwrap();
+        assert_eq!(*cloned.borrow(), 1);
+        *cloned.borrow_mut() = 2;
+        assert_eq!(*r.borrow(), 1);
+        assert_eq!(*cloned.borrow(), 2);
+    }
+
+    #[test]
+    fn refcell_try_clone_succeeds_while_shared_borrowed() {
+        let r = RefCell::new(1u32);
+        let shared = r.borrow();
+        let cloned = r
+            .try_clone()
+            .expect("a shared borrow must not block cloning");
+        assert_eq!(*cloned.borrow(), 1);
+        drop(shared);
+    }
+
+    #[test]
+    fn refcell_try_clone_contention_reports_other() {
+        let r = RefCell::new(42u8);
+        let _mut_guard = r.try_borrow_mut().unwrap();
+        // The contention failure must be the documented `Other` variant with
+        // the documented message, not some other error shape.
+        assert!(matches!(
+            r.try_clone(),
+            Err(TryCloneError::Other("RefCell is already mutably borrowed"))
+        ));
+    }
+
+    #[test]
+    fn failing_inner_refcell_leaves_source_untouched() {
+        let r = RefCell::new(MaybeUnclonable::unclonable(1u32));
+        assert!(matches!(
+            r.try_clone(),
+            Err(TryCloneError::Other("unclonable"))
+        ));
+        // The source cell is undisturbed: it can still be borrowed and read.
+        let still_readable = r.try_borrow().expect("source cell must remain borrowable");
+        drop(still_readable);
+        r.borrow_mut().inner = 2;
+        assert_eq!(r.borrow().inner, 1);
+    }
+
+    #[test]
     fn refcell_try_default_wraps_default_payload() {
         let r = RefCell::<u64>::try_default().unwrap();
         assert_eq!(*r.borrow(), 0);
+    }
+
+    #[test]
+    fn refcell_try_default_propagates_inner_failure() {
+        assert!(matches!(
+            RefCell::<NoDefault<u8>>::try_default(),
+            Err(TryDefaultError::Other("no canonical value"))
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // UnsafeCell
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unsafe_cell_try_default_wraps_default_payload() {
+        let c = UnsafeCell::<u32>::try_default().unwrap();
+        // Reading through `get` is safe here: no aliasing references exist.
+        assert_eq!(unsafe { *c.get() }, 0);
+        let b = UnsafeCell::<bool>::try_default().unwrap();
+        assert!(!unsafe { *b.get() });
+    }
+
+    #[test]
+    fn unsafe_cell_try_default_propagates_inner_failure() {
+        assert!(matches!(
+            UnsafeCell::<NoDefault<u8>>::try_default(),
+            Err(TryDefaultError::Other("no canonical value"))
+        ));
     }
 }

@@ -2,6 +2,11 @@
 //!
 //! This module mirrors the layout of [`core::iter`] and re-exports its entire
 //! surface, then adds Olive's own adaptor types on top.
+//!
+//! Notable additional types include:
+//!
+//! - [`DoubleEndedPeekable`]: an iterator that can be peeked from both ends,
+//!   as long as the iterator terminates without being revived.
 
 use core::fmt::{Debug, Formatter};
 pub use core::iter::*;
@@ -38,7 +43,7 @@ use olive_macros::TryClone;
 /// ```
 #[must_use = "adaptors do nothing unless used"]
 #[derive(TryClone)]
-pub struct DoubleEndedPeekable<I: DoubleEndedIterator + FusedIterator> {
+pub struct DoubleEndedPeekable<I: Iterator> {
     /// The primary iterator.
     iter: I,
     /// Element cached by [`peek_front`](Self::peek_front), if any.
@@ -47,7 +52,7 @@ pub struct DoubleEndedPeekable<I: DoubleEndedIterator + FusedIterator> {
     back: Option<I::Item>,
 }
 
-impl<I: DoubleEndedIterator + FusedIterator> Clone for DoubleEndedPeekable<I>
+impl<I: Iterator> Clone for DoubleEndedPeekable<I>
 where
     I: Clone,
     I::Item: Clone,
@@ -61,7 +66,7 @@ where
     }
 }
 
-impl<I: DoubleEndedIterator + FusedIterator> Debug for DoubleEndedPeekable<I>
+impl<I: Iterator> Debug for DoubleEndedPeekable<I>
 where
     I: Debug,
     I::Item: Debug,
@@ -75,28 +80,11 @@ where
     }
 }
 
-impl<I: DoubleEndedIterator + FusedIterator> DoubleEndedPeekable<I> {
-    /// Creates a new [`DoubleEndedPeekable`] from any fusable double-ended
-    /// iterator.
-    #[inline]
-    pub fn new(iter: I) -> Self {
-        Self {
-            iter,
-            front: None,
-            back: None,
-        }
-    }
-
+impl<I: Iterator> DoubleEndedPeekable<I> {
     /// Borrows the inner iterator.
     #[inline]
     pub fn get_ref(&self) -> &I {
         &self.iter
-    }
-
-    /// Mutably borrows the inner iterator.
-    #[inline]
-    pub fn get_mut(&mut self) -> &mut I {
-        &mut self.iter
     }
 
     /// Consumes this adapter, returning the inner iterator and any buffered
@@ -108,6 +96,19 @@ impl<I: DoubleEndedIterator + FusedIterator> DoubleEndedPeekable<I> {
     #[inline]
     pub fn into_inner(self) -> (I, Option<I::Item>, Option<I::Item>) {
         (self.iter, self.front, self.back)
+    }
+}
+
+impl<I: DoubleEndedIterator + FusedIterator> DoubleEndedPeekable<I> {
+    /// Creates a new [`DoubleEndedPeekable`] from any fusable double-ended
+    /// iterator.
+    #[inline]
+    pub fn new(iter: I) -> Self {
+        Self {
+            iter,
+            front: None,
+            back: None,
+        }
     }
 
     /// Returns a reference to the element the next [`next`](Iterator::next)
@@ -453,14 +454,13 @@ mod tests {
     }
 
     #[test]
-    fn get_ref_and_get_mut_forward() {
+    fn get_ref_forward() {
         let mut it = (1..=3).double_ended_peekable();
         assert_eq!(
             it.get_ref().clone().collect::<std::vec::Vec<_>>(),
             std::vec![1, 2, 3]
         );
-        *it.get_mut() = 5..=7;
-        assert_eq!(it.next(), Some(5));
+        assert_eq!(it.next(), Some(1));
     }
 
     #[test]
