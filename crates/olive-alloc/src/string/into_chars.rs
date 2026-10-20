@@ -167,6 +167,16 @@ impl<A: AllocatorTryDefault> TryDefault for IntoChars<A> {
     }
 }
 
+impl<A: Allocator> String<A> {
+    /// Returns an iterator over the characters of the string, consuming it.
+    ///
+    /// This is the fallible-port analogue of nightly std's `String::into_chars`. The
+    /// returned [`IntoChars`] iterator owns the string's bytes.
+    pub fn into_chars(self) -> IntoChars<A> {
+        IntoChars::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

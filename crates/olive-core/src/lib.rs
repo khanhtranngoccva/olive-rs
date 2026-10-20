@@ -116,6 +116,7 @@ pub mod prelude;
 /// [`PointerExt`](crate::ptr::PointerExt) trait for relocating a fat pointer's data
 /// address while preserving its metadata.
 pub mod ptr;
+pub mod str;
 
 // ── Mirror the entire stable `core` surface ───────────────────────────────────
 // Glob-re-export every item in `core` so `olive_core` is a drop-in superset of
