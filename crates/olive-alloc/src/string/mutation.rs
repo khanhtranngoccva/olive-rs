@@ -309,3 +309,150 @@ impl<A: Allocator> String<A> {
         self.buf.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use core::ops::Deref;
+
+    use super::*;
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
+
+    // ── try_truncate ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_truncate_shrinks_len_not_cap() {
+        let mut s = mk("hello world");
+        s.try_reserve(32).unwrap();
+        let expected_cap = s.capacity();
+        s.try_truncate(5).unwrap();
+        assert_eq!(s.deref(), "hello");
+        assert!(s.capacity() == expected_cap);
+    }
+
+    #[test]
+    fn try_truncate_rejects_mid_char() {
+        let mut s = mk("é🦊");
+        // é occupies bytes [0, 2); byte index 1 is inside it.
+        let err = s.try_truncate(1).unwrap_err();
+        assert_eq!(err.new_length, 1);
+        assert_eq!(s.deref(), "é🦊");
+    }
+
+    #[test]
+    fn try_truncate_at_or_beyond_len_is_noop() {
+        let mut s = mk("hello");
+        s.try_truncate(5).unwrap();
+        assert_eq!(s.deref(), "hello");
+        s.try_truncate(100).unwrap();
+        assert_eq!(s.deref(), "hello");
+    }
+
+    // ── pop ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pop_removes_last_char() {
+        let mut s = mk("aé🦊");
+        assert_eq!(s.pop(), Some('🦊'));
+        assert_eq!(s.pop(), Some('é'));
+        assert_eq!(s.pop(), Some('a'));
+        assert_eq!(s.pop(), None);
+        assert!(s.is_empty());
+    }
+
+    // ── try_remove ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_remove_ascii() {
+        let mut s = mk("hello");
+        assert_eq!(s.try_remove(0).unwrap(), 'h');
+        assert_eq!(s.deref(), "ello");
+    }
+
+    #[test]
+    fn try_remove_multibyte() {
+        let mut s = mk("h🦊i");
+        assert_eq!(s.try_remove(1).unwrap(), '🦊');
+        assert_eq!(s.deref(), "hi");
+    }
+
+    #[test]
+    fn try_remove_mid_char_fails() {
+        let mut s = mk("é🦊");
+        // é occupies bytes [0, 2); byte index 1 is inside it.
+        let err = s.try_remove(1).unwrap_err();
+        assert_eq!(err.index, 1);
+        assert_eq!(err.len, 6);
+        assert_eq!(s.deref(), "é🦊");
+    }
+
+    #[test]
+    fn try_remove_out_of_bounds() {
+        let mut s = mk("ab");
+        let err = s.try_remove(5).unwrap_err();
+        assert_eq!(err.index, 5);
+        assert_eq!(err.len, 2);
+        assert_eq!(s.deref(), "ab");
+    }
+
+    // ── retain ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn retain_keeps_matching() {
+        let mut s = mk("a1b2c3");
+        s.retain(|c| c.is_ascii_alphabetic());
+        assert_eq!(s.deref(), "abc");
+    }
+
+    #[test]
+    fn retain_multibyte() {
+        let mut s = mk("aé🦊z");
+        s.retain(|c| c != 'é');
+        assert_eq!(s.deref(), "a🦊z");
+    }
+
+    #[test]
+    fn retain_none_left() {
+        let mut s = mk("123");
+        s.retain(|_c| false);
+        assert_eq!(s.deref(), "");
+    }
+
+    #[test]
+    fn retain_predicate_panic_seals_valid_utf8() {
+        let mut s = mk("aéb🦊d");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            s.retain(|c| {
+                if c == 'b' {
+                    panic!("predicate panicked");
+                }
+                if c == 'é' {
+                    return false;
+                }
+                true
+            })
+        }));
+        assert!(result.is_err());
+        assert!(core::str::from_utf8(s.as_bytes()).is_ok());
+        assert_eq!(s.deref(), "ab🦊d");
+    }
+
+    // ── clear ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clear_empties_but_keeps_capacity() {
+        let mut s = mk("hello");
+        s.try_reserve(32).unwrap();
+        let cap = s.capacity();
+        s.clear();
+        assert!(s.is_empty());
+        assert_eq!(s.capacity(), cap);
+        // The buffer must remain reusable after a clear.
+        s.try_push_str("new").unwrap();
+        assert_eq!(s.deref(), "new");
+    }
+}

@@ -127,3 +127,111 @@ impl<A: AllocatorTryDefault> TryDefault for String<A> {
         Ok(Self::new_in(A::try_default()?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::ops::Deref;
+
+    use super::*;
+    use crate::alloc::CountingAllocator;
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
+
+    // ── String::new ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_is_empty() {
+        let s = String::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+    }
+
+    // ── String::try_with_capacity ─────────────────────────────────────────────
+
+    #[test]
+    fn try_with_capacity_reserves_at_least_requested() {
+        let s = String::try_with_capacity(16).unwrap();
+        assert!(s.capacity() == 16);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn try_with_capacity_rejects_overflow() {
+        // Deterministic failure: no allocator can satisfy a `usize::MAX` request.
+        let err = String::try_with_capacity(usize::MAX).unwrap_err();
+        assert!(err.is_capacity_overflow());
+    }
+
+    // ── String::try_from_str ──────────────────────────────────────────────────
+
+    #[test]
+    fn from_str_roundtrip() {
+        let s = mk("héllo wörld ✓");
+        assert_eq!(s.deref(), "héllo wörld ✓");
+    }
+
+    // ── String::new_in ────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_in_failing_allocator_is_empty_without_allocation() {
+        // Constructing an empty string must not touch the allocator at all,
+        // so even a failing allocator yields a usable empty string.
+        let s: String<FailAlloc> = String::new_in(FailAlloc);
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+    }
+
+    // ── String::try_with_capacity_in ──────────────────────────────────────────
+
+    #[test]
+    fn try_with_capacity_in_uses_given_allocator() {
+        // Pass a reference: `CountingAllocator` is not `Copy`, but its counters
+        // live behind interior mutability, so the string's stored
+        // `&CountingAllocator` observes the same instance we hold here.
+        let alloc = CountingAllocator::new();
+        let mut s = String::try_with_capacity_in(16, &alloc).unwrap();
+        s.try_push_str("hello").unwrap();
+        assert!(alloc.allocations() >= 1);
+        drop(s);
+        assert!(alloc.deallocations() >= 1);
+    }
+
+    // FIXME: Need a failure path for OOM
+
+    // ── String::try_from_str_in ───────────────────────────────────────────────
+
+    #[test]
+    fn try_from_str_in_copies_content_into_custom_allocator() {
+        let alloc = CountingAllocator::new();
+        let s: String<&CountingAllocator> = String::try_from_str_in("payload", &alloc).unwrap();
+        assert_eq!(s.deref(), "payload");
+        // The content was copied through our counting allocator, not leaked
+        // from the source slice.
+        assert!(alloc.allocations() >= 1);
+    }
+
+    // FIXME: Need a failure path for OOM
+
+    // ── Default / TryDefault ──────────────────────────────────────────────────
+
+    #[test]
+    fn default_is_empty() {
+        let s = String::default();
+        assert!(s.is_empty());
+        assert_eq!(s.deref(), "");
+    }
+
+    #[test]
+    fn try_default_failure_propagates_allocator_error() {
+        let e = <String<FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    // FIXME: Success case for TryDefault is missing
+}

@@ -179,9 +179,16 @@ impl<A: Allocator> String<A> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use core::ops::Deref;
+
     use super::*;
     use olive_core::try_traits::try_default::TryDefault;
     use olive_test_helpers::FailDefaultAlloc;
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
 
     #[test]
     fn default_and_try_default_are_empty() {
@@ -198,5 +205,52 @@ mod tests {
             e,
             TryDefaultError::Other("allocator default failed")
         ));
+    }
+
+    // ── Iterator::next ────────────────────────────────────────────────────────
+
+    #[test]
+    fn into_chars_yields_all_chars() {
+        let ic = mk("aé🦊z").into_chars();
+        let got: std::vec::Vec<char> = ic.collect();
+        assert_eq!(&got[..], &['a', 'é', '🦊', 'z'][..]);
+    }
+
+    // ── DoubleEndedIterator::next_back ────────────────────────────────────────
+
+    #[test]
+    fn into_chars_double_ended() {
+        let mut ic = mk("abc").into_chars();
+        assert_eq!(ic.next_back(), Some('b'));
+        assert_eq!(ic.next(), Some('a'));
+        assert_eq!(ic.next_back(), Some('c'));
+        assert_eq!(ic.next(), None);
+        assert_eq!(ic.next_back(), None);
+    }
+
+    #[test]
+    fn into_chars_empty() {
+        let mut ic = mk("").into_chars();
+        assert_eq!(ic.next(), None);
+        assert_eq!(ic.next_back(), None);
+    }
+
+    // ── IntoChars::as_str ─────────────────────────────────────────────────────
+
+    #[test]
+    fn into_chars_as_str_reflects_remaining() {
+        let mut ic = mk("xyz").into_chars();
+        assert_eq!(ic.next(), Some('x'));
+        assert_eq!(ic.as_str(), "yz");
+    }
+
+    // ── IntoChars::into_string ────────────────────────────────────────────────
+
+    #[test]
+    fn into_chars_into_string_no_consumption() {
+        let mut ic = mk("keep").into_chars();
+        assert_eq!(ic.next(), Some('k'));
+        let s = ic.into_string();
+        assert_eq!(s.deref(), "eep");
     }
 }

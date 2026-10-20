@@ -96,3 +96,136 @@ impl<A: Allocator> TryFrom<Vec<u8, A>> for String<A> {
         Self::from_utf8_in(v)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alloc::{AllocError, Global};
+    use core::alloc::Layout;
+    use core::ptr::NonNull;
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
+
+    #[test]
+    fn into_bytes_moves_buffer() {
+        let s = mk("héllo ✓");
+        let v = s.into_bytes();
+        assert_eq!(&v[..], "héllo ✓".as_bytes());
+    }
+
+    #[test]
+    fn into_bytes_empty() {
+        let s = String::new();
+        let v = s.into_bytes();
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn into_boxed_str_preserves_contents() {
+        let s = mk("boxed ✓");
+        let b = s.into_boxed_str();
+        assert_eq!(&*b, "boxed ✓");
+    }
+
+    #[test]
+    fn into_boxed_str_empty() {
+        let s = String::new();
+        let b = s.into_boxed_str();
+        assert_eq!(&*b, "");
+    }
+
+    #[test]
+    fn try_into_boxed_str_shrinks_and_boxes() {
+        let mut s = String::try_with_capacity(64).unwrap();
+        s.try_push_str("abc").unwrap();
+        let b = s.try_into_boxed_str().unwrap();
+        assert_eq!(&*b, "abc");
+        assert_eq!(b.len(), 3);
+    }
+
+    #[test]
+    fn try_into_boxed_str_give_back_success() {
+        let mut s = String::try_with_capacity(64).unwrap();
+        s.try_push_str("giveback").unwrap();
+        let b = s.try_into_boxed_str_give_back().unwrap();
+        assert_eq!(&*b, "giveback");
+    }
+
+    /// Delegates to `Global` but refuses any allocation of 8 bytes or fewer, so
+    /// the shrink reallocation inside `try_into_boxed_str_give_back` fails while
+    /// the original (larger) allocation succeeds.
+    struct FailSmallAlloc;
+    unsafe impl Allocator for FailSmallAlloc {
+        fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+            if layout.size() <= 8 {
+                Err(AllocError)
+            } else {
+                Global.allocate(layout)
+            }
+        }
+        unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+            unsafe { Global.deallocate(ptr, layout) }
+        }
+    }
+
+    // FIXME: non-giveback variant should be tested too
+
+    #[test]
+    fn try_into_boxed_str_give_back_returns_string_on_failure() {
+        let mut s = String::try_with_capacity_in(16, FailSmallAlloc).unwrap();
+        s.try_push_str("abc").unwrap();
+        let (returned, err) = s.try_into_boxed_str_give_back().unwrap_err();
+        assert!(err.is_alloc());
+        // No data is lost: the original string comes back intact.
+        assert_eq!(&*returned, "abc");
+        assert_eq!(returned.capacity(), 16);
+    }
+
+    #[test]
+    fn try_from_string_for_boxed_str_ok() {
+        let mut s = String::try_with_capacity(32).unwrap();
+        s.try_push_str("via-try-from").unwrap();
+        let b: Box<str> = s.try_into().unwrap();
+        assert_eq!(&*b, "via-try-from");
+    }
+
+    #[test]
+    fn try_from_ref_str_ok() {
+        let s: String = "via-try-from-ref".try_into().unwrap();
+        assert_eq!(&*s, "via-try-from-ref");
+    }
+
+    #[test]
+    fn try_from_ref_str_empty() {
+        let s: String = "".try_into().unwrap();
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn try_from_vec_u8_valid_utf8_moves_buffer() {
+        let v = Vec::<u8>::try_from_slice_in("moved ✓".as_bytes(), Global).unwrap();
+        let ptr = v.as_ptr();
+        let s: String = v.try_into().unwrap();
+        assert_eq!(&*s, "moved ✓");
+        // The byte vector is consumed in place, not copied.
+        assert_eq!(s.as_bytes().as_ptr(), ptr);
+    }
+
+    #[test]
+    fn try_from_vec_u8_invalid_returns_bytes() {
+        let v = Vec::<u8>::try_from_slice_in(&[0x61, 0xFF, 0x62], Global).unwrap();
+        let err = String::try_from(v).unwrap_err();
+        assert!(err.utf8_error().error_len().is_some());
+        let bytes = err.into_bytes();
+        assert_eq!(&bytes[..], &[0x61, 0xFF, 0x62]);
+    }
+
+    #[test]
+    fn try_from_vec_u8_empty() {
+        let v = Vec::<u8>::try_from_slice_in(&[], Global).unwrap();
+        let s: String = v.try_into().unwrap();
+        assert!(s.is_empty());
+    }
+}

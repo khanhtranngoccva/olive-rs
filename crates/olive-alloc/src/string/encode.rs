@@ -140,6 +140,8 @@ impl String {
     /// # Errors
     ///
     /// Returns a [`FromUtf8Error`] if the byte slice was not valid UTF-8.
+    //
+    // TODO: there is no problem with moving from_utf8 to generic block
     pub fn from_utf8(v: Vec<u8>) -> Result<String, FromUtf8Error> {
         match core::str::from_utf8(&v) {
             Ok(_) => Ok(String { buf: v }),
@@ -518,4 +520,189 @@ fn convert_slice_to_u16_be_iter(
         }),
         len,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use crate::alloc::Global;
+    use crate::vec::Vec;
+    use std::format;
+
+    fn vec_u8(bytes: &[u8]) -> Vec<u8> {
+        Vec::<u8>::try_from_slice_in(bytes, Global).unwrap()
+    }
+
+    #[test]
+    fn from_utf8_valid_roundtrip() {
+        let s = String::from_utf8(vec_u8("héllo ✓".as_bytes())).unwrap();
+        assert_eq!(&*s, "héllo ✓");
+    }
+
+    #[test]
+    fn from_utf8_invalid_returns_bytes_and_error() {
+        let err = String::from_utf8(vec_u8(&[0x61, 0xFF])).unwrap_err();
+        assert_eq!(&err.into_bytes()[..], &[0x61, 0xFF]);
+    }
+
+    #[test]
+    fn from_utf8_in_custom_allocator() {
+        let v = Vec::<u8>::try_from_slice_in("owned".as_bytes(), Global).unwrap();
+        let s = String::from_utf8_in(v).unwrap();
+        assert_eq!(&*s, "owned");
+    }
+
+    #[test]
+    fn from_utf8_unchecked_valid_input() {
+        // SAFETY: the buffer is known-valid UTF-8.
+        let s = unsafe { String::from_utf8_unchecked(vec_u8("safe".as_bytes())) };
+        assert_eq!(&*s, "safe");
+    }
+
+    #[test]
+    fn try_from_utf16_ascii() {
+        let s = String::try_from_utf16(&[0x61, 0x62, 0x63]).unwrap();
+        assert_eq!(&*s, "abc");
+    }
+
+    #[test]
+    fn try_from_utf16_surrogate_pair() {
+        // "🦊" encodes as the pair (0xD83E, 0xDD8A).
+        let s = String::try_from_utf16(&[0xD83E, 0xDD8A]).unwrap();
+        assert_eq!(&*s, "🦊");
+        assert_eq!(s.len(), 4);
+    }
+
+    #[test]
+    fn try_from_utf16_lone_high_surrogate_before_char() {
+        let e = String::try_from_utf16(&[0xD800, 0x65]).unwrap_err();
+        assert!(e.is_lone_surrogate());
+        // The index counts code units consumed before the bad unit.
+        assert_eq!(e.kind, TryFromUtf16ErrorKind::LoneSurrogate(0));
+    }
+
+    #[test]
+    fn try_from_utf16_lone_high_surrogate_at_end() {
+        let e = String::try_from_utf16(&[0x65, 0xD800]).unwrap_err();
+        assert_eq!(e.kind, TryFromUtf16ErrorKind::LoneSurrogate(1));
+    }
+
+    #[test]
+    fn try_from_utf16_lone_low_surrogate_before_char() {
+        let e = String::try_from_utf16(&[0xDC00, 0x65]).unwrap_err();
+        assert_eq!(e.kind, TryFromUtf16ErrorKind::LoneSurrogate(0));
+    }
+
+    #[test]
+    fn try_from_utf16_lone_low_surrogate_at_end() {
+        let e = String::try_from_utf16(&[0x65, 0xDC00]).unwrap_err();
+        assert_eq!(e.kind, TryFromUtf16ErrorKind::LoneSurrogate(1));
+    }
+
+    #[test]
+    fn try_from_utf16be_surrogate_pair_bytes() {
+        // "é🦊" in UTF-16BE bytes: 00 E9 | D8 3E | DD 8A.
+        let s = String::try_from_utf16be(&[0x00, 0xE9, 0xD8, 0x3E, 0xDD, 0x8A]).unwrap();
+        assert_eq!(&*s, "é🦊");
+        assert_eq!(s.len(), 6);
+    }
+
+    #[test]
+    fn try_from_utf16le_surrogate_pair_bytes() {
+        // "é🦊" in UTF-16LE bytes: E9 00 | 3E D8 | 8A DD.
+        let s = String::try_from_utf16le(&[0xE9, 0x00, 0x3E, 0xD8, 0x8A, 0xDD]).unwrap();
+        assert_eq!(&*s, "é🦊");
+        assert_eq!(s.len(), 6);
+    }
+
+    #[test]
+    fn try_from_utf16be_odd_bytes_rejected() {
+        let e = String::try_from_utf16be(&[0x00, 0x41, 0x00]).unwrap_err();
+        assert!(e.is_odd_bytes());
+    }
+
+    #[test]
+    fn try_from_utf16le_odd_bytes_rejected() {
+        let e = String::try_from_utf16le(&[0x41, 0x00, 0x42]).unwrap_err();
+        assert!(e.is_odd_bytes());
+    }
+
+    #[test]
+    fn try_from_utf16_lossy_replaces_lone_surrogate() {
+        let s = String::try_from_utf16_lossy(&[0xD800, 0x65]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16_lossy(&[0x65, 0xD800]).unwrap();
+        assert_eq!(&*s, "e\u{FFFD}");
+        let s = String::try_from_utf16_lossy(&[0xDC00, 0x65]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16_lossy(&[0x65, 0xDC00]).unwrap();
+        assert_eq!(&*s, "e\u{FFFD}");
+    }
+
+    #[test]
+    fn try_from_utf16_lossy_pair_is_lossless() {
+        let s = String::try_from_utf16_lossy(&[0xD83E, 0xDD8A]).unwrap();
+        assert_eq!(&*s, "🦊");
+    }
+
+    #[test]
+    fn try_from_utf16le_lossy_replaces_lone_surrogate() {
+        let s = String::try_from_utf16le_lossy(&[0x00, 0xD8, 0x65, 0x00]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16le_lossy(&[0x65, 0x00, 0x00, 0xD8]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16le_lossy(&[0x00, 0xDC, 0x65, 0x00]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16le_lossy(&[0x65, 0x00, 0x00, 0xDC]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+    }
+
+    #[test]
+    fn try_from_utf16be_lossy_replaces_lone_surrogate() {
+        let s = String::try_from_utf16be_lossy(&[0xD8, 0x00, 0x00, 0x65]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16be_lossy(&[0x00, 0x65, 0xD8, 0x00]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16be_lossy(&[0xDC, 0x00, 0x00, 0x65]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+        let s = String::try_from_utf16be_lossy(&[0x00, 0x65, 0xDC, 0x00]).unwrap();
+        assert_eq!(&*s, "\u{FFFD}e");
+    }
+
+    #[test]
+    fn try_from_utf16_in_custom_allocator() {
+        let s = String::try_from_utf16_in(&[0x61, 0x62], Global).unwrap();
+        assert_eq!(&*s, "ab");
+    }
+
+    #[test]
+    fn try_from_utf16le_in_custom_allocator() {
+        let s = String::try_from_utf16le_in(&[0x61, 0x00], Global).unwrap();
+        assert_eq!(&*s, "a");
+    }
+
+    #[test]
+    fn try_from_utf16be_in_custom_allocator() {
+        let s = String::try_from_utf16be_in(&[0x00, 0x61], Global).unwrap();
+        assert_eq!(&*s, "a");
+    }
+
+    #[test]
+    fn try_from_utf16_lossy_in_custom_allocator() {
+        let s = String::try_from_utf16_lossy_in(&[0xD800], Global).unwrap();
+        assert_eq!(&*s, "\u{FFFD}");
+    }
+
+    // Need OOM test for all the functions covered
+
+    #[test]
+    fn try_from_utf16_error_display_and_debug() {
+        let e = String::try_from_utf16(&[0xD800]).unwrap_err();
+        assert!(format!("{e}").contains("surrogate"));
+        assert!(format!("{e:?}").contains("LoneSurrogate"));
+        let e = String::try_from_utf16le(&[0x41]).unwrap_err();
+        assert!(format!("{e}").contains("odd"));
+    }
 }

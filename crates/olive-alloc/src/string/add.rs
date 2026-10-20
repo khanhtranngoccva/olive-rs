@@ -173,22 +173,8 @@ mod tests {
     extern crate std;
     use std::format;
 
-    use core::alloc::Layout;
-    use core::ptr::NonNull;
-
     use super::*;
-    use crate::alloc::AllocError;
-
-    /// An allocator whose every allocation fails. Used to exercise OOM paths.
-    #[derive(Default)]
-    struct FailAlloc;
-
-    unsafe impl Allocator for FailAlloc {
-        fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-            Err(AllocError)
-        }
-        unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-    }
+    use olive_test_helpers::FailAlloc;
 
     fn mk(s: &str) -> String {
         String::try_from_str(s).unwrap()
@@ -277,7 +263,7 @@ mod tests {
         let s: String<FailAlloc> = String::new_in(FailAlloc);
         let c = s + "data";
         assert!(c.is_err());
-        // Further ops are no-ops, don't panic
+        // Further ops are no-ops, don't panic or abort
         let c2 = c + "more" + "!";
         assert!(c2.is_err());
     }

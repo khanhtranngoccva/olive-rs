@@ -198,3 +198,169 @@ impl<A: Allocator> Write for String<A> {
         self.push_str_inner(s).map_err(|_| fmt::Error {})
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use olive_core::try_traits::try_collect::TryCollect;
+    use olive_test_helpers::FailAlloc;
+    use std::format;
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
+
+    // ── Deref / DerefMut ──────────────────────────────────────────────────────
+
+    #[test]
+    fn deref_coerces_to_str() {
+        let s = mk("hello");
+        let r: &str = &s;
+        assert_eq!(r, "hello");
+        assert_eq!(s.deref(), "hello");
+    }
+
+    #[test]
+    fn deref_mut_coerces_to_mut_str() {
+        let mut s = mk("abc");
+        let m: &mut str = &mut s;
+        m.make_ascii_uppercase();
+        assert_eq!(&*s, "ABC");
+    }
+
+    // ── AsRef / AsMut ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn as_ref_str_and_bytes() {
+        let s = mk("héllo");
+        let a: &str = s.as_ref();
+        let b: &[u8] = s.as_ref();
+        assert_eq!(a, "héllo");
+        assert_eq!(b, "héllo".as_bytes());
+    }
+
+    #[test]
+    fn as_mut_str_returns_correct_length_and_content() {
+        let mut s = mk("abc");
+        {
+            let m: &mut str = s.as_mut();
+            assert_eq!(m.len(), 3);
+            assert_eq!(m, "abc");
+            m.make_ascii_uppercase();
+            assert_eq!(m, "ABC");
+        }
+        assert_eq!(&*s, "ABC");
+    }
+
+    #[test]
+    fn as_mut_str_multibyte_len() {
+        let mut s = mk("é🦊");
+        let m: &mut str = s.as_mut();
+        // 'é' is 2 bytes and the fox is 4, so the str view is 6 bytes long.
+        assert_eq!(m.len(), 6);
+    }
+
+    // ── Borrow / BorrowMut ────────────────────────────────────────────────────
+
+    #[test]
+    fn borrow_matches_deref() {
+        let s = mk("borrowed");
+        let b: &str = s.borrow();
+        assert_eq!(b, "borrowed");
+    }
+
+    #[test]
+    fn borrow_mut_allows_in_place_mutation() {
+        let mut s = mk("mutate");
+        let b: &mut str = s.borrow_mut();
+        b.make_ascii_uppercase();
+        assert_eq!(&*s, "MUTATE");
+    }
+
+    // ── Debug / Display / Hash ────────────────────────────────────────────────
+
+    #[test]
+    fn display_debug_hash_ord() {
+        let a = mk("apple");
+        assert_eq!(format!("{a:?}"), "\"apple\"");
+        assert_eq!(format!("{a}"), "apple");
+        let mut m = std::collections::HashMap::new();
+        m.insert(a.try_clone().unwrap(), 1);
+        assert_eq!(m.get("apple"), Some(&1));
+    }
+
+    // ── TryClone ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn try_clone_matches() {
+        let s = mk("original");
+        let c = s.try_clone().unwrap();
+        assert_eq!(c.deref(), "original");
+        assert_ne!(s.as_bytes().as_ptr(), c.as_bytes().as_ptr());
+    }
+
+    // FIXME: handle OOM errors
+
+    // ── TryExtend<char> ───────────────────────────────────────────────────────
+
+    #[test]
+    fn extend_chars_via_trait() {
+        let mut s = String::new();
+        s.try_extend(['a', 'b', 'c'].into_iter()).unwrap();
+        assert_eq!(s.deref(), "abc");
+    }
+
+    // FIXME: handle OOM errors
+
+    // ── TryExtend<&str> ───────────────────────────────────────────────────────
+
+    #[test]
+    fn extend_strs_via_trait() {
+        let mut s = mk("ab");
+        s.try_extend(["cd", "ef"].into_iter()).unwrap();
+        assert_eq!(s.deref(), "abcdef");
+    }
+
+    // FIXME: handle OOM errors
+
+    // ── TryFromIterator<char> ─────────────────────────────────────────────────
+
+    #[test]
+    fn collect_chars_into_string() {
+        let s: String = ['x', 'y', 'z'].into_iter().try_collect().unwrap();
+        assert_eq!(s.deref(), "xyz");
+    }
+
+    // FIXME: handle OOM errors
+
+    // ── TryFromIterator<&str> ─────────────────────────────────────────────────
+
+    #[test]
+    fn collect_strs_into_string() {
+        let s: String = ["ab", "cd"].into_iter().try_collect().unwrap();
+        assert_eq!(s.deref(), "abcd");
+    }
+
+    // FIXME: handle OOM errors
+
+    // ── fmt::Write ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn write_str_and_write_fmt() {
+        let mut s = String::new();
+        s.write_str("direct").unwrap();
+        write!(s, "-{}-{:?}", 42, "q").unwrap();
+        assert_eq!(&*s, "direct-42-\"q\"");
+    }
+
+    #[test]
+    fn write_failure_maps_to_fmt_error() {
+        let mut s = String::<FailAlloc>::new_in(FailAlloc);
+        let r = s.write_str("anything");
+        assert!(r.is_err());
+        // The render failed cleanly and the string stays empty.
+        assert!(s.is_empty());
+    }
+}

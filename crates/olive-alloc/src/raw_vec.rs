@@ -860,6 +860,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::AllocError;
+    use olive_test_helpers::FailAlloc;
     use std::format;
 
     #[test]
@@ -967,18 +968,6 @@ mod tests {
         // Prove an allocation failure surfaces as an AllocError-kind
         // `TryReserveError` (distinct from CapacityOverflow), mirroring the
         // sibling `try_with_capacity_in` OOM test.
-        #[derive(Default)]
-        struct FailAlloc;
-        unsafe impl Allocator for FailAlloc {
-            fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                Err(AllocError)
-            }
-            fn allocate_zeroed(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                Err(AllocError)
-            }
-            unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-        }
-
         let err = match RawVec::<i32, FailAlloc>::try_with_capacity_zeroed_in(8, FailAlloc) {
             Err(e) => e,
             Ok(_) => panic!("expected allocation failure"),
@@ -1047,15 +1036,6 @@ mod tests {
     fn oom_returns_alloc_error_kind() {
         // Use a custom allocator that always fails to prove the error kind is
         // AllocError (not CapacityOverflow).
-        #[derive(Default)]
-        struct FailAlloc;
-        unsafe impl Allocator for FailAlloc {
-            fn allocate(&self, _layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-                Err(AllocError)
-            }
-            unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-        }
-
         let err = match RawVec::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) {
             Err(e) => e,
             Ok(_) => panic!("expected allocation failure"),

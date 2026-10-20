@@ -72,3 +72,73 @@ impl<A: Allocator> String<A> {
         &mut self.buf
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::ops::Deref;
+
+    use super::*;
+
+    fn mk(s: &str) -> String {
+        String::try_from_str(s).unwrap()
+    }
+
+    #[test]
+    fn capacity_grows_on_reserve() {
+        let mut s = mk("abc");
+        assert!(s.capacity() >= 3);
+        s.try_reserve(64).unwrap();
+        assert!(s.capacity() >= 67);
+    }
+
+    #[test]
+    fn len_and_is_empty() {
+        let mut s = String::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        s.try_push_str("héllo").unwrap();
+        assert!(!s.is_empty());
+        // "héllo" is 5 chars but 6 bytes.
+        assert_eq!(s.len(), 6);
+    }
+
+    #[test]
+    fn as_bytes_view() {
+        let s = mk("é🦊");
+        assert_eq!(s.as_bytes(), "é🦊".as_bytes());
+        assert_eq!(s.as_bytes().len(), 6);
+    }
+
+    #[test]
+    fn as_str_view() {
+        let s = mk("query");
+        assert_eq!(s.as_str(), "query");
+        // Matches the Deref view.
+        assert_eq!(s.deref(), s.as_str());
+    }
+
+    #[test]
+    fn as_mut_str_mutates_in_place() {
+        let mut s = mk("abc");
+        s.as_mut_str().make_ascii_uppercase();
+        assert_eq!(s.deref(), "ABC");
+        assert_eq!(s.as_mut_str().len(), 3);
+    }
+
+    #[test]
+    fn as_vec_exposes_backing_buffer() {
+        let s = mk("vec");
+        let v: &Vec<u8> = s.as_vec();
+        assert_eq!(&v[..], b"vec");
+        assert_eq!(v.len(), s.len());
+    }
+
+    #[test]
+    fn as_mut_vec_allows_direct_writes() {
+        let mut s = mk("abc");
+        // SAFETY: writing ASCII bytes keeps the buffer valid UTF-8.
+        let v = unsafe { s.as_mut_vec() };
+        v[0] = b'A';
+        assert_eq!(s.deref(), "Abc");
+    }
+}
