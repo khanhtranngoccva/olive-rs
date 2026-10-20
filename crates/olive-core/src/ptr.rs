@@ -1,8 +1,12 @@
 //! Pointer extension APIs layered on top of [`core::ptr`].
 //!
 //! This module glob-re-exports the entire stable surface of [`core::ptr`] and
-//! adds Olive-specific extensions, most notably the [`PointerExt`] trait for
-//! relocating a fat pointer's data address while preserving its metadata.
+//! adds Olive-specific extensions.
+//!
+//! # Notable items
+//!
+//! - The [`PointerExt`] trait for relocating a fat pointer's data address
+//! while preserving its metadata.
 
 pub use core::ptr::*;
 
@@ -21,10 +25,8 @@ pub trait PointerExt<T: ?Sized>: Sized {
     /// object's vtable). The result points at wherever `self` points, but with
     /// the shape `old` describes.
     ///
-    /// This is the primitive that lets Olive relocate a freshly cloned value
-    /// onto its destination allocation while recovering the source's metadata —
-    /// see [`Box::try_clone_from_ref_in`](../alloc/boxed/index.html) for the
-    /// canonical consumer.
+    /// This is the primitive that lets Olive clone a dynamically sized type to
+    /// pair with std.
     ///
     /// # Safety
     ///
@@ -198,14 +200,11 @@ mod tests {
     fn slice_relocation_preserves_length() {
         let src: &[i32] = &[10, 20, 30];
         let dest: &mut [i32] = &mut [0, 0, 0];
-        // Copy the elements into `dest` so the relocated pointer is sound.
         dest.copy_from_slice(src);
-        // Build a fat `*mut [i32]` at `dest`'s base (fresh provenance), then
-        // splice in `src`'s length metadata.
-        let dest_fat: *mut [i32] = slice_from_raw_parts_mut(dest.as_mut_ptr(), 3);
-        let fat = unsafe { dest_fat.cast_with_metadata(src as *const [i32]) };
+        let dest_thin: *mut i32 = dest.as_mut_ptr();
+        let dest_fat = unsafe { dest_thin.cast_with_metadata(src as *const [i32]) };
         // SAFETY: `fat` points at `dest`'s three initialized i32s with len 3.
-        let rebuilt = unsafe { &*fat };
+        let rebuilt = unsafe { &*dest_fat };
         assert_eq!(rebuilt, [10, 20, 30]);
     }
 
@@ -214,12 +213,9 @@ mod tests {
         let src: &str = "hello";
         let mut buf = [0u8; 5];
         buf.copy_from_slice(src.as_bytes());
-        // Build a fat `*mut str` at `buf`'s base. `*mut [u8]` and `*mut str` share
-        // the same layout (data pointer + usize length), so a transmute is sound.
-        let bytes: *mut [u8] = slice_from_raw_parts_mut(buf.as_mut_ptr(), 5);
+        let dest_thin: *mut u8 = buf.as_mut_ptr();
         // SAFETY: `*mut [u8]` and `*mut str` have identical layout (data ptr + usize).
-        let dest_fat: *mut str = unsafe { core::mem::transmute(bytes) };
-        let fat = unsafe { dest_fat.cast_with_metadata(src as *const str) };
+        let fat = unsafe { dest_thin.cast_with_metadata(src as *const str) };
         // SAFETY: `buf` now holds valid UTF-8 of the same length as `src`.
         let rebuilt = unsafe { &*fat };
         assert_eq!(rebuilt, "hello");

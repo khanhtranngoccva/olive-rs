@@ -298,16 +298,20 @@ impl Ledger {
     #[must_use]
     pub fn all_dropped_once(&self, expected: impl IntoIterator<Item = u32>) -> bool {
         let counts = self.drop_counts.read().unwrap();
-        let n_expected: usize = expected.into_iter().count();
-        if counts.len() != n_expected {
-            return false;
-        }
-        for (_, c) in counts.iter() {
-            if *c != 1 {
+        let mut n_expected: usize = 0;
+        for id in expected {
+            if counts.get(&id) != Some(&1) {
                 return false;
             }
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "the caller's iterator cannot realistically reach usize::MAX items"
+            )]
+            {
+                n_expected += 1;
+            }
         }
-        true
+        counts.len() == n_expected
     }
 }
 
