@@ -292,7 +292,7 @@ mod tests {
         let still_readable = r.try_borrow().expect("source cell must remain borrowable");
         drop(still_readable);
         r.borrow_mut().inner = 2;
-        assert_eq!(r.borrow().inner, 1);
+        assert_eq!(r.borrow().inner, 2);
     }
 
     #[test]

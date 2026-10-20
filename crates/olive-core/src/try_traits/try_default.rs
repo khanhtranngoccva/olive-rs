@@ -136,13 +136,6 @@ impl_try_default_infallible!(bool, char, (), f32, f64);
 // runtime dependency).
 olive_macros::try_default_tuples!(16);
 
-impl<T> TryDefault for Option<T> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(None)
-    }
-}
-
 // Arrays: default-construct each element left-to-right via [`TryDefault`],
 // short-circuiting on the first failure. An early error drops exactly the
 // constructed prefix.

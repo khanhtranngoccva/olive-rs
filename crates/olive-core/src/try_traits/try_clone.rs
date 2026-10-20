@@ -160,24 +160,6 @@ impl<T: ?Sized> TryClone for &T {
     }
 }
 
-impl<T: TryClone> TryClone for Option<T> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        match self {
-            Some(v) => Ok(Some(v.try_clone()?)),
-            None => Ok(None),
-        }
-    }
-}
-
-impl<T: TryClone, E: TryClone> TryClone for Result<T, E> {
-    fn try_clone(&self) -> Result<Self, TryCloneError> {
-        match self {
-            Ok(v) => Ok(Ok(v.try_clone()?)),
-            Err(e) => Ok(Err(e.try_clone()?)),
-        }
-    }
-}
-
 impl<T: TryClone, const N: usize> TryClone for [T; N] {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let mut uninit = core::mem::MaybeUninit::<[T; N]>::uninit();
@@ -342,29 +324,6 @@ mod tests {
         assert_eq!((-5i32).try_clone().unwrap(), -5);
         assert!(true.try_clone().unwrap());
         assert_eq!('x'.try_clone().unwrap(), 'x');
-    }
-
-    #[test]
-    fn try_clone_option_and_result() {
-        let o: Option<i32> = Some(7);
-        assert_eq!(o.try_clone().unwrap(), Some(7));
-        let r: Result<i32, bool> = Ok(9);
-        assert_eq!(r.try_clone().unwrap(), Ok(9));
-    }
-
-    #[test]
-    fn try_clone_option_and_result_failure_paths() {
-        let none: Option<CloneBudget> = None;
-        assert!(none.try_clone().is_ok());
-
-        let some: Option<CloneBudget> = Some(CloneBudget::new(0));
-        assert!(some.try_clone().is_err());
-
-        let ok: Result<CloneBudget, u8> = Ok(CloneBudget::new(0));
-        assert!(ok.try_clone().is_err());
-
-        let err: Result<u8, CloneBudget> = Err(CloneBudget::new(0));
-        assert!(err.try_clone().is_err());
     }
 
     #[test]

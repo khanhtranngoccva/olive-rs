@@ -94,20 +94,37 @@ impl<I: Iterator> DoubleEndedPeekable<I> {
     /// is `Some(_)` only if a peek was outstanding when the adapter was
     /// consumed.
     #[inline]
-    pub fn into_inner(self) -> (I, Option<I::Item>, Option<I::Item>) {
+    pub fn into_parts(self) -> (I, Option<I::Item>, Option<I::Item>) {
         (self.iter, self.front, self.back)
     }
 }
 
 impl<I: DoubleEndedIterator + FusedIterator> DoubleEndedPeekable<I> {
     /// Creates a new [`DoubleEndedPeekable`] from any fusable double-ended
-    /// iterator.
+    /// iterator. The method accepts any iterator and any type that can be
+    /// converted into iterators.
     #[inline]
-    pub fn new(iter: I) -> Self {
+    pub fn new(iter: impl IntoIterator<IntoIter = I>) -> Self {
         Self {
-            iter,
+            iter: iter.into_iter(),
             front: None,
             back: None,
+        }
+    }
+
+    /// Creates a double-endded peekable iterator from its components.
+    /// The method accepts any iterator and any type that can be
+    /// converted into iterators.
+    #[inline]
+    pub fn from_parts(
+        iter: impl IntoIterator<IntoIter = I>,
+        front: Option<I::Item>,
+        back: Option<I::Item>,
+    ) -> Self {
+        Self {
+            iter: iter.into_iter(),
+            front,
+            back,
         }
     }
 
@@ -318,12 +335,15 @@ impl<I: DoubleEndedIterator + FusedIterator + ExactSizeIterator> ExactSizeIterat
 }
 
 /// Convenience constructor mirroring [`core::iter::Peekable::peekable`].
-pub trait DoubleEndedPeekableExt: DoubleEndedIterator + FusedIterator {
+pub trait DoubleEndedPeekableExt: IntoIterator
+where
+    Self::IntoIter: DoubleEndedIterator + FusedIterator,
+{
     /// Wraps `self` in a [`DoubleEndedPeekable`], enabling
     /// [`peek_front`](DoubleEndedPeekable::peek_front) and
     /// [`peek_back`](DoubleEndedPeekable::peek_back), so that
     /// the iterator can be peeked both ways.
-    fn double_ended_peekable(self) -> DoubleEndedPeekable<Self>
+    fn double_ended_peekable(self) -> DoubleEndedPeekable<Self::IntoIter>
     where
         Self: Sized,
     {
@@ -331,7 +351,12 @@ pub trait DoubleEndedPeekableExt: DoubleEndedIterator + FusedIterator {
     }
 }
 
-impl<I: DoubleEndedIterator + FusedIterator + ?Sized> DoubleEndedPeekableExt for I {}
+impl<I> DoubleEndedPeekableExt for I
+where
+    I: IntoIterator,
+    I::IntoIter: DoubleEndedIterator + FusedIterator,
+{
+}
 
 #[cfg(test)]
 mod tests {
@@ -434,6 +459,61 @@ mod tests {
     }
 
     #[test]
+    fn peek_front_mut_returns_mutable_reference() {
+        let mut it = [1, 2, 3].into_iter().double_ended_peekable();
+        // Peek and mutate the front element.
+        if let Some(front) = it.peek_front_mut() {
+            *front += 100;
+        }
+        // The mutation should be visible when we consume.
+        assert_eq!(it.next(), Some(101));
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(it.next(), Some(3));
+    }
+
+    #[test]
+    fn peek_back_mut_returns_mutable_reference() {
+        let mut it = [1, 2, 3].into_iter().double_ended_peekable();
+        // Peek and mutate the back element.
+        if let Some(back) = it.peek_back_mut() {
+            *back += 100;
+        }
+        // The mutation should be visible when we consume from the back.
+        assert_eq!(it.next_back(), Some(103));
+        assert_eq!(it.next_back(), Some(2));
+        assert_eq!(it.next_back(), Some(1));
+    }
+
+    #[test]
+    fn peek_front_mut_visible_in_back() {
+        let mut it = [42].into_iter().double_ended_peekable();
+        // Peek from back, exhausting the iterator and leaving one item at the back.
+        assert_eq!(it.peek_back(), Some(&42));
+        // Now peek_front_mut should read the back buffer (which holds 42).
+        if let Some(v) = it.peek_front_mut() {
+            *v += 1;
+        }
+        // Consume and verify the mutation.
+        assert_eq!(it.next(), Some(43));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn peek_back_mut_visible_in_front() {
+        let mut it = [7].into_iter().double_ended_peekable();
+        // Both eyes see the same element. The item is stored at the front.
+        assert_eq!(it.peek_front(), Some(&7));
+        assert_eq!(it.peek_back(), Some(&7));
+        // Mutate via peek_back_mut.
+        if let Some(v) = it.peek_back_mut() {
+            *v *= 2;
+        }
+        // The mutation should be visible from the front too.
+        assert_eq!(it.peek_front(), Some(&14));
+        assert_eq!(it.next(), Some(14));
+    }
+
+    #[test]
     fn empty_iterator_is_fused_at_both_ends() {
         let mut it: DoubleEndedPeekable<Empty<i32>> = empty().double_ended_peekable();
         assert_eq!(it.peek_front(), None);
@@ -443,11 +523,35 @@ mod tests {
     }
 
     #[test]
+    fn size_hint_and_length_adds_cached_elements() {
+        let mut it = (1..=5u16).double_ended_peekable();
+        // Exact hint from RangeInclusive, nothing cached yet.
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.len(), 5);
+        let _ = it.peek_front();
+        // Inner now reports 4 remaining; +1 cached front = 5 total.
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.len(), 5);
+        let _ = it.peek_back();
+        // Inner now reports 3 remaining between the eyes; +2 cached = 5 total.
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.len(), 5);
+        assert_eq!(it.next(), Some(1));
+        // Front buffer drained; inner still reports 3; +1 cached back = 4.
+        assert_eq!(it.size_hint(), (4, Some(4)));
+        assert_eq!(it.len(), 4);
+        assert_eq!(it.next_back(), Some(5));
+        // Both buffers drained; hint reflects only what remains in the middle.
+        assert_eq!(it.size_hint(), (3, Some(3)));
+        assert_eq!(it.len(), 3);
+    }
+
+    #[test]
     fn into_inner_preserves_buffers() {
         let mut it = [1, 2, 3, 4].into_iter().double_ended_peekable();
         let _ = it.peek_front();
         let _ = it.peek_back();
-        let (inner, front, back) = it.into_inner();
+        let (inner, front, back) = it.into_parts();
         assert_eq!(front, Some(1));
         assert_eq!(back, Some(4));
         assert_eq!(inner.collect::<std::vec::Vec<_>>(), std::vec![2, 3]);
@@ -479,28 +583,11 @@ mod tests {
     fn debug_impl_mentions_buffers() {
         let mut it = (1..=3).double_ended_peekable();
         let _ = it.peek_front();
+        let _ = it.peek_back();
         let s = std::format!("{it:?}");
         assert!(s.contains("DoubleEndedPeekable"));
         assert!(s.contains("Some(1)"), "debug output was: {s}");
-    }
-
-    #[test]
-    fn size_hint_adds_cached_elements_to_inner_hint() {
-        let mut it = (1..=5).double_ended_peekable();
-        // Exact hint from RangeInclusive, nothing cached yet.
-        assert_eq!(it.size_hint(), (5, Some(5)));
-        let _ = it.peek_front();
-        // Inner now reports 4 remaining; +1 cached front = 5 total.
-        assert_eq!(it.size_hint(), (5, Some(5)));
-        let _ = it.peek_back();
-        // Inner now reports 3 remaining between the eyes; +2 cached = 5 total.
-        assert_eq!(it.size_hint(), (5, Some(5)));
-        assert_eq!(it.next(), Some(1));
-        // Front buffer drained; inner still reports 3; +1 cached back = 4.
-        assert_eq!(it.size_hint(), (4, Some(4)));
-        assert_eq!(it.next_back(), Some(5));
-        // Both buffers drained; hint reflects only what remains in the middle.
-        assert_eq!(it.size_hint(), (3, Some(3)));
+        assert!(s.contains("Some(3)"), "debug output was: {s}");
     }
 
     #[test]
@@ -513,60 +600,6 @@ mod tests {
         assert_eq!((&mut it).map(|x| x * 2).sum::<i32>(), 9 * 2 + 8 * 2 + 7 * 2);
     }
 
-    #[test]
-    fn peek_front_mut_returns_mutable_reference() {
-        let mut it = [1, 2, 3].into_iter().double_ended_peekable();
-        // Peek and mutate the front element.
-        if let Some(front) = it.peek_front_mut() {
-            *front += 100;
-        }
-        // The mutation should be visible when we consume.
-        assert_eq!(it.next(), Some(101));
-        assert_eq!(it.next(), Some(2));
-        assert_eq!(it.next(), Some(3));
-    }
-
-    #[test]
-    fn peek_back_mut_returns_mutable_reference() {
-        let mut it = [1, 2, 3].into_iter().double_ended_peekable();
-        // Peek and mutate the back element.
-        if let Some(back) = it.peek_back_mut() {
-            *back += 100;
-        }
-        // The mutation should be visible when we consume from the back.
-        assert_eq!(it.next_back(), Some(103));
-        assert_eq!(it.next_back(), Some(2));
-        assert_eq!(it.next_back(), Some(1));
-    }
-
-    #[test]
-    fn peek_mut_front_visible_in_back() {
-        let mut it = [42].into_iter().double_ended_peekable();
-        // Peek from back, exhausting the iterator and leaving one item at the back.
-        assert_eq!(it.peek_back(), Some(&42));
-        // Now peek_front_mut should read the back buffer (which holds 42).
-        if let Some(v) = it.peek_front_mut() {
-            *v += 1;
-        }
-        // Consume and verify the mutation.
-        assert_eq!(it.next(), Some(43));
-        assert_eq!(it.next(), None);
-    }
-
-    #[test]
-    fn peek_mut_back_visible_in_front() {
-        let mut it = [7].into_iter().double_ended_peekable();
-        // Both eyes see the same element. The item is stored at the front.
-        assert_eq!(it.peek_front(), Some(&7));
-        assert_eq!(it.peek_back(), Some(&7));
-        // Mutate via peek_back_mut.
-        if let Some(v) = it.peek_back_mut() {
-            *v *= 2;
-        }
-        // The mutation should be visible from the front too.
-        assert_eq!(it.peek_front(), Some(&14));
-        assert_eq!(it.next(), Some(14));
-    }
     #[test]
     fn count_drains_both_buffers_and_inner() {
         let mut it = (1..=5).double_ended_peekable();
