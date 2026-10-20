@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(u32::try_default().unwrap(), 0);
         assert_eq!(isize::try_default().unwrap(), 0);
         assert_eq!(char::try_default().unwrap(), '\0');
-        assert!(matches!(f64::try_default().unwrap(), 0.0));
+        assert_eq!(f64::try_default().unwrap(), 0.0);
         assert_eq!(Option::<i32>::try_default().unwrap(), None);
     }
 

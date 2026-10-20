@@ -18,6 +18,7 @@ use core::ops::Deref;
 
 use olive_core::prelude::*;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
+use olive_core::try_traits::try_default::TryDefaultError;
 
 use super::try_to_owned::{TryToOwned, TryToOwnedError};
 

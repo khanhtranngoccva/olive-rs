@@ -3,7 +3,7 @@
 //! A counter is an *aggregate*: it answers "how many times did this happen",
 //! with no identity attached to any individual event. It holds no per-event
 //! state — just a single tally. For per-id tracking ("what happened to element
-//! 3"), use [`Ledger`](crate::ledger::Ledger) instead.
+//! 3"), use [`Ledger`](crate::testing::ledger::Ledger) instead.
 
 extern crate std;
 

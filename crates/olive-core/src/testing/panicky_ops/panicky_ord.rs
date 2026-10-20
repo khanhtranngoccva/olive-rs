@@ -44,6 +44,7 @@ impl<T: Ord> Ord for PanickyOrd<T> {
             .armer
             .as_deref()
             .is_some_and(PanicArmer::fetch_and_disarm);
+        // We deliberately disarm both armers to avoid aborting.
         let other_fires = other
             .armer
             .as_deref()

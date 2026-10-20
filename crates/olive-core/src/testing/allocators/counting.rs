@@ -48,11 +48,13 @@ impl CountingAllocator {
 
 unsafe impl Allocator for CountingAllocator {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        // Zero-sized layouts never touch the heap, so they are not counted.
+        // Zero-sized layouts never touch the heap, so they are not counted,
+        // and neither are failed allocations (only handed-out blocks count).
+        let block = Global.allocate(layout)?;
         if layout.size() != 0 {
             self.allocations.fetch_add(1, Ordering::Release);
         }
-        Global.allocate(layout)
+        Ok(block)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {

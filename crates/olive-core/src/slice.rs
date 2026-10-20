@@ -147,10 +147,12 @@ mod tests {
     }
 
     #[test]
-    fn try_range_excluded_start_overflow_is_reversed() {
-        // An *excluded* start bound is not incremented (matching std), so
-        // `usize::MAX..` resolves to start == usize::MAX and then trips the
-        // ordering check rather than the overflow check.
+    fn try_range_unbounded_start_from_usize_max_trips_ordering_check() {
+        // `usize::MAX..` is a `RangeFrom`, whose `RangeBounds` impl reports an
+        // *Included* start bound (matching std), so the bound is not
+        // incremented: it resolves to start == usize::MAX and trips the
+        // ordering check rather than the overflow check. An `Excluded` start
+        // bound *would* be incremented (via `checked_add`, matching std).
         let e = try_range(usize::MAX.., ..10usize).unwrap_err();
         assert_eq!(
             e,

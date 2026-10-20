@@ -4,7 +4,7 @@ use crate::alloc::Global;
 use crate::vec::Vec;
 use olive_core::alloc::{Allocator, AllocatorTryDefault};
 use olive_core::alloc_errors::TryReserveError;
-use olive_core::prelude::TryDefault;
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 // ---------------------------------------------------------------------------
 // Constructors — global allocator
@@ -95,7 +95,7 @@ impl<T, A: Allocator> BinaryHeap<T, A> {
 
 impl<T, A: AllocatorTryDefault> TryDefault for BinaryHeap<T, A> {
     #[inline]
-    fn try_default() -> Result<Self, olive_core::prelude::TryDefaultError> {
+    fn try_default() -> Result<Self, TryDefaultError> {
         let alloc = A::try_default()?;
         Ok(Self::new_in(alloc))
     }

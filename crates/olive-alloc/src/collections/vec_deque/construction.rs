@@ -15,7 +15,7 @@ use crate::alloc::Global;
 use crate::raw_vec::RawVec;
 use olive_core::alloc::{Allocator, AllocatorTryDefault};
 use olive_core::alloc_errors::TryReserveError;
-use olive_core::prelude::TryDefault;
+use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 // ---------------------------------------------------------------------------
 // Constructors — global allocator
@@ -115,7 +115,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
 
 impl<T, A: AllocatorTryDefault> TryDefault for VecDeque<T, A> {
     #[inline]
-    fn try_default() -> Result<Self, olive_core::prelude::TryDefaultError> {
+    fn try_default() -> Result<Self, TryDefaultError> {
         let alloc = A::try_default()?;
         Ok(Self::new_in(alloc))
     }
