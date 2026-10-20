@@ -167,13 +167,13 @@ mod tests {
         // just aggregate counts.
         use olive_test_helpers::{CloneBudget, FlakyCloneTrackedItem, Ledger};
         let ledger = Arc::new(Ledger::new());
-        let budget = Arc::new(CloneBudget::new(u32::MAX));
+        let budget = CloneBudget::new(u32::MAX);
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for i in 0..4u32 {
             dq.try_push_back(FlakyCloneTrackedItem::with_id(
                 &ledger,
                 i,
-                (*budget).share(),
+                budget.share(),
             ))
             .unwrap();
         }
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn into_iter_try_clone_fails_when_allocator_clone_fails() {
-        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(0));
         let mut d = VecDeque::new_in(alloc);
         d.try_push_back(1).unwrap();
         let it = d.into_iter();

@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn into_iter_try_clone_fails_when_allocator_clone_fails() {
-        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(0));
         let mut h = BinaryHeap::new_in(alloc);
         h.try_push(1).unwrap();
         let it = h.into_iter();

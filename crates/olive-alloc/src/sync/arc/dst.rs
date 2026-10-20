@@ -554,10 +554,10 @@ mod tests {
         // dropping the Arc must destroy the three clones exactly once, then
         // dropping the source vec destroys the three originals exactly once.
         let ledger = StdArc::new(Ledger::new());
-        let budget = StdArc::new(CloneBudget::new(u32::MAX));
+        let budget = CloneBudget::new(u32::MAX);
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
-            src.push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()));
+            src.push(FlakyCloneTrackedItem::construct(&ledger, budget.share()));
         }
 
         let arc: Arc<[FlakyCloneTrackedItem]> =
@@ -590,10 +590,10 @@ mod tests {
         // failure at element index 2. Rollback must discard the two transient
         // clones without leaking or double-freeing anything.
         let ledger = StdArc::new(Ledger::new());
-        let budget = StdArc::new(CloneBudget::new(2));
+        let budget = CloneBudget::new(2);
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..3 {
-            src.push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()));
+            src.push(FlakyCloneTrackedItem::construct(&ledger, budget.share()));
         }
         let res: Result<Arc<[FlakyCloneTrackedItem]>, TryCloneError> =
             Arc::try_clone_from_ref_in(&src[..], Global);

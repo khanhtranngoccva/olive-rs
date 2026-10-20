@@ -580,8 +580,7 @@ mod tests {
         // A flaky allocator with an exhausted clone budget must surface its
         // failure as a `TryCloneError` before any element work begins.
         use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
-        use std::sync::Arc;
-        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(0));
         let dq: VecDeque<i32, FlakyCloneAlloc> = VecDeque::new_in(alloc);
         let err = dq.try_clone().expect_err("allocator clone must fail");
         assert!(matches!(err, TryCloneError::Other(_)));
@@ -592,8 +591,7 @@ mod tests {
         // With a sufficient clone budget the clone succeeds and preserves the
         // logical order of elements.
         use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
-        use std::sync::Arc;
-        let alloc = FlakyCloneAlloc::new(Arc::new(CloneBudget::new(16)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(16));
         let mut dq: VecDeque<i32, FlakyCloneAlloc> = VecDeque::new_in(alloc);
         for v in [9, 8, 7] {
             dq.try_push_back(v).unwrap();
@@ -611,12 +609,12 @@ mod tests {
         // clone exactly once, no leaks, no double-frees.
         let ledger = Arc::new(Ledger::new());
         // Budget of 2 allows exactly two successful clones; the third fails.
-        let budget = Arc::new(CloneBudget::new(2));
+        let budget = CloneBudget::new(2);
 
         // Seed three elements into the source deque (ids 0, 1, 2).
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for _ in 0..3 {
-            dq.try_push_back(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+            dq.try_push_back(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
                 .unwrap();
         }
 

@@ -644,10 +644,9 @@ mod tests {
     #[test]
     fn try_clone_fails_when_allocator_clone_exhausted() {
         use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
-        use std::sync::Arc;
 
-        let budget = Arc::new(CloneBudget::new(0));
-        let alloc = FlakyCloneAlloc::new(budget.clone());
+        let budget = CloneBudget::new(0);
+        let alloc = FlakyCloneAlloc::new(budget);
         let mut map: BTreeMap<i32, i32, FlakyCloneAlloc> = BTreeMap::new_in(alloc);
         map.try_insert(1, 10).unwrap();
 
@@ -702,12 +701,11 @@ mod tests {
     #[test]
     fn try_clone_preserves_original_on_failure() {
         use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
-        use std::sync::Arc;
 
         // Build a map under a flaky allocator with enough budget for inserts,
         // then exhaust the budget so try_clone fails.
-        let budget = Arc::new(CloneBudget::new(5));
-        let alloc = FlakyCloneAlloc::new(budget.clone());
+        let budget = CloneBudget::new(5);
+        let alloc = FlakyCloneAlloc::new(budget.share());
         let mut map: BTreeMap<i32, i32, FlakyCloneAlloc> = BTreeMap::new_in(alloc);
         for i in 0..4 {
             map.try_insert(i, i).unwrap();

@@ -342,7 +342,7 @@ mod tests {
     fn try_clone_tuple_drops_prefix_on_failure() {
         let ledger = Arc::new(Ledger::new());
         // A budget of 2: the first two field clones succeed, the third fails.
-        let budget = Arc::new(CloneBudget::new(2));
+        let budget = CloneBudget::new(2);
         let src = (
             TrackedItem::construct(&ledger, budget.share()),
             TrackedItem::construct(&ledger, budget.share()),
@@ -415,7 +415,7 @@ mod tests {
         let ledger = Arc::new(Ledger::new());
         // A budget of 2: the first two element clones succeed, the third
         // fails.
-        let budget = Arc::new(CloneBudget::new(2));
+        let budget = CloneBudget::new(2);
         let src = [
             TrackedItem::construct(&ledger, budget.share()),
             TrackedItem::construct(&ledger, budget.share()),

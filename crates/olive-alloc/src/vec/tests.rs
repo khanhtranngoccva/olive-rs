@@ -446,11 +446,11 @@ fn resize_rollbacks_partial_on_clone_failure() {
     let ledger = Arc::new(Ledger::new());
     // Budget of 2: the standalone clone below consumes 1, leaving 1 for the
     // resize loop — so the loop appends one element then fails on the next.
-    let budget = Arc::new(CloneBudget::new(2));
+    let budget = CloneBudget::new(2);
 
     // Seed one live payload (id 0).
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
-    v.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+    v.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
         .unwrap();
 
     // Clone the seed out so we can hand it to try_resize by reference without
@@ -488,11 +488,11 @@ fn resize_rollbacks_partial_on_clone_failure() {
 #[test]
 fn extend_from_slice_rolls_back_on_clone_failure() {
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(2));
+    let budget = CloneBudget::new(2);
 
     // One live seed in the destination (id 0).
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
-    v.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+    v.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
         .unwrap();
 
     // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
@@ -500,7 +500,7 @@ fn extend_from_slice_rolls_back_on_clone_failure() {
     // then the third clone (of id 3) fails → rollback discards the two appends.
     let mut fv: Vec<FlakyCloneTrackedItem> = Vec::new();
     for _ in 0..3 {
-        fv.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+        fv.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
             .unwrap();
     }
 
@@ -766,17 +766,15 @@ fn into_iter_size_hint() {
 }
 
 /// Regression test: dropping an `IntoIter` partway through must drop only the
-/// not-yet-yielded tail. Before the fix, `next()` moved elements out with
-/// `ptr::read` but left `vec.len` unchanged, so the iterator's `Drop` (via
-/// `Vec`) re-dropped every already-yielded element — a double-free. Here we
-/// yield two of five, then drop the iterator; exactly three drops should occur
-/// (the unconsumed tail), and the two yielded values are dropped when their
+/// not-yet-yielded tail. Here we yield two of five, then drop the iterator; 
+/// exactly three drops should occur (the unconsumed tail), 
+/// and the two yielded values are dropped when their
 /// bindings go out of scope at the end of the block. The ledger records which
 /// specific ids were dropped so we can prove no id is ever dropped twice.
 #[test]
 fn into_iter_drop_mid_way_drops_only_tail() {
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
 
     // Yield two elements, then drop the iterator while three remain.
     {
@@ -785,7 +783,7 @@ fn into_iter_drop_mid_way_drops_only_tail() {
             v.try_push(FlakyCloneTrackedItem::with_id(
                 &ledger,
                 i,
-                (*budget).share(),
+                budget.share(),
             ))
             .unwrap();
         }
@@ -920,11 +918,6 @@ fn into_iter_zst_as_slice_length_matches_len() {
     assert_eq!(it.as_slice().len(), 0);
 }
 
-// The iterator owns its backing allocation (and thus its allocator) directly.
-// Dropping an unconsumed `IntoIter` must therefore drop the allocator exactly
-// once — neither leaking it nor double-dropping it. We wrap `Global` in a
-// counting allocator whose `Drop` records how many times it was destroyed,
-// then assert the count is exactly one after the iterator goes out of scope.
 #[test]
 fn into_iter_drops_allocator_exactly_once() {
     let counter = Arc::new(Counter::new());
@@ -1166,13 +1159,13 @@ fn into_raw_parts_roundtrip() {
 #[test]
 fn drop_runs_each_element_once() {
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..5u32 {
         v.try_push(FlakyCloneTrackedItem::with_id(
             &ledger,
             i,
-            (*budget).share(),
+            budget.share(),
         ))
         .unwrap();
     }
@@ -1198,15 +1191,15 @@ fn drop_runs_each_element_once() {
 #[test]
 fn dedup_by_panic_is_safe() {
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();
-        let b = budget.clone();
+        let b = budget.share();
         move || {
             let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
             for i in 0..6u8 {
-                v.try_push(FlakyCloneTrackedItem::with_id(&l, i as u32, (*b).share()))
+                v.try_push(FlakyCloneTrackedItem::with_id(&l, i as u32, b.share()))
                     .unwrap();
             }
             // Panic on the third predicate call, mid-gap-fill, so some duplicate
@@ -1971,14 +1964,14 @@ fn drain_exhausted_from_back_at_tail_is_safe() {
 #[test]
 fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
 
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
         v.try_push(FlakyCloneTrackedItem::with_id(
             &ledger,
             i,
-            (*budget).share(),
+            budget.share(),
         ))
         .unwrap();
     }
@@ -2190,14 +2183,14 @@ fn split_off_moves_all_elements_exactly_once() {
     // dropping anything, and that each element is destroyed exactly once when
     // its owning vec finally goes away — no double-free, no leak.
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
 
     let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
     for i in 0..6u32 {
         v.try_push(FlakyCloneTrackedItem::with_id(
             &ledger,
             i,
-            (*budget).share(),
+            budget.share(),
         ))
         .unwrap();
     }
@@ -2344,7 +2337,7 @@ fn extend_from_within_panic_is_safe() {
     struct PanickingItem {
         pub id: u32,
         pub ledger: Arc<Ledger>,
-        pub budget: Arc<CloneBudget>,
+        pub budget: CloneBudget,
     }
 
     impl Drop for PanickingItem {
@@ -2368,17 +2361,17 @@ fn extend_from_within_panic_is_safe() {
             Ok(PanickingItem {
                 id,
                 ledger: self.ledger.clone(),
-                budget: self.budget.clone(),
+                budget: self.budget.share(),
             })
         }
     }
 
     let ledger = Arc::new(Ledger::new());
-    let budget = Arc::new(CloneBudget::new(u32::MAX));
+    let budget = CloneBudget::new(u32::MAX);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
         let l = ledger.clone();
-        let b = budget.clone();
+        let b = budget.share();
         move || {
             let mut v: Vec<PanickingItem> = Vec::new();
             // Push 4 initial items (ids 0–3).
@@ -2388,7 +2381,7 @@ fn extend_from_within_panic_is_safe() {
                 v.try_push(PanickingItem {
                     id,
                     ledger: l.clone(),
-                    budget: b.clone(),
+                    budget: b.share(),
                 })
                 .unwrap();
             }

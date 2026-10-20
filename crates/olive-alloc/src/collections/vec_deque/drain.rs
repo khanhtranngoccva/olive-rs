@@ -518,13 +518,13 @@ mod tests {
         // — catching leaks and double-frees, not just aggregate counts.
         use olive_test_helpers::{CloneBudget, FlakyCloneTrackedItem, Ledger};
         let ledger = Arc::new(Ledger::new());
-        let budget = Arc::new(CloneBudget::new(u32::MAX));
+        let budget = CloneBudget::new(u32::MAX);
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::try_with_capacity(8).expect("ok");
         for i in 0..5u32 {
             dq.try_push_back_within_capacity(FlakyCloneTrackedItem::with_id(
                 &ledger,
                 i,
-                (*budget).share(),
+                budget.share(),
             ))
             .unwrap();
         }

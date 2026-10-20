@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn try_clone_fails_when_allocator_clone_fails() {
-        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(0)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(0));
         let mut v = Vec::new_in(alloc);
         v.try_push(1).unwrap();
         let it = v.into_iter();

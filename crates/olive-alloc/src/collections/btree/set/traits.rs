@@ -1030,10 +1030,9 @@ mod tests {
     #[test]
     fn try_clone_fails_when_allocator_clone_exhausted() {
         use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
-        use std::sync::Arc;
 
-        let budget = Arc::new(CloneBudget::new(0));
-        let alloc = FlakyCloneAlloc::new(budget.clone());
+        let budget = CloneBudget::new(0);
+        let alloc = FlakyCloneAlloc::new(budget);
         let mut set: BTreeSet<i32, FlakyCloneAlloc> = BTreeSet::new_in(alloc);
         set.try_insert(1).unwrap();
 

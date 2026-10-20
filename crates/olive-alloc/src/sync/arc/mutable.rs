@@ -311,7 +311,7 @@ mod tests {
     fn try_make_mut_shared_oom_on_alloc_clone() {
         // Budget of 1: try_clone consumes it, leaving 0 for try_make_mut's
         // internal allocator clone.
-        let alloc = FlakyCloneAlloc::new(StdArc::new(CloneBudget::new(1)));
+        let alloc = FlakyCloneAlloc::new(CloneBudget::new(1));
         let arc = Arc::try_new_in(5i32, alloc).unwrap();
         let arc2 = arc.try_clone().unwrap(); // consumes the last budget unit
         let mut arc = arc;
@@ -330,13 +330,13 @@ mod tests {
         // allocator clone consumes the last one, leaving 0 for the element
         // clones inside try_clone_from_ref_in.
         let ledger = StdArc::new(Ledger::new());
-        let budget = StdArc::new(CloneBudget::new(2));
-        let alloc = FlakyCloneAlloc::new(budget.clone());
+        let budget = CloneBudget::new(2);
+        let alloc = FlakyCloneAlloc::new(budget.share());
 
         // Build a 2-element slice payload; each item shares the same budget.
         let mut src: Vec<FlakyCloneTrackedItem> = Vec::new();
         for _ in 0..2 {
-            src.try_push(FlakyCloneTrackedItem::construct(&ledger, (*budget).share()))
+            src.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
                 .unwrap();
         }
         let arc = Arc::try_new_in(src, alloc).unwrap();
@@ -356,8 +356,8 @@ mod tests {
 
     #[test]
     fn try_make_mut_steal_oom_on_allocation() {
-        let budget = StdArc::new(CloneBudget::new(1));
-        let flaky = FlakyCloneAlloc::new(budget.clone());
+        let budget = CloneBudget::new(1);
+        let flaky = FlakyCloneAlloc::new(budget);
         let arc = Arc::try_new_in(99i32, flaky).unwrap();
         let weak = Arc::try_downgrade(&arc).unwrap();
         let mut arc = arc;
