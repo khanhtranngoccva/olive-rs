@@ -42,7 +42,7 @@ use core::hash::Hash;
 use core::hash::Hasher;
 use core::iter::FusedIterator;
 use core::ops::{Deref, DerefMut};
-use core::ptr;
+use core::{mem, ptr};
 pub use into_chars::IntoChars;
 
 use olive_core::alloc_errors::TryReserveError;
@@ -368,7 +368,8 @@ impl<A: Allocator> String<A> {
         }
     }
 
-    /// Leaks the string, returning a string reference over the allocator's lifetime.
+    /// Leaks the string and its allocator instance, returning a string reference 
+    /// over the allocator's lifetime.
     ///
     /// The allocation is intentionally leaked; the caller owns the memory forever.
     /// The underlying bytes remain valid UTF-8.
@@ -381,13 +382,15 @@ impl<A: Allocator> String<A> {
         // out of allocator scope.
         A: 'a,
     {
-        let (ptr, len, _cap, _alloc) = unsafe { self.buf.into_raw_parts_with_alloc() };
+        let (ptr, len, _cap, alloc) = unsafe { self.buf.into_raw_parts_with_alloc() };
+        // Must leak the allocator to prevent the backing storage from being lost.
+        mem::forget(alloc);
         // SAFETY: `ptr` points to `len` bytes of valid UTF-8 allocated by
         // `alloc`; reinterpreting the fat pointer as `str` preserves the
         // invariant and keeps the same allocator for eventual deallocation.
         unsafe {
             let str_ptr: *mut str = ptr::slice_from_raw_parts_mut(ptr, len) as *mut str;
-            str_ptr.as_mut().expect("pointer is non-null")
+            str_ptr.as_mut().expect("pointer is non-nul l")
         }
     }
 

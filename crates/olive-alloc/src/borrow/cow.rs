@@ -248,22 +248,6 @@ where
     }
 }
 
-// Cow is Send only when both variants are Send.
-unsafe impl<B> Send for Cow<'_, B>
-where
-    B: Send + TryToOwned + ?Sized,
-    B::Owned: Send,
-{
-}
-
-// Cow is Sync only when both variants are Sync.
-unsafe impl<B> Sync for Cow<'_, B>
-where
-    B: ?Sized + TryToOwned + Sync,
-    B::Owned: Sync,
-{
-}
-
 impl<B> fmt::Debug for Cow<'_, B>
 where
     B: ?Sized + TryToOwned + fmt::Debug,
