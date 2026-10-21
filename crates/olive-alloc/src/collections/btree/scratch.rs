@@ -181,7 +181,7 @@ impl<'a, K, V, A: Allocator> Nodes<'a, K, V, A> {
         node: Box<InternalNode<K, V>, &'a A>,
     ) -> Result<(), AllocError> {
         debug_assert!(
-            core::ptr::eq(*node.allocator(), self.alloc),
+            core::ptr::eq(*Box::allocator(&node), self.alloc),
             "push_internal: allocator mismatch"
         );
         if self.depth >= MAX_RESERVE_INTERNALS {
@@ -214,7 +214,7 @@ impl<'a, K, V, A: Allocator> Nodes<'a, K, V, A> {
     /// leak the first allocation; it is a caller bug and unrecoverable.
     pub(super) unsafe fn set_leaf(&mut self, leaf: Box<LeafNode<K, V>, &'a A>) {
         debug_assert!(
-            core::ptr::eq(*leaf.allocator(), self.alloc),
+            core::ptr::eq(*Box::allocator(&leaf), self.alloc),
             "set_leaf: allocator mismatch"
         );
         assert!(

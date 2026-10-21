@@ -112,4 +112,70 @@ impl<T: ?Sized, A: Allocator> Drop for Box<T, A> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    extern crate std;
+
+    use core::marker::PhantomPinned;
+    use core::pin::Pin;
+    use olive_test_helpers::{PanicArmer, PanickyDrop};
+    use stock_alloc::sync::Arc;
+
+    use super::*;
+    use crate::alloc::CountingAllocator;
+
+    struct PanicOnDrop {
+        _payload: u32,
+        _pin: PhantomPinned,
+    }
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("forced panic in pointee drop");
+        }
+    }
+
+    #[test]
+    fn test_box_plain_panic_on_drop_frees_allocation() {
+        // Pass a *reference* to the allocator so the box stores a `&CountingAllocator`;
+        // we keep the original handle to read the counters after the (panicking) drop.
+        let alloc = CountingAllocator::new();
+        let armer = Arc::new(PanicArmer::new());
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let b: Box<PanickyDrop, &CountingAllocator> =
+                Box::try_new_in(PanickyDrop::new(armer.clone()), &alloc).unwrap();
+            armer.arm();
+            drop(b);
+        }));
+        assert!(res.is_err(), "expected the pointee drop to panic");
+        assert_eq!(alloc.allocations(), 1, "expected one allocation");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "plain Box must free its allocation even when the pointee's drop panics"
+        );
+    }
+
+    #[test]
+    fn test_box_pinned_panic_on_drop_frees_allocation() {
+        let alloc = CountingAllocator::new();
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Custom struct was used - need a pinned struct.
+            let p: Pin<Box<PanicOnDrop, &CountingAllocator>> = Box::try_pin_in(
+                PanicOnDrop {
+                    _payload: 0,
+                    _pin: PhantomPinned,
+                },
+                &alloc,
+            )
+            .unwrap();
+            drop(p);
+        }));
+        assert!(res.is_err(), "expected the pointee drop to panic");
+        assert_eq!(alloc.allocations(), 1, "expected one allocation");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "Pin<Box> must free its allocation even when the pointee's drop panics"
+        );
+    }
+}

@@ -169,3 +169,199 @@ impl<T, A: Allocator> Box<[T], A> {
         Ok(unsafe { buf.into_box(n) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alloc::CountingAllocator;
+    use olive_test_helpers::{FailAlloc, MaybeUnclonable};
+
+    #[test]
+    fn box_clone_from_ref() {
+        let bs: Box<str> = Box::try_clone_from_ref("hello world").unwrap();
+        assert_eq!(&*bs, "hello world");
+        assert_eq!(bs.len(), 11);
+    }
+
+    #[test]
+    fn box_clone_from_ref_in() {
+        let bs: Box<str> = Box::try_clone_from_ref_in("hello world", Global).unwrap();
+        assert_eq!(&*bs, "hello world");
+        assert_eq!(bs.len(), 11);
+    }
+
+    #[test]
+    fn box_clone_from_ref_in_oom() {
+        let e = Box::<str, FailAlloc>::try_clone_from_ref_in("oom", FailAlloc).unwrap_err();
+        assert!(matches!(e, TryCloneError::Alloc(_)));
+    }
+
+    #[test]
+    fn box_clone_from_ref_in_element_clone_fails() {
+        // Allocation succeeds, then the element's `TryClone` fails: the
+        // element-level error must surface unchanged.
+        let src = [
+            MaybeUnclonable::unclonable(1u32),
+            MaybeUnclonable::clonable(2u32),
+        ];
+        let e = Box::<[MaybeUnclonable<u32>]>::try_clone_from_ref_in(&src[..], Global).unwrap_err();
+        assert!(matches!(e, TryCloneError::Other("unclonable")));
+    }
+
+    #[test]
+    fn box_clone_from_ref_in_guard_deallocates_on_clone_failure() {
+        // When the element clone fails after a successful allocation, the
+        // `DeallocDropGuard` must release the block.
+        let alloc = CountingAllocator::new();
+        let src = [MaybeUnclonable::unclonable(1u32)];
+        let e = Box::<[MaybeUnclonable<u32>], &CountingAllocator>::try_clone_from_ref_in(
+            &src[..],
+            &alloc,
+        )
+        .unwrap_err();
+        assert!(matches!(e, TryCloneError::Other("unclonable")));
+        assert_eq!(alloc.allocations(), 1, "one allocation before the failure");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "guard must deallocate after the element clone fails"
+        );
+    }
+
+    #[test]
+    fn box_slice_try_from_slice() {
+        let src = [1, 2, 3, 4, 5];
+        let bs: Box<[i32]> = Box::try_from_slice(&src).unwrap();
+        assert_eq!(bs.len(), 5);
+        assert_eq!(bs[0], 1);
+        assert_eq!(bs[4], 5);
+    }
+
+    #[test]
+    fn box_slice_try_from_slice_chars() {
+        let src = ['a', 'b', 'c'];
+        let bs = Box::try_from_slice(&src).unwrap();
+        assert_eq!(bs.len(), 3);
+        assert_eq!(bs[1], 'b');
+    }
+
+    #[test]
+    fn box_slice_try_clone() {
+        let orig: Box<[i32]> = Box::try_from_slice(&[1, 2, 3]).unwrap();
+        let cloned: Box<[i32]> = orig.try_clone().unwrap();
+        assert_eq!(orig, cloned);
+        assert_ne!(Box::as_ptr(&orig), Box::as_ptr(&cloned));
+    }
+
+    #[test]
+    fn box_slice_try_from_slice_in_element_clone_fails() {
+        let src = [
+            MaybeUnclonable::unclonable(1u32),
+            MaybeUnclonable::clonable(2u32),
+        ];
+        let e = Box::<[MaybeUnclonable<u32>]>::try_from_slice_in(&src[..], Global).unwrap_err();
+        assert!(matches!(e, TryCloneError::Other("unclonable")));
+    }
+
+    #[test]
+    fn box_slice_try_from_slice_in_oom() {
+        // try_from_slice_in routes through `try_clone_from_ref_in`: the block
+        // allocation failure must surface as a `TryCloneError::Alloc`.
+        let e = Box::<[u32], FailAlloc>::try_from_slice_in(&[1, 2, 3, 4], FailAlloc).unwrap_err();
+        assert!(matches!(e, TryCloneError::Alloc(_)));
+    }
+
+    #[test]
+    fn box_slice_try_from_slice_in_zst() {
+        let b = Box::<[()], FailAlloc>::try_from_slice_in(&[(), (), (), ()], FailAlloc).unwrap();
+        assert_eq!(b.len(), 4);
+    }
+
+    #[test]
+    fn box_new_uninit_slice_empty() {
+        // A zero-length allocation is a valid empty box; no elements to touch.
+        let bs: Box<[MaybeUninit<i32>]> = Box::try_new_uninit_slice(0).unwrap();
+        assert_eq!(bs.len(), 0);
+    }
+    #[test]
+    fn box_new_uninit_slice_zst() {
+        // ZST slices have no backing bytes; the length is still honored and the
+        // box drops without touching the heap.
+        let bs: Box<[MaybeUninit<()>]> = Box::try_new_uninit_slice(5).unwrap();
+        assert_eq!(bs.len(), 5);
+    }
+
+    #[test]
+    fn box_new_uninit_slice_in_custom_allocator() {
+        // Route through a counting allocator to prove the `_in` seam works and the
+        // allocation is actually charged to it.
+        let alloc = CountingAllocator::new();
+        let bs: Box<[MaybeUninit<u32>], &CountingAllocator> =
+            Box::try_new_uninit_slice_in(8, &alloc).unwrap();
+        assert_eq!(bs.len(), 8);
+        drop(bs);
+        assert_eq!(alloc.allocations(), 1, "expected one allocation");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "expected one deallocation on drop"
+        );
+    }
+
+    #[test]
+    fn box_new_uninit_slice_in_oom() {
+        let e = Box::<[MaybeUninit<u32>], FailAlloc>::try_new_uninit_slice_in(4, FailAlloc)
+            .unwrap_err();
+        assert!(matches!(e, AllocError));
+    }
+
+    #[test]
+    fn box_new_uninit_slice_zst_under_fail_alloc() {
+        // Zero-sized layouts never reach the failing allocator: a ZST slice
+        // must still construct even though every sized allocation of
+        // `FailAlloc` fails.
+        let bs: Box<[MaybeUninit<()>], FailAlloc> =
+            Box::try_new_uninit_slice_in(5, FailAlloc).unwrap();
+        assert_eq!(bs.len(), 5);
+    }
+
+    #[test]
+    fn box_new_zeroed_slice_zst() {
+        // ZST slices have no backing bytes; the length is still honored and the
+        // box drops without touching the heap.
+        let bs: Box<[MaybeUninit<()>]> = Box::try_new_zeroed_slice(5).unwrap();
+        assert_eq!(bs.len(), 5);
+    }
+
+    #[test]
+    fn box_new_zeroed_slice_in_custom_allocator() {
+        let alloc = CountingAllocator::new();
+        let bs: Box<[MaybeUninit<u32>], &CountingAllocator> =
+            Box::try_new_zeroed_slice_in(8, &alloc).unwrap();
+        assert_eq!(bs.len(), 8);
+        drop(bs);
+        assert_eq!(alloc.allocations(), 1, "expected one allocation");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "expected one deallocation on drop"
+        );
+    }
+
+    #[test]
+    fn box_new_zeroed_slice_in_oom() {
+        let e = Box::<[MaybeUninit<u32>], FailAlloc>::try_new_zeroed_slice_in(4, FailAlloc)
+            .unwrap_err();
+        assert!(matches!(e, AllocError));
+    }
+
+    #[test]
+    fn box_new_zeroed_slice_zst_under_fail_alloc() {
+        // Zero-sized layouts never reach the failing allocator: a ZST slice
+        // must still construct even though every sized allocation of
+        // `FailAlloc` fails.
+        let bs: Box<[MaybeUninit<()>], FailAlloc> =
+            Box::try_new_zeroed_slice_in(5, FailAlloc).unwrap();
+        assert_eq!(bs.len(), 5);
+    }
+}

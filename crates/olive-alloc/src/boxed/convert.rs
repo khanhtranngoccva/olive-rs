@@ -215,51 +215,142 @@ impl<A: Allocator> Box<dyn Error + Send + Sync, A> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Iterator forwarding for Box<I, A> where I: Iterator + ?Sized
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::vec_init_then_push)]
 
-impl<I: Iterator + ?Sized, A: Allocator> Iterator for Box<I, A> {
-    type Item = <I as Iterator>::Item;
+    extern crate std;
+    use super::*;
+    use crate::alloc::CountingAllocator;
+    use core::fmt;
 
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        (**self).next()
+    #[test]
+    fn test_box_str_to_bytes() {
+        let bs: Box<str> = Box::try_clone_from_ref("xyz").unwrap();
+        let bytes: Box<[u8]> = Box::from(bs);
+        assert_eq!(&bytes[..], b"xyz");
     }
 
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (**self).size_hint()
+    #[test]
+    fn test_box_slice_try_from() {
+        let bs: Box<[i32]> = Box::try_from_slice(&[1, 2, 3]).unwrap();
+        let arr: Box<[i32; 3]> = Box::try_from(bs).unwrap();
+        assert_eq!(arr[0], 1);
+        assert_eq!(arr[2], 3);
+
+        let bs: Box<[i32]> = Box::try_from_slice(&[1, 2]).unwrap();
+        let result: Result<Box<[i32; 3]>, Box<[i32]>> = Box::try_from(bs);
+        assert!(result.is_err());
     }
 
-    #[inline]
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        (**self).nth(n)
+    #[test]
+    fn test_box_into_inner() {
+        // `into_inner` must move the value out and deallocate the block
+        // through the box's own allocator.
+        let alloc = CountingAllocator::new();
+        let b: Box<u32, &CountingAllocator> = Box::try_new_in(42u32, &alloc).unwrap();
+        let value = Box::into_inner(b);
+        assert_eq!(value, 42);
+        assert_eq!(alloc.allocations(), 1, "one allocation");
+        assert_eq!(
+            alloc.deallocations(),
+            1,
+            "into_inner must deallocate the block"
+        );
     }
 
-    #[inline]
-    fn last(self) -> Option<Self::Item> {
-        #[inline]
-        fn some<T>(_: Option<T>, x: T) -> Option<T> {
-            Some(x)
+    #[test]
+    fn test_box_any_downcast() {
+        // Build a `Box<dyn Any>` by boxing the concrete value and unsize-coercing
+        // through a raw fat pointer (our `Box::try_new` is sized-only).
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut dyn Any = raw as *mut dyn Any;
+        let b: Box<dyn Any, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = b.downcast::<i32>().unwrap();
+        assert_eq!(*recovered, 42);
+
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut dyn Any = raw as *mut dyn Any;
+        let b: Box<dyn Any, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        assert!(b.downcast::<f64>().is_err());
+    }
+
+    #[test]
+    fn test_box_any_send_downcast() {
+        // Same exercise as `test_box_any_downcast`, but through the
+        // `dyn Any + Send` impl.
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut (dyn Any + Send) = raw as *mut (dyn Any + Send);
+        let b: Box<dyn Any + Send, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = b.downcast::<i32>().unwrap();
+        assert_eq!(*recovered, 42);
+
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut (dyn Any + Send) = raw as *mut (dyn Any + Send);
+        let b: Box<dyn Any + Send, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        assert!(b.downcast::<f64>().is_err());
+    }
+
+    #[test]
+    fn test_box_any_send_sync_downcast() {
+        // Same exercise through the `dyn Any + Send + Sync` impl.
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut (dyn Any + Send + Sync) = raw as *mut (dyn Any + Send + Sync);
+        let b: Box<dyn Any + Send + Sync, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = b.downcast::<i32>().unwrap();
+        assert_eq!(*recovered, 42);
+
+        let boxed_i32: Box<i32, Global> = Box::try_new_in(42i32, Global).unwrap();
+        let raw: *mut i32 = Box::into_raw(boxed_i32);
+        let fat: *mut (dyn Any + Send + Sync) = raw as *mut (dyn Any + Send + Sync);
+        let b: Box<dyn Any + Send + Sync, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        assert!(b.downcast::<f64>().is_err());
+    }
+
+    #[derive(Debug)]
+    struct MyErr(u32);
+    impl fmt::Display for MyErr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "my error {}", self.0)
         }
+    }
+    impl Error for MyErr {}
 
-        self.fold(None, some)
+    #[test]
+    fn test_box_error_downcast() {
+        // Box the concrete error and unsize-coerce through a raw fat pointer.
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(0)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut dyn Error = raw as *mut dyn Error;
+        let e: Box<dyn Error, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = e.downcast::<MyErr>().unwrap();
+        let _ = recovered; // just verify it works
+    }
+
+    #[test]
+    fn test_box_error_send_downcast() {
+        // Box the concrete error and unsize-coerce through a raw fat pointer.
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(7)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut (dyn Error + Send) = raw as *mut (dyn Error + Send);
+        let e: Box<dyn Error + Send, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = e.downcast::<MyErr>().unwrap();
+        assert_eq!(recovered.0, 7);
+    }
+
+    #[test]
+    fn test_box_error_send_sync_downcast() {
+        // Box the concrete error and unsize-coerce through a raw fat pointer.
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(9)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut (dyn Error + Send + Sync) = raw as *mut (dyn Error + Send + Sync);
+        let e: Box<dyn Error + Send + Sync, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let recovered = e.downcast::<MyErr>().unwrap();
+        assert_eq!(recovered.0, 9);
     }
 }
-
-impl<I: DoubleEndedIterator + ?Sized, A: Allocator> DoubleEndedIterator for Box<I, A> {
-    #[inline]
-    fn next_back(&mut self) -> Option<<I as Iterator>::Item> {
-        (**self).next_back()
-    }
-
-    #[inline]
-    fn nth_back(&mut self, n: usize) -> Option<<I as Iterator>::Item> {
-        (**self).nth_back(n)
-    }
-}
-
-impl<I: core::iter::FusedIterator + ?Sized, A: Allocator> core::iter::FusedIterator for Box<I, A> {}
-
-impl<I: ExactSizeIterator + ?Sized, A: Allocator> ExactSizeIterator for Box<I, A> {}

@@ -94,7 +94,7 @@ impl<K, V> LeafNode<K, V> {
 
     /// Creates a new boxed `LeafNode`.
     pub(super) fn new<A: Allocator>(alloc: &A) -> Result<Box<Self, &A>, AllocError> {
-        let mut leaf = Box::try_new_uninit_in(alloc)?;
+        let mut leaf: Box<MaybeUninit<Self>, &A> = Box::try_new_uninit_in(alloc)?;
         unsafe {
             // SAFETY: `leaf` points to allocated memory for a `LeafNode`, which
             // we initialize in place before treating the box as initialized.

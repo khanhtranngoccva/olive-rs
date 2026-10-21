@@ -217,3 +217,81 @@ impl<T: ?Sized, A: Allocator> Box<T, A> {
         unsafe { &mut *ptr }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::vec_init_then_push)]
+
+    extern crate std;
+
+    use super::*;
+    use std::string::String;
+    use std::vec;
+    use std::vec::Vec;
+
+    #[test]
+    fn test_box_into_raw_from_raw_roundtrip() {
+        let b = Box::try_new(String::from("hello")).unwrap();
+        let raw: *mut String = Box::into_raw(b);
+        assert_eq!(unsafe { &*raw }, "hello");
+
+        let b: Box<String, Global> = unsafe { Box::from_raw(raw) };
+        assert_eq!(&**b, "hello");
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "this test leaks memory")]
+    fn test_box_leak() {
+        let b = Box::try_new(vec![1, 2, 3]).unwrap();
+        let leaked: &'static mut Vec<i32> = Box::leak(b);
+        assert_eq!(leaked, &vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_box_dyn_trait_object() {
+        trait Greet {
+            fn greet(&self) -> String;
+        }
+        // Non-zero-sized payload so the boxed trait object owns real data on
+        // the heap (the vtable itself lives in the fat pointer's metadata).
+        #[allow(dead_code)]
+        struct Dog {
+            tag: u64,
+        }
+        impl Greet for Dog {
+            fn greet(&self) -> String {
+                String::from("woof")
+            }
+        }
+        // Box the concrete type, then unsize-coerce to a trait object through a
+        // raw fat pointer. The concrete allocation carries the payload and the
+        // coercion attaches the vtable — the sound way to get a `Box<dyn Trait>`.
+        let boxed: Box<Dog, Global> = Box::try_new(Dog { tag: 1 }).unwrap();
+        let raw: *mut Dog = Box::into_raw(boxed);
+        let fat: *mut dyn Greet = raw as *mut dyn Greet;
+        let b: Box<dyn Greet, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        assert_eq!(b.greet(), "woof");
+    }
+
+    #[test]
+    fn test_box_dyn_zst_concrete() {
+        trait Greet {
+            fn greet(&self) -> String;
+        }
+        struct Empty; // ZST
+        impl Greet for Empty {
+            fn greet(&self) -> String {
+                String::from("...")
+            }
+        }
+        // A ZST behind a trait object has no data bytes on the heap; only the
+        // vtable (in the fat-pointer metadata) distinguishes it. Boxing the
+        // concrete value and unsize-coercing through a raw fat pointer yields a
+        // working `Box<dyn Greet>` whose methods dispatch via the vtable.
+        let boxed: Box<Empty, Global> = Box::try_new(Empty).unwrap();
+        let raw: *mut Empty = Box::into_raw(boxed);
+        let fat: *mut dyn Greet = raw as *mut dyn Greet;
+        let b: Box<dyn Greet, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        assert_eq!(b.greet(), "...");
+    }
+}
