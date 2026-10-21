@@ -59,23 +59,17 @@ impl<T> Arc<T, Global> {
         Self::try_new_uninit_in(Global)
     }
 
-    /// Allocates a new `Arc<T>` with all bytes zeroed on the global allocator.
+    /// Allocates a new `Arc<MaybeUninit<T>>` with all bytes zeroed on the global allocator.
     ///
     /// This is useful for types where zeroed memory represents a valid value
-    /// (e.g. integers, `bool`, enums without data). For arbitrary types, the
-    /// result may be invalid; use with care.
-    ///
-    /// # Safety note
-    ///
-    /// Although this method is safe to call, the resulting `T` is only valid
-    /// if zeroed memory is a valid representation of `T`. The caller is
-    /// responsible for ensuring this invariant.
+    /// (e.g. integers, `bool`, enums without data), in which case a simple
+    /// [`Self::assume_init`] is sufficient.
     ///
     /// # Errors
     ///
     /// Returns [`crate::alloc::AllocError`] if the allocation fails.
     #[inline]
-    pub fn try_new_zeroed() -> Result<Self, crate::alloc::AllocError> {
+    pub fn try_new_zeroed() -> Result<Arc<MaybeUninit<T>>, crate::alloc::AllocError> {
         Self::try_new_zeroed_in(Global)
     }
 }
@@ -178,19 +172,24 @@ impl<T, A: Allocator> Arc<T, A> {
         })
     }
 
-    /// Allocates a new `Arc<T>` with all bytes zeroed, parameterized over the
+    /// Allocates a new `Arc<MaybeUninit<T>>` with all bytes zeroed, parameterized over the
     /// allocator.
+    ///
+    /// This is useful for types where zeroed memory represents a valid value
+    /// (e.g. integers, `bool`, enums without data), in which case a simple
+    /// [`Self::assume_init`] is sufficient.
     ///
     /// # Errors
     ///
     /// Returns [`crate::alloc::AllocError`] if the allocation fails.
     #[inline]
-    pub fn try_new_zeroed_in(alloc: A) -> Result<Self, crate::alloc::AllocError> {
+    pub fn try_new_zeroed_in(alloc: A) -> Result<Arc<MaybeUninit<T>, A>, crate::alloc::AllocError> {
         let layout = Layout::new::<ArcInner<T>>();
         let block = alloc.allocate_zeroed(layout)?;
         // SAFETY: `allocate_zeroed` returns a valid, aligned, non-null pointer
         // to a freshly allocated block of at least `layout.size()` bytes.
-        let ptr = unsafe { NonNull::new_unchecked(block.cast::<ArcInner<T>>().as_ptr()) };
+        let ptr =
+            unsafe { NonNull::new_unchecked(block.cast::<ArcInner<MaybeUninit<T>>>().as_ptr()) };
         // Seed the refcount headers to (1, 1) on top of the zero-filled block.
         // SAFETY: a successful allocation returns a live, aligned block whose
         // header fields are not yet initialized as valid atomics, and no other
@@ -318,7 +317,9 @@ mod tests {
 
     #[test]
     fn try_new_zeroed_yields_zeroed_payload() {
-        let arc: Arc<u64, Global> = Arc::try_new_zeroed().unwrap();
+        let arc: Arc<MaybeUninit<u64>, Global> = Arc::try_new_zeroed().unwrap();
+        // We are initializing over zeroes.
+        let a = unsafe { arc.assume_init() };
         assert_eq!(*arc, 0u64);
         assert_eq!(Arc::strong_count(&arc), 1);
         assert_eq!(Arc::weak_count(&arc), 0);
@@ -415,7 +416,8 @@ mod tests {
 
     #[test]
     fn try_new_zeroed_in_oom_errors() {
-        let res: Result<Arc<u8, FailAlloc>, AllocError> = Arc::try_new_zeroed_in(FailAlloc);
+        let res: Result<Arc<MaybeUninit<u8>, FailAlloc>, AllocError> =
+            Arc::try_new_zeroed_in(FailAlloc);
         assert!(res.is_err());
     }
 

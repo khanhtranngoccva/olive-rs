@@ -100,23 +100,18 @@ impl<T> Rc<T, Global> {
         Self::try_new_uninit_in(Global)
     }
 
-    /// Allocates a new `Rc<T>` with all bytes zeroed on the global allocator.
+    /// Allocates a new `Rc<MaybeUninit<T>>` with all bytes zeroed on
+    /// the global allocator.
     ///
     /// This is useful for types where zeroed memory represents a valid value
-    /// (e.g. integers, `bool`, enums without data). For arbitrary types, the
-    /// result may be invalid; use with care.
-    ///
-    /// # Safety note
-    ///
-    /// Although this method is safe to call, the resulting `T` is only valid
-    /// if zeroed memory is a valid representation of `T`. The caller is
-    /// responsible for ensuring this invariant.
+    /// (e.g. integers, `bool`, enums without data), in which case a simple
+    /// [`Self::assume_init`] is sufficient.
     ///
     /// # Errors
     ///
     /// Returns [`AllocError`] if the allocation fails.
     #[inline]
-    pub fn try_new_zeroed() -> Result<Self, AllocError> {
+    pub fn try_new_zeroed() -> Result<Rc<MaybeUninit<T>>, AllocError> {
         Self::try_new_zeroed_in(Global)
     }
 
@@ -227,19 +222,24 @@ impl<T, A: Allocator> Rc<T, A> {
         Ok(unsafe { uninit.into_rc() })
     }
 
-    /// Allocates a new `Rc<T>` with all bytes zeroed, parameterized over the
+    /// Allocates a new `Rc<MaybeUninit<T>>` with all bytes zeroed, parameterized over the
     /// allocator.
+    ///
+    /// This is useful for types where zeroed memory represents a valid value
+    /// (e.g. integers, `bool`, enums without data), in which case a simple
+    /// [`Self::assume_init`] is sufficient.
     ///
     /// # Errors
     ///
     /// Returns [`AllocError`] if the allocation fails.
     #[inline]
-    pub fn try_new_zeroed_in(alloc: A) -> Result<Self, AllocError> {
+    pub fn try_new_zeroed_in(alloc: A) -> Result<Rc<MaybeUninit<T>, A>, AllocError> {
         let layout = Layout::new::<RcInner<T>>();
         let block = alloc.allocate_zeroed(layout)?;
         // SAFETY: `allocate_zeroed` returns a valid, aligned, non-null pointer
         // to a freshly allocated block of at least `layout.size()` bytes.
-        let ptr = unsafe { NonNull::new_unchecked(block.cast::<RcInner<T>>().as_ptr()) };
+        let ptr =
+            unsafe { NonNull::new_unchecked(block.cast::<RcInner<MaybeUninit<T>>>().as_ptr()) };
         // Initialize the refcount headers (the rest of the block is already
         // zeroed by the allocator).
         unsafe {
