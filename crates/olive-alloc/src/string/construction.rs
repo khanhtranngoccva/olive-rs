@@ -199,7 +199,13 @@ mod tests {
         assert!(alloc.deallocations() >= 1);
     }
 
-    // FIXME: Need a failure path for OOM
+    #[test]
+    fn try_with_capacity_in_oom_returns_error() {
+        // Deterministic failure: FailAlloc refuses every non-zero-size
+        // allocation.
+        let err = String::try_with_capacity_in(16, FailAlloc).unwrap_err();
+        assert!(err.is_alloc());
+    }
 
     // ── String::try_from_str_in ───────────────────────────────────────────────
 
@@ -213,7 +219,11 @@ mod tests {
         assert!(alloc.allocations() >= 1);
     }
 
-    // FIXME: Need a failure path for OOM
+    #[test]
+    fn try_from_str_in_oom_returns_error() {
+        let err = String::try_from_str_in("payload", FailAlloc).unwrap_err();
+        assert!(err.is_alloc());
+    }
 
     // ── Default / TryDefault ──────────────────────────────────────────────────
 
@@ -225,6 +235,15 @@ mod tests {
     }
 
     #[test]
+    fn try_default_success_yields_empty_string() {
+        // FailAlloc's TryDefault yields an allocator without allocating, so
+        // even a failing allocator can produce an empty string.
+        let s = <String<FailAlloc> as TryDefault>::try_default().unwrap();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+    }
+
+    #[test]
     fn try_default_failure_propagates_allocator_error() {
         let e = <String<FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
         assert!(matches!(
@@ -232,6 +251,4 @@ mod tests {
             TryDefaultError::Other("allocator default failed")
         ));
     }
-
-    // FIXME: Success case for TryDefault is missing
 }

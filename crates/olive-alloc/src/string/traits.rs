@@ -183,6 +183,8 @@ impl<'a> TryFromIterator<&'a str> for String {
     }
 }
 
+// FIXME: add try_from_iterator_in or something like that
+
 impl<A: Allocator> Write for String<A> {
     /// Makes [`String`] usable as a fallible formatting sink.
     ///
@@ -205,7 +207,7 @@ mod tests {
 
     use super::*;
     use olive_core::try_traits::try_collect::TryCollect;
-    use olive_test_helpers::FailAlloc;
+    use olive_test_helpers::{BudgetedAlloc, FailAlloc};
     use std::format;
 
     fn mk(s: &str) -> String {
@@ -301,7 +303,20 @@ mod tests {
         assert_ne!(s.as_bytes().as_ptr(), c.as_bytes().as_ptr());
     }
 
-    // FIXME: handle OOM errors
+    #[test]
+    fn try_clone_oom_returns_reserve_error() {
+        let alloc = BudgetedAlloc::new(1);
+        let s: String<BudgetedAlloc> =
+            String::try_from_str_in("original", alloc.try_clone().unwrap()).unwrap();
+
+        // The clone needs a fresh allocation, which the drained budget
+        // refuses.
+        alloc.drain();
+        let err = s.try_clone().unwrap_err();
+        assert!(matches!(err, TryCloneError::Reserve(_)));
+        // The original is untouched.
+        assert_eq!(s.deref(), "original");
+    }
 
     // ── TryExtend<char> ───────────────────────────────────────────────────────
 
@@ -312,7 +327,24 @@ mod tests {
         assert_eq!(s.deref(), "abc");
     }
 
-    // FIXME: handle OOM errors
+    #[test]
+    fn extend_chars_oom_returns_resume_with_stranded_head() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut s = String::try_with_capacity_in(3, alloc.try_clone().unwrap()).unwrap();
+        s.try_push_str("abc").unwrap();
+
+        // The string is full, so pushing must reserve first.
+        alloc.drain();
+        let Err((resume, err)) = s.try_extend(['x', 'y'].into_iter()) else {
+            panic!("expected reservation failure");
+        };
+        assert!(err.is_alloc());
+        // The failing element is stranded as the resume head; nothing was
+        // inserted.
+        assert!(resume.has_head());
+        assert_eq!(*resume.head().unwrap(), 'x');
+        assert_eq!(s.deref(), "abc");
+    }
 
     // ── TryExtend<&str> ───────────────────────────────────────────────────────
 
@@ -323,7 +355,21 @@ mod tests {
         assert_eq!(s.deref(), "abcdef");
     }
 
-    // FIXME: handle OOM errors
+    #[test]
+    fn extend_strs_oom_returns_resume_with_stranded_head() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut s = String::try_with_capacity_in(3, alloc.try_clone().unwrap()).unwrap();
+        s.try_push_str("abc").unwrap();
+
+        alloc.drain();
+        let Err((resume, err)) = s.try_extend(["x", "y"].into_iter()) else {
+            panic!("expected reservation failure");
+        };
+        assert!(err.is_alloc());
+        assert!(resume.has_head());
+        assert_eq!(*resume.head().unwrap(), "x");
+        assert_eq!(s.deref(), "abc");
+    }
 
     // ── TryFromIterator<char> ─────────────────────────────────────────────────
 
@@ -333,7 +379,14 @@ mod tests {
         assert_eq!(s.deref(), "xyz");
     }
 
-    // FIXME: handle OOM errors
+    #[test]
+    fn collect_chars_oom_on_capacity_overflow() {
+        // An iterator hinting `usize::MAX` items makes the initial
+        // reservation overflow, which is the deterministic OOM path for the
+        // `Global`-only collect impls.
+        let err = (0..usize::MAX).map(|_| 'x').try_collect::<String>().unwrap_err();
+        assert!(err.is_capacity_overflow());
+    }
 
     // ── TryFromIterator<&str> ─────────────────────────────────────────────────
 
@@ -343,7 +396,11 @@ mod tests {
         assert_eq!(s.deref(), "abcd");
     }
 
-    // FIXME: handle OOM errors
+    #[test]
+    fn collect_strs_oom_on_capacity_overflow() {
+        let err = (0..usize::MAX).map(|_| "x").try_collect::<String>().unwrap_err();
+        assert!(err.is_capacity_overflow());
+    }
 
     // ── fmt::Write ────────────────────────────────────────────────────────────
 

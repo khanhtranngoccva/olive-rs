@@ -170,7 +170,25 @@ mod tests {
         }
     }
 
-    // FIXME: non-giveback variant should be tested too
+    #[test]
+    fn try_into_boxed_str_non_give_back_success() {
+        let mut s = String::try_with_capacity(64).unwrap();
+        s.try_push_str("nongiveback").unwrap();
+        let b = s.try_into_boxed_str().unwrap();
+        assert_eq!(&*b, "nongiveback");
+        assert_eq!(b.len(), 11);
+    }
+
+    #[test]
+    fn try_into_boxed_str_fails_when_shrink_fails() {
+        let mut s = String::try_with_capacity_in(16, FailSmallAlloc).unwrap();
+        s.try_push_str("abc").unwrap();
+        // Unlike the give-back variant, the failure discards the string and
+        // only the error remains.
+        let err = s.try_into_boxed_str().unwrap_err();
+        assert!(err.is_alloc());
+    }
+
 
     #[test]
     fn try_into_boxed_str_give_back_returns_string_on_failure() {

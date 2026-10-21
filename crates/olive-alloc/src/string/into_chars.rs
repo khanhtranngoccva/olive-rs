@@ -221,9 +221,9 @@ mod tests {
     #[test]
     fn into_chars_double_ended() {
         let mut ic = mk("abc").into_chars();
-        assert_eq!(ic.next_back(), Some('b'));
-        assert_eq!(ic.next(), Some('a'));
         assert_eq!(ic.next_back(), Some('c'));
+        assert_eq!(ic.next(), Some('a'));
+        assert_eq!(ic.next_back(), Some('b'));
         assert_eq!(ic.next(), None);
         assert_eq!(ic.next_back(), None);
     }

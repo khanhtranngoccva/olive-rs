@@ -722,7 +722,7 @@ mod tests {
 
     use super::*;
     use crate::alloc::CountingAllocator;
-    use olive_test_helpers::{BudgetedAlloc, FailAlloc};
+    use olive_test_helpers::{BudgetedAlloc, ByteCapAlloc, FailAlloc};
 
     fn mk(s: &str) -> String {
         String::try_from_str(s).unwrap()
@@ -740,8 +740,25 @@ mod tests {
         assert_eq!(s.deref(), "abc");
     }
 
-    // FIXME: shrink_to should be tested, with tests that makes input
-    // smaller than length and larger than current cap (no-op)
+    #[test]
+    fn shrink_to_target_below_len_clamps_to_len() {
+        // A target below the length is clamped up to `len`, so no data is
+        // lost and the capacity never drops below the length.
+        let mut s = String::try_with_capacity(64).unwrap();
+        s.try_push_str("abcdef").unwrap();
+        s.try_shrink_to(2).unwrap();
+        assert_eq!(s.deref(), "abcdef");
+        assert!(s.capacity() >= 6);
+    }
+
+    #[test]
+    fn shrink_to_target_above_capacity_is_noop() {
+        let mut s = String::try_with_capacity(8).unwrap();
+        s.try_push_str("abc").unwrap();
+        s.try_shrink_to(100).unwrap();
+        assert_eq!(s.deref(), "abc");
+        assert_eq!(s.capacity(), 8);
+    }
 
     #[test]
     fn reserve_exact_and_total_and_adaptive() {
@@ -829,7 +846,22 @@ mod tests {
         assert_eq!(alloc.remaining(), 0);
     }
 
-    // FIXME: use a ByteCapAlloc to force an exact resize for adaptive reserve
+    #[test]
+    fn byte_cap_forces_exact_resize_for_adaptive_reserve() {
+        // With capacity 40 and length 30, the amortized attempt wants
+        // `max(cap * 2, len + 20)` = 80 bytes, which exceeds the allocator's
+        // byte cap of 65, while the exact fallback wants only `len + 20` = 50
+        // and fits under it.
+        let alloc = ByteCapAlloc::new(65);
+        let mut s = String::try_with_capacity_in(40, alloc).unwrap();
+        s.try_push_str("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").unwrap();
+        assert_eq!(s.len(), 30);
+
+        s.try_reserve_adaptive(20).unwrap();
+        assert!(s.capacity() >= 50);
+        assert!(s.capacity() <= 65);
+        assert_eq!(s.deref(), "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    }
 
     #[test]
     fn budgeted_shrink_to_fit_fails_and_preserves_string() {
@@ -871,7 +903,7 @@ mod tests {
         s.try_shrink_to(10).unwrap();
         assert!(s.capacity() >= 10);
         assert!(s.capacity() < 64);
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(s.deref(), "abcdef");
     }
 
     // ── try_push / try_push_str ───────────────────────────────────────────────
@@ -968,7 +1000,21 @@ mod tests {
         assert_eq!(s.deref(), "é🦊");
     }
 
-    // FIXME: Reserve (OOM) variant not tested for try_insert and try_insert_str
+    #[test]
+    fn insert_oom_returns_reserve_error() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut s = String::try_with_capacity_in(3, alloc.try_clone().unwrap()).unwrap();
+        s.try_push_str("abc").unwrap();
+
+        // The string is full, so inserting anything must reallocate.
+        alloc.drain();
+        let err = s.try_insert(3, 'x').unwrap_err();
+        assert!(matches!(err, TryStringInsertError::Reserve(_)));
+        assert_eq!(s.deref(), "abc");
+        let err = s.try_insert_str(3, "yz").unwrap_err();
+        assert!(matches!(err, TryStringInsertError::Reserve(_)));
+        assert_eq!(s.deref(), "abc");
+    }
 
     // ── try_split_off ─────────────────────────────────────────────────────────
 
@@ -1028,7 +1074,17 @@ mod tests {
         assert_eq!(right.deref(), "def");
     }
 
-    // FIXME: try_split_off_in should have Reserve/OOM tested
+    #[test]
+    fn try_split_off_in_oom_returns_reserve_error() {
+        let mut s = mk("abcdef");
+
+        // The right half is allocated through the custom allocator, which
+        // refuses every non-zero-size allocation.
+        let err = s.try_split_off_in(3, FailAlloc).unwrap_err();
+        assert!(matches!(err, TryStringSplitOffError::Reserve(_)));
+        // The original string is untouched.
+        assert_eq!(s.deref(), "abcdef");
+    }
 
     // ── try_extend_from_within ────────────────────────────────────────────────
 
@@ -1083,7 +1139,20 @@ mod tests {
         assert_eq!(s.deref(), "é🦊");
     }
 
-    // FIXME: add OOM tests
+    #[test]
+    fn extend_from_within_oom_returns_reserve_error() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut s = String::try_with_capacity_in(5, alloc.try_clone().unwrap()).unwrap();
+        s.try_push_str("hello").unwrap();
+
+        // Doubling the content requires a reallocation the drained budget
+        // refuses.
+        alloc.drain();
+        let err = s.try_extend_from_within(0..5).unwrap_err();
+        assert!(matches!(err, TryStringExtendFromWithinError::Reserve(_)));
+        assert_eq!(s.deref(), "hello");
+        assert_eq!(s.capacity(), 5);
+    }
 
     // ── try_replace_range ─────────────────────────────────────────────────────
 
@@ -1162,5 +1231,18 @@ mod tests {
         assert_eq!(s.deref(), "hello");
     }
 
-    // FIXME: add OOM tests for growth case
+    #[test]
+    fn replace_range_oom_on_growth_returns_reserve_error() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut s = String::try_with_capacity_in(11, alloc.try_clone().unwrap()).unwrap();
+        s.try_push_str("hello world").unwrap();
+
+        // Growing the replacement forces a reservation the drained budget
+        // refuses.
+        alloc.drain();
+        let err = s.try_replace_range(0..1, "Hx").unwrap_err();
+        assert!(matches!(err, TryStringReplaceRangeError::Reserve(_)));
+        assert_eq!(s.deref(), "hello world");
+        assert_eq!(s.capacity(), 11);
+    }
 }

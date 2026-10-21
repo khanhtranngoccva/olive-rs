@@ -652,11 +652,11 @@ mod tests {
         let s = String::try_from_utf16le_lossy(&[0x00, 0xD8, 0x65, 0x00]).unwrap();
         assert_eq!(&*s, "\u{FFFD}e");
         let s = String::try_from_utf16le_lossy(&[0x65, 0x00, 0x00, 0xD8]).unwrap();
-        assert_eq!(&*s, "\u{FFFD}e");
+        assert_eq!(&*s, "e\u{FFFD}");
         let s = String::try_from_utf16le_lossy(&[0x00, 0xDC, 0x65, 0x00]).unwrap();
         assert_eq!(&*s, "\u{FFFD}e");
         let s = String::try_from_utf16le_lossy(&[0x65, 0x00, 0x00, 0xDC]).unwrap();
-        assert_eq!(&*s, "\u{FFFD}e");
+        assert_eq!(&*s, "e\u{FFFD}");
     }
 
     #[test]
@@ -664,11 +664,11 @@ mod tests {
         let s = String::try_from_utf16be_lossy(&[0xD8, 0x00, 0x00, 0x65]).unwrap();
         assert_eq!(&*s, "\u{FFFD}e");
         let s = String::try_from_utf16be_lossy(&[0x00, 0x65, 0xD8, 0x00]).unwrap();
-        assert_eq!(&*s, "\u{FFFD}e");
+        assert_eq!(&*s, "e\u{FFFD}");
         let s = String::try_from_utf16be_lossy(&[0xDC, 0x00, 0x00, 0x65]).unwrap();
         assert_eq!(&*s, "\u{FFFD}e");
         let s = String::try_from_utf16be_lossy(&[0x00, 0x65, 0xDC, 0x00]).unwrap();
-        assert_eq!(&*s, "\u{FFFD}e");
+        assert_eq!(&*s, "e\u{FFFD}");
     }
 
     #[test]

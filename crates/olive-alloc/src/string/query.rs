@@ -5,9 +5,13 @@ use crate::vec::Vec;
 use core::ops::{Deref, DerefMut};
 use olive_core::alloc::Allocator;
 
-// FIXME: allocator() is missing
-
 impl<A: Allocator> String<A> {
+    /// Returns a reference to the string's allocator.
+    #[inline]
+    pub const fn allocator(&self) -> &A {
+        self.buf.allocator()
+    }
+
     /// Returns the number of bytes the string can hold without reallocating.
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -78,9 +82,19 @@ mod tests {
     use core::ops::Deref;
 
     use super::*;
+    use crate::alloc::CountingAllocator;
 
     fn mk(s: &str) -> String {
         String::try_from_str(s).unwrap()
+    }
+
+    #[test]
+    fn allocator_returns_backing_allocator() {
+        let alloc = CountingAllocator::new();
+        let s: String<&CountingAllocator> = String::try_from_str_in("abc", &alloc).unwrap();
+        // The returned reference is the very instance the string was built
+        // with.
+        assert!(core::ptr::eq(*s.allocator(), &alloc));
     }
 
     #[test]
