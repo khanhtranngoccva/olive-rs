@@ -3,6 +3,7 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
+use crate::alloc::StaticAllocator;
 use allocator_api2::alloc::Global;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone, AllocatorTryDefault};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -19,12 +20,21 @@ unsafe impl Allocator for FailAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         // Zero-sized allocations never touch the heap, so the failure hook
         // does not fire for them, matching the other test allocators.
-        if layout.size() == 0 {
-            return Global.allocate(layout);
+        if layout.size() != 0 {
+            return Err(AllocError);
         }
-        Err(AllocError)
+        Global.allocate(layout)
     }
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        // Zero-sized allocations never touch the heap, so the failure hook
+        // does not fire.
+        if layout.size() != 0 {
+            return;
+        }
+        // We should still invoke the deallocation algorithm anyway.
+        unsafe { Global.deallocate(ptr, layout) }
+    }
 }
 
 impl TryClone for FailAlloc {
@@ -47,3 +57,7 @@ impl TryDefault for FailAlloc {
 // SAFETY: `FailAlloc` is a stateless ZST that delegates every zero-sized
 // layout to `Global`, the process-wide singleton backing store.
 unsafe impl AllocatorTryDefault for FailAlloc {}
+
+// SAFETY: `FailAlloc` is a stateless ZST that delegates every zero-sized
+// layout to `Global`, the process-wide singleton backing store.
+unsafe impl StaticAllocator for FailAlloc {}
