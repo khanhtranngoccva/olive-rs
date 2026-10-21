@@ -1,92 +1,14 @@
 //! Deref forwarding, and trait impls for [`Box`].
 
+use super::Box;
+use crate::alloc::{Allocator, AllocatorTryClone};
 use core::borrow::{Borrow, BorrowMut};
 use core::cmp::Ordering;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
 use core::ops::{Deref, DerefMut};
-use core::ptr::{self, NonNull};
-
-use crate::alloc::{Allocator, AllocatorTryClone, AllocatorTryDefault, Global};
 use olive_core::try_traits::TryCloneToUninit;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
-use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-
-use super::Box;
-
-// ---------------------------------------------------------------------------
-// Default / TryDefault
-// ---------------------------------------------------------------------------
-
-#[inline]
-fn dangling_zero_len_slice<T>() -> NonNull<[T]> {
-    // SAFETY: `NonNull::<T>::dangling()` is non-null (the alignment of any
-    // type is at least 1), so the raw slice pointer built from it is
-    // non-null.
-    unsafe {
-        NonNull::new_unchecked(ptr::slice_from_raw_parts_mut(
-            NonNull::<T>::dangling().as_ptr(),
-            0,
-        ))
-    }
-}
-
-impl<T> Default for Box<[T]> {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            inner: dangling_zero_len_slice::<T>(),
-            alloc: Global,
-        }
-    }
-}
-
-impl<T, A: AllocatorTryDefault> TryDefault for Box<[T], A> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        Ok(Self {
-            inner: dangling_zero_len_slice::<T>(),
-            alloc: A::try_default()?,
-        })
-    }
-}
-
-impl Default for Box<str> {
-    #[inline]
-    fn default() -> Self {
-        // SAFETY: the dangling `[u8]` pointer is non-null, and `str`'s
-        // metadata is the byte length, matching `[u8]`'s element count
-        // (0 here), so the cast yields a valid non-null `*mut str`.
-        let inner =
-            unsafe { NonNull::new_unchecked(dangling_zero_len_slice::<u8>().as_ptr() as *mut str) };
-        Self {
-            inner,
-            alloc: Global,
-        }
-    }
-}
-
-impl<A: AllocatorTryDefault> TryDefault for Box<str, A> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        // SAFETY: as in `Default`, a valid non-null dangling `*mut str`.
-        let inner =
-            unsafe { NonNull::new_unchecked(dangling_zero_len_slice::<u8>().as_ptr() as *mut str) };
-        Ok(Self {
-            inner,
-            alloc: A::try_default()?,
-        })
-    }
-}
-
-impl<T: TryDefault, A: AllocatorTryDefault> TryDefault for Box<T, A> {
-    #[inline]
-    fn try_default() -> Result<Self, TryDefaultError> {
-        let uninit = Box::try_new_uninit_in(A::try_default()?).map_err(TryDefaultError::Alloc)?;
-        let value = T::try_default()?;
-        Ok(uninit.write(value))
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Send / Sync

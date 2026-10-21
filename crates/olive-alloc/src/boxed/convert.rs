@@ -1,5 +1,6 @@
 //! Conversions impls for [`Box`].
 
+use core::alloc::Layout;
 use core::any::Any;
 use core::error::Error;
 use core::pin::Pin;
@@ -81,6 +82,27 @@ impl<T, const N: usize> TryFrom<Box<[T], Global>> for Box<[T; N], Global> {
         } else {
             Err(boxed_slice)
         }
+    }
+}
+
+impl<T, A: Allocator> Box<T, A> {
+    /// Returns the value held in the box, deallocating the box's memory
+    /// with its allocator.
+    ///
+    /// The value is moved out and is not dropped here; its ownership
+    /// passes to the caller.
+    #[inline]
+    pub fn into_inner(b: Self) -> T {
+        let (ptr, alloc) = Box::into_non_null_with_allocator(b);
+        // SAFETY: `ptr` points to the fully initialized `T` the box owned.
+        let value = unsafe { ptr.read() };
+        if size_of::<T>() != 0 {
+            // SAFETY: `ptr` denotes the live block previously allocated
+            // via `alloc` with `Layout::new::<T>()`, and is not used
+            // again afterwards.
+            unsafe { alloc.deallocate(ptr.cast(), Layout::new::<T>()) };
+        }
+        value
     }
 }
 

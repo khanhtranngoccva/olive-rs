@@ -15,8 +15,11 @@ use core::error::Error;
 use core::ffi::CStr;
 use core::fmt;
 use core::marker::PhantomPinned;
+use core::mem::MaybeUninit;
+use core::pin::Pin;
 use core::ptr::NonNull;
 use olive_core::TryClone;
+use olive_core::try_traits::TryClone;
 use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 
 use super::*;
