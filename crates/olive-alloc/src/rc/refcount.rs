@@ -464,9 +464,10 @@ mod tests {
     fn try_strong_count_ops_error_at_zero_strong() {
         let rc = Rc::try_new(1).unwrap();
         let weak = Rc::try_downgrade(&rc).unwrap();
-        drop(rc);
-        let raw = weak.as_ptr();
-        // SAFETY: `raw` comes from `into_raw`; the `weak` keeps the block
+        // `into_raw` consumes the handle without releasing its strong
+        // reference: the count stays 1 with no live `Rc` managing it.
+        let raw = Rc::into_raw(rc);
+        // SAFETY: `raw` came from `into_raw`; the `weak` keeps the block
         // alive while the payload is dropped.
         unsafe { Rc::try_decrement_strong_count(raw) }.unwrap();
         // The allocation now has strong == 0: both raw operations must report

@@ -155,6 +155,33 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         ptr::addr_eq(self.ptr.as_ptr(), other.ptr.as_ptr())
     }
+
+    /// Gets the number of strong ([`Rc`]) pointers pointing to this
+    /// allocation.
+    ///
+    /// Returns `0` if `self` was created using [`Weak::new`] (a dangling weak
+    /// that never referred to an allocation), and also once the last strong
+    /// reference has been released.
+    #[inline]
+    pub fn strong_count(&self) -> usize {
+        match self.inner() {
+            Some(inner) => inner.strong(),
+            None => 0,
+        }
+    }
+
+    /// Gets the number of [`Weak`] pointers pointing to this allocation,
+    /// excluding the implicit weak reference held by each strong pointer.
+    ///
+    /// Returns `0` if `self` was created using [`Weak::new`], and also once
+    /// the strong count has reached `0`.
+    #[inline]
+    pub fn weak_count(&self) -> usize {
+        match self.inner() {
+            Some(inner) if inner.strong() != 0 => inner.weak().saturating_sub(1),
+            _ => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +319,76 @@ mod tests {
         assert!(!w1.ptr_eq(&dangling));
         let dangling2 = dangling.try_clone().unwrap();
         assert!(dangling.ptr_eq(&dangling2));
+    }
+
+    #[test]
+    fn weak_strong_count_tracks_live_strong_refs() {
+        let rc = Rc::try_new(9i32).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert_eq!(weak.strong_count(), 1);
+        let rc2 = rc.try_clone().unwrap();
+        assert_eq!(weak.strong_count(), 2);
+        drop(rc);
+        assert_eq!(weak.strong_count(), 1);
+        drop(rc2);
+        // The last strong is gone: the weak still pins the block, but the
+        // strong count reads as zero and upgrade now fails.
+        assert_eq!(weak.strong_count(), 0);
+        assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_weak_count_excludes_implicit_ref() {
+        let rc = Rc::try_new(1u8).unwrap();
+        let w1 = Rc::try_downgrade(&rc).unwrap();
+        let w2 = Rc::try_downgrade(&rc).unwrap();
+        // Two explicit weaks; the implicit weak reference held by `rc` is
+        // not counted (matching std's WeakInner::weak semantics).
+        assert_eq!(w1.weak_count(), 2);
+        drop(w2);
+        assert_eq!(w1.weak_count(), 1);
+    }
+
+    #[test]
+    fn weak_counts_zero_when_dangling() {
+        let dangling: Weak<i32> = Weak::new();
+        assert_eq!(dangling.strong_count(), 0);
+        assert_eq!(dangling.weak_count(), 0);
+        // A cloned dangling weak behaves the same.
+        let dangling2 = dangling.try_clone().unwrap();
+        assert_eq!(dangling2.strong_count(), 0);
+        assert_eq!(dangling2.weak_count(), 0);
+    }
+
+    #[test]
+    fn weak_counts_zero_after_last_strong_drops() {
+        let rc = Rc::try_new(1u8).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let weak2 = Rc::try_downgrade(&rc).unwrap();
+        drop(rc);
+        // The weaks keep the (defunct) block allocated, but with no strong
+        // reference left every count reports zero.
+        assert_eq!(weak.strong_count(), 0);
+        assert_eq!(weak.weak_count(), 0);
+        drop(weak2);
+        drop(weak);
+    }
+
+    #[test]
+    fn weak_counts_with_custom_allocator() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(4, &alloc).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let rc2 = rc.try_clone().unwrap();
+        assert_eq!(weak.strong_count(), 2);
+        assert_eq!(weak.weak_count(), 1);
+        drop(rc2);
+        drop(rc);
+        // Block still pinned by `weak` after the strongs are gone.
+        assert_eq!(alloc.deallocations(), 0);
+        assert_eq!(weak.strong_count(), 0);
+        assert_eq!(weak.weak_count(), 0);
+        drop(weak);
+        assert_eq!(alloc.deallocations(), 1);
     }
 }
