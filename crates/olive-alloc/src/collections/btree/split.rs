@@ -206,7 +206,7 @@ impl<K, V, A: AllocatorTryClone> BTreeMap<K, V, A> {
     ///
     /// May panic if the user's `Ord::cmp` implementation panics (e.g. due to
     /// bugs in a custom key type). In that case `self` is left completely unmodified.
-    pub fn split_off<Q: ?Sized + Ord>(&mut self, key: &Q) -> Result<Self, AllocError>
+    pub fn try_split_off<Q: ?Sized + Ord>(&mut self, key: &Q) -> Result<Self, AllocError>
     where
         K: Borrow<Q> + Ord,
     {
@@ -256,7 +256,7 @@ mod tests {
         for i in 1..=5 {
             a.try_insert(i, i * 10).unwrap();
         }
-        let b = a.split_off(&3).unwrap();
+        let b = a.try_split_off(&3).unwrap();
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 3);
         assert_eq!(a.get(&1), Some(&10));
@@ -275,7 +275,7 @@ mod tests {
         for i in [1, 3, 7, 9] {
             a.try_insert(i, i * 10).unwrap();
         }
-        let b = a.split_off(&5).unwrap();
+        let b = a.try_split_off(&5).unwrap();
         assert_eq!(a.len(), 2);
         assert_eq!(b.len(), 2);
         let mut it_a = a.iter();
@@ -296,7 +296,7 @@ mod tests {
         for i in 0..10 {
             a.try_insert(i, i).unwrap();
         }
-        let b = a.split_off(&(-1i32)).unwrap();
+        let b = a.try_split_off(&(-1i32)).unwrap();
         assert!(a.is_empty());
         assert_eq!(b.len(), 10);
         verify_both(&a, &b);
@@ -309,7 +309,7 @@ mod tests {
         for i in 0..10 {
             a.try_insert(i, i).unwrap();
         }
-        let b = a.split_off(&999).unwrap();
+        let b = a.try_split_off(&999).unwrap();
         assert_eq!(a.len(), 10);
         assert!(b.is_empty());
         verify_both(&a, &b);
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn split_empty_map() {
         let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
-        let b = a.split_off(&0).unwrap();
+        let b = a.try_split_off(&0).unwrap();
         assert!(a.is_empty());
         assert!(b.is_empty());
         verify_both(&a, &b);
@@ -333,7 +333,7 @@ mod tests {
         for i in 0..60 {
             a.try_insert(i, i * 2).unwrap();
         }
-        let b = a.split_off(&30).unwrap();
+        let b = a.try_split_off(&30).unwrap();
         assert_eq!(a.len(), 30);
         assert_eq!(b.len(), 30);
         // Verify boundaries via iteration.
@@ -368,7 +368,7 @@ mod tests {
         // Set the budget so `new_pillar`'s second allocation fails.
         alloc.set_budget(1);
 
-        let result = a.split_off(&30u32);
+        let result = a.try_split_off(&30u32);
         assert!(result.is_err(), "expected allocation failure");
 
         // `self` must be structurally valid and byte-for-byte identical.
