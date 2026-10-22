@@ -74,6 +74,7 @@ pub fn is_bootstrap(crate_name: &str) -> bool {
         Ok(val) => match val.as_str() {
             "" => false,
             "-1" => false,
+            // FIXME: multi-crate string not accounted for
             _ => val == "1" || val == crate_name,
         },
     }

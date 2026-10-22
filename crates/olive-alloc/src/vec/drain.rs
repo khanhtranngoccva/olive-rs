@@ -1,13 +1,15 @@
 //! The borrowing iterator produced by `Vec::try_drain`.
 //!
 //! This borrows the vector and yields a *range* of its drained elements one at a time.
+
+use super::Vec;
+use crate::alloc::Global;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use core::ptr;
-use core::slice;
-
-use crate::alloc::{Allocator, Global};
+use olive_core::alloc::Allocator;
+use olive_core::slice::{self, TrySliceRangeError};
 
 /// An iterator that drains a *range* of a vector, yielding owned elements while
 /// removing them from the vector.
@@ -58,7 +60,7 @@ pub struct Drain<'a, T, A: Allocator = Global> {
     /// pointer rather than a `&'a mut Vec` so the `Drop` impl can reach through
     /// it without fighting the borrow checker over reborrows, and so the
     /// iterator's exclusive window over the buffer stays explicit.
-    vec: *mut super::Vec<T, A>,
+    vec: *mut Vec<T, A>,
     _marker: PhantomData<&'a ()>,
 }
 
@@ -89,7 +91,7 @@ impl<T, A: Allocator> Drain<'_, T, A> {
         start: usize,
         count: usize,
         original_len: usize,
-        vec: *mut super::Vec<T, A>,
+        vec: *mut Vec<T, A>,
     ) -> Self {
         #[allow(
             clippy::arithmetic_side_effects,
@@ -347,7 +349,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
 /// unwinds.
 struct DrainCompactGuard<'a, T, A: Allocator> {
     /// Exclusive reference to the owning vector being compacted.
-    vec: &'a mut super::Vec<T, A>,
+    vec: &'a mut Vec<T, A>,
     /// Base of the vector's buffer; offsets below are relative to it.
     base: *mut T,
     /// Offset where the drained range began; the suffix lands here after the
@@ -384,5 +386,59 @@ impl<T, A: Allocator> Drop for DrainCompactGuard<'_, T, A> {
         unsafe {
             self.vec.set_len(self.final_len);
         }
+    }
+}
+
+impl<T, A: Allocator> Vec<T, A> {
+    /// Removes a range of elements from the vector and returns them as an
+    /// iterator, shifting later elements to the left to fill the gap.
+    ///
+    /// This is the fallible-port analogue of `std`'s `Vec::drain`. The only
+    /// failure mode is validating the requested range: iteration itself never
+    /// allocates (it merely destroys and shifts elements), so once the drainer
+    /// is constructed it cannot fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrySliceRangeError`] if the resolved range is out of bounds or
+    /// reversed.
+    ///
+    /// # Leaking
+    ///
+    /// If [`mem::forget`](core::mem::forget) is called, all elements from the
+    /// start of `range` to the end of the vector, except the extracted elements,
+    /// are leaked.
+    pub fn try_drain<R: core::ops::RangeBounds<usize>>(
+        &mut self,
+        range: R,
+    ) -> Result<Drain<'_, T, A>, TrySliceRangeError> {
+        let len = self.len();
+        let r = slice::try_range(range, ..len)?;
+        let start = r.start;
+        let end = r.end;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "start <= end (guaranteed by try_range)"
+        )]
+        let count = end - start;
+        // Cap the vector's logical length down to `start` *before* handing out
+        // the drainer. Once `next()` has yielded an element via `ptr::read`,
+        // that slot is uninitialized; if the vec still counted it in its length,
+        // a later drop of the vec (e.g. after the drainer is forgotten) would
+        // drop uninitialized memory. Capping excludes the whole drained range
+        // from the vec's live contents up front, so the vec can never touch the
+        // hole. This mirrors std's internal bookkeeping.
+        //
+        // SAFETY: `start <= len <= capacity()`, and every slot in `[0..start)`
+        // is an initialized value, so capping to `start` preserves the invariant
+        // that all live slots are valid.
+        unsafe {
+            self.set_len(start);
+        }
+        // SAFETY: `count == end - start` is the full resolved range length and
+        // `start + count == end <= len`; the first `len` slots are initialized.
+        // The vector already had its length capped
+        let drain = unsafe { Drain::new_from_parts(start, count, len, &raw mut *self) };
+        Ok(drain)
     }
 }

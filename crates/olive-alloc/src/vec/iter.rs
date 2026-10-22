@@ -1,7 +1,4 @@
-//! The owned iterator produced by `Vec::into_iter`.
-//!
-//! Unlike the borrowed iterators, this consumes the vector by value and yields
-//! its elements one at a time, moving them out of the buffer.
+//! Iterator types for the [`Vec`].
 
 use core::fmt;
 use core::fmt::Debug;
@@ -260,6 +257,60 @@ impl<T, A: AllocatorTryDefault> TryDefault for IntoIter<T, A> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(Vec::new_in(A::try_default()?).into_iter())
+    }
+}
+
+impl<T, A: Allocator> IntoIterator for Vec<T, A> {
+    type Item = T;
+    type IntoIter = IntoIter<T, A>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        // Take ownership of the raw parts so the iterator owns the allocation
+        // directly rather than nesting a whole `Vec`. The `ManuallyDrop` inside
+        // `into_parts_with_alloc` prevents the original `Vec` from freeing the
+        // buffer; the iterator takes over responsibility for it.
+        // SAFETY: `self` is a well-formed `Vec`; its pointer, length, capacity,
+        // and allocator satisfy all the invariants `new_from_parts` requires.
+        let (ptr, len, cap, alloc) = unsafe { self.into_parts_with_alloc() };
+        // SAFETY: as above — the parts come straight off a valid `Vec`.
+        unsafe { IntoIter::new_from_parts(ptr, len, cap, alloc) }
+    }
+}
+
+impl<T, A: Allocator> Vec<T, A> {
+    /// Returns an iterator over the vector's elements.
+    #[inline]
+    pub fn iter(&self) -> slice::Iter<'_, T> {
+        self.as_slice().iter()
+    }
+
+    /// Returns an iterator over mutable references to the vector's elements.
+    #[inline]
+    pub fn iter_mut(&mut self) -> slice::IterMut<'_, T> {
+        self.as_mut_slice().iter_mut()
+    }
+}
+
+// Borrowed iteration delegates to the slice iterators, mirroring `std`'s
+// `IntoIterator` impls for `&Vec` and `&mut Vec`.
+impl<'a, T, A: Allocator> IntoIterator for &'a Vec<T, A> {
+    type Item = &'a T;
+    type IntoIter = slice::Iter<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a, T, A: Allocator> IntoIterator for &'a mut Vec<T, A> {
+    type Item = &'a mut T;
+    type IntoIter = slice::IterMut<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_mut_slice().iter_mut()
     }
 }
 
