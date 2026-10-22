@@ -63,6 +63,8 @@ mod construction;
 /// and [`try_upgrade`](Weak::try_upgrade), plus their shared
 /// [`TryArcError`](self::conversion::TryArcError).
 pub(crate) mod conversion;
+/// Ownership extraction methods.
+mod decompose;
 /// Unsized (`?Sized`) payload construction: slices, `str`, and the
 /// `Arc<MaybeUninit<[T]>>` → `Arc<[T]>` bridge.
 mod dst;
