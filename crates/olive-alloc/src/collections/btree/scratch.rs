@@ -9,14 +9,14 @@ use olive_core::alloc::{AllocError, Allocator};
 /// `usize::MAX` keys, computed as `floor(log_B((n + 1) / 2))` (Wikipedia).
 /// Height counts edges from root to leaf (a single-node tree has height 0).
 /// With `n = usize::MAX`, `(n + 1) / 2 = 2^(BITS-1) = isize::MAX + 1`.
-const MAX_HEIGHT: usize = {
-    const BASE: u64 = B as u64;
+pub(super) const MAX_HEIGHT: usize = {
+    const BASE: usize = B;
     // (usize::MAX + 1) / 2 = 2^(BITS-1) = isize::MAX + 1.
-    const N_PLUS_1_HALF: u64 = (isize::MAX as u64) + 1;
+    const N_PLUS_1_HALF: usize = (isize::MAX as usize) + 1;
     let mut depth = 0usize;
-    let mut power = 1u64;
+    let mut power = 1usize;
     loop {
-        // Stop before power overflows or exceeds N_HALF.
+        // Stop before power overflows or exceeds N_PLUS_1_HALF.
         if power > N_PLUS_1_HALF / BASE {
             break;
         }
@@ -31,14 +31,13 @@ const MAX_HEIGHT: usize = {
 ///
 /// A tree of height `h` has `h` internal levels on the path from root to leaf.
 /// In the worst case every one of those `h` ancestors is full and splits, each
-/// producing one new internal node. At the maximum height (`MAX_HEIGHT`), the
-/// tree already holds `usize::MAX` keys, so an insertion attempt cannot
-/// trigger a root split (there is no room for more keys).
+/// producing one new internal node.
+///
+/// At the maximum height (`MAX_HEIGHT`), the tree will not create a new root until
+/// `usize::MAX` keys is exceeded.
 ///
 /// The bound is thus `MAX_HEIGHT`, plus one as a safety leeway against an
-/// algorithm that over-reserves past the theoretical maximum — if one ever did,
-/// [`reserve_for_insertion`] returns [`AllocError`] rather than overflowing
-/// the fixed array.
+/// algorithm that over-reserves past the theoretical maximum.
 const MAX_RESERVE_INTERNALS: usize = MAX_HEIGHT + 1;
 
 /// Total number of nodes (internal + leaf) a single reserve-and-commit

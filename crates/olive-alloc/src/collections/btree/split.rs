@@ -4,6 +4,7 @@ use core::mem::ManuallyDrop;
 use super::map::BTreeMap;
 use super::node::ForceResult::*;
 use super::node::{Handle, InternalNode, Root};
+use super::scratch::MAX_HEIGHT;
 use super::search::SearchResult::*;
 use crate::vec::Vec;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
@@ -67,10 +68,9 @@ impl<K, V> Root<K, V> {
     where
         K: Borrow<Q>,
     {
-        // Maximum tree height for B=6: even 2^64 entries give height ≤ 17.
-        // 32 is a generous upper bound that fits comfortably on the stack.
-        const MAX_DEPTH: usize = 32;
-        let mut path: [usize; MAX_DEPTH] = [0; MAX_DEPTH];
+        // This includes the leaf's split point.
+        const MAX_PATH: usize = MAX_HEIGHT + 1;
+        let mut path: [usize; MAX_PATH] = [0; MAX_PATH];
         let mut depth: usize = 0;
 
         // ── Phase 1: read-only descent ──────────────────────────────────────
@@ -83,9 +83,9 @@ impl<K, V> Root<K, V> {
                     Found(kv) => kv.idx(),
                     GoDown(edge) => edge.idx(),
                 };
-                debug_assert!(depth < MAX_DEPTH);
+                debug_assert!(depth < MAX_PATH);
                 path[depth] = edge_idx;
-                #[allow(clippy::arithmetic_side_effects, reason = "depth + 1 <= MAX_DEPTH")]
+                #[allow(clippy::arithmetic_side_effects, reason = "depth + 1 <= MAX_PATH")]
                 {
                     depth += 1;
                 }
