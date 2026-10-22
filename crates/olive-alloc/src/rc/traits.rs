@@ -118,3 +118,112 @@ impl<T: ?Sized, A: Allocator> Debug for Weak<T, A> {
         f.write_str("(Weak)")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::panic::{RefUnwindSafe, UnwindSafe};
+    use static_assertions::assert_not_impl_any;
+    use std::string::String;
+
+    // `Rc` and `Weak` are never `Send` or `Sync`, regardless of their type
+    // parameters. Unsynchronized reference counting is inherently
+    // single-threaded — sharing the refcount pointer across threads would
+    // permit unsynchronized concurrent mutation of the counters.
+    assert_not_impl_any!(Rc<i32>: Send, Sync);
+    assert_not_impl_any!(Rc<String>: Send, Sync);
+    assert_not_impl_any!(Rc<&'static ()>: Send, Sync);
+    assert_not_impl_any!(Weak<i32>: Send, Sync);
+    assert_not_impl_any!(Weak<String>: Send, Sync);
+    assert_not_impl_any!(Weak<&'static ()>: Send, Sync);
+
+    #[test]
+    fn as_ref_and_borrow_work() {
+        let rc = Rc::try_new(5u32).unwrap();
+        let r: &u32 = rc.as_ref();
+        assert_eq!(*r, 5);
+        let b: &u32 = Borrow::borrow(&rc);
+        assert_eq!(*b, 5);
+    }
+
+    #[test]
+    fn unwind_safe_impls_match_std() {
+        assert_unwind_safe::<Rc<u32>>();
+        assert_ref_unwind_safe::<Rc<u32>>();
+        assert_unwind_safe::<Rc<str>>();
+        assert_ref_unwind_safe::<Rc<str>>();
+        assert_unwind_safe::<Rc<[u8]>>();
+        assert_ref_unwind_safe::<Rc<[u8]>>();
+    }
+
+    #[test]
+    fn weak_debug_prints_marker() {
+        // Like std, Debug prints only `(Weak)` — it must not require
+        // upgrading (which would demand `A: AllocatorTryClone`).
+        let rc = Rc::try_new(1).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert_eq!(std::format!("{weak:?}"), "(Weak)");
+        drop(rc);
+        assert_eq!(std::format!("{weak:?}"), "(Weak)");
+    }
+
+    fn assert_unwind_safe<T: UnwindSafe>() {}
+    fn assert_ref_unwind_safe<T: RefUnwindSafe>() {}
+
+    #[test]
+    fn debug_and_display_forward_to_payload() {
+        let rc = Rc::try_new(String::from("payload")).unwrap();
+        assert_eq!(std::format!("{rc:?}"), "\"payload\"");
+        assert_eq!(std::format!("{rc}"), "payload");
+    }
+
+    #[test]
+    fn ord_and_partial_ord_forward_to_payload() {
+        let a = Rc::try_new(1).unwrap();
+        let b = Rc::try_new(2).unwrap();
+        assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+        // Equal payloads compare equal: the comparison impls are value-based,
+        // not address-based.
+        let b2 = Rc::try_new(2).unwrap();
+        assert_eq!(b, b2);
+        assert_eq!(b.cmp(&b2), Ordering::Equal);
+    }
+
+    #[test]
+    fn hash_matches_payload_hash() {
+        use std::collections::hash_map::DefaultHasher;
+
+        fn hash_of<T: Hash>(value: &T) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            value.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let rc = Rc::try_new(String::from("hashed")).unwrap();
+        assert_eq!(hash_of(&rc), hash_of(&String::from("hashed")));
+    }
+
+    #[test]
+    fn rc_pointer_fmt_prints_data_address() {
+        let rc = Rc::try_new(1).unwrap();
+        assert_eq!(
+            std::format!("{rc:p}"),
+            std::format!("{:p}", Rc::as_ptr(&rc))
+        );
+    }
+
+    #[test]
+    fn weak_pointer_fmt_prints_data_address() {
+        // Unlike std, our `Weak` also implements `Pointer`.
+        let rc = Rc::try_new(1).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert_eq!(
+            std::format!("{weak:p}"),
+            std::format!("{:p}", weak.as_ptr())
+        );
+    }
+
+    // FIXME: missing Pointer impl
+}

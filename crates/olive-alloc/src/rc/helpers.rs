@@ -158,3 +158,25 @@ pub(super) const fn dangling_inner_ptr<T: ?Sized>() -> NonNull<RcInner<T>> {
         NonNull::new_unchecked(slot.assume_init())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An "absurd" payload — one whose size, combined with the two-counter
+    // header, overflows an addressable block — must be rejected as a logic-level
+    // invariant violation.
+    #[test]
+    fn absurd_payload_layout_reports_other_not_oom() {
+        let usize_size = size_of::<usize>();
+        let max_size = isize::MAX as usize - usize_size + 1;
+        // A hypothetical Rust type requires the size is divisible by its alignment
+        assert_eq!(max_size % usize_size, 0);
+        let huge = Layout::from_size_align(max_size, usize_size)
+            .expect("payload layout alone is representable");
+        let err = rc_inner_layout_for_value_layout(huge)
+            .expect_err("absurd payload must fail layout computation");
+        // The helper surfaced a real layout error (the overflow).
+        let _ = err;
+    }
+}

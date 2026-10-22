@@ -156,3 +156,141 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
         ptr::addr_eq(self.ptr.as_ptr(), other.ptr.as_ptr())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_test_helpers::CountingAllocator;
+
+    #[test]
+    fn unsized_as_ptr() {
+        let arr = [10u8, 20];
+        let rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let p: *const [u8] = Rc::as_ptr(&rc);
+        let slice: &[u8] = unsafe { &*p };
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice, [10, 20]);
+    }
+
+    #[test]
+    fn sized_as_ptr() {
+        let rc = Rc::try_new(41u32).unwrap();
+        let p: *const u32 = Rc::as_ptr(&rc);
+        // SAFETY: `rc` holds the sole strong reference, so the payload is
+        // live and initialized.
+        assert_eq!(unsafe { *p }, 41);
+    }
+
+    #[test]
+    fn rc_as_ptr_write_provenance_manual_write() {
+        let rc = Rc::try_new(42u64).unwrap();
+        let p: *const u64 = Rc::as_ptr(&rc);
+        // Cast away constness — only sound because we hold the sole strong
+        // reference (strong == 1, weak == 0) and the pointer's provenance
+        // covers the payload slot.
+        let mut_p = p as *mut u64;
+        unsafe {
+            ptr::write(mut_p, 7);
+        }
+        assert_eq!(*rc, 7);
+        // Overwrite again via the same pointer to confirm repeated use is fine.
+        unsafe {
+            ptr::write_volatile(mut_p, 9);
+        }
+        assert_eq!(*rc, 9);
+    }
+
+    /// Same guarantee for unsized payloads: the fat pointer returned by
+    /// `Rc::as_ptr` must be writable through its data word while metadata
+    /// (the slice length) is preserved.
+    #[test]
+    fn rc_as_ptr_write_provenance_unsized_slice() {
+        let arr = [1u8, 2, 3];
+        let rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let p: *const [u8] = Rc::as_ptr(&rc);
+        let mut_p = p as *mut [u8];
+        unsafe {
+            (*mut_p)[1] = 20;
+        }
+        assert_eq!(&*rc, [1, 20, 3]);
+    }
+
+    #[test]
+    fn is_unique_true_only_when_no_other_refs() {
+        let rc = Rc::try_new(1).unwrap();
+        assert!(Rc::is_unique(&rc));
+
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        // A live Weak disqualifies uniqueness even though strong == 1.
+        assert!(!Rc::is_unique(&rc));
+        drop(weak);
+        assert!(Rc::is_unique(&rc));
+
+        let rc2 = rc.try_clone().unwrap();
+        assert!(!Rc::is_unique(&rc));
+        drop(rc2);
+        assert!(Rc::is_unique(&rc));
+    }
+
+    #[test]
+    fn weak_as_ptr_dangling_returns_sentinel() {
+        let w: Weak<i32> = Weak::new();
+        let p = w.as_ptr();
+        assert_eq!(p.addr(), usize::MAX);
+        // The sentinel is misaligned relative to any non-ZST payload, so it
+        // can never alias a real allocation.
+        assert_ne!(p.addr() % align_of::<i32>(), 0);
+    }
+
+    #[test]
+    fn weak_as_ptr_after_last_strong_is_not_sentinel() {
+        let rc = Rc::try_new(1i32).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        drop(rc);
+        let p = weak.as_ptr();
+        // This weak did refer to a real allocation, so its data word is the
+        // genuine (now dead) payload address, not the sentinel.
+        assert_ne!(p.addr(), usize::MAX);
+        assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn rc_ptr_eq_compares_addresses_not_values() {
+        let a = Rc::try_new(5).unwrap();
+        let b = Rc::try_new(5).unwrap();
+        // Equal payloads, distinct allocations.
+        assert!(!Rc::ptr_eq(&a, &b));
+        let shared = a.try_clone().unwrap();
+        assert!(Rc::ptr_eq(&a, &shared));
+    }
+
+    #[test]
+    fn rc_allocator_returns_backing_allocator() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(1, &alloc).unwrap();
+        // The handle handed back is the very allocator the Rc was built with.
+        assert!(std::ptr::eq(*Rc::allocator(&rc), &alloc));
+        assert_eq!(Rc::allocator(&rc).allocations(), 1);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn weak_ptr_eq_and_allocator() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(3, &alloc).unwrap();
+        let w1 = Rc::try_downgrade(&rc).unwrap();
+        let w2 = Rc::try_downgrade(&rc).unwrap();
+        let cloned = w1.try_clone().unwrap();
+        assert!(w1.ptr_eq(&w2));
+        assert!(w1.ptr_eq(&cloned));
+        assert!(std::ptr::eq(*Weak::allocator(&w1), &alloc));
+        // A dangling weak shares its sentinel only with other dangling weaks.
+        let dangling: Weak<u32, &CountingAllocator> = Weak::new_in(&alloc);
+        assert!(!w1.ptr_eq(&dangling));
+        let dangling2 = dangling.try_clone().unwrap();
+        assert!(dangling.ptr_eq(&dangling2));
+    }
+}

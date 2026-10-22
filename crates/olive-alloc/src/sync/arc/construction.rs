@@ -320,9 +320,9 @@ mod tests {
         let arc: Arc<MaybeUninit<u64>, Global> = Arc::try_new_zeroed().unwrap();
         // We are initializing over zeroes.
         let a = unsafe { arc.assume_init() };
-        assert_eq!(*arc, 0u64);
-        assert_eq!(Arc::strong_count(&arc), 1);
-        assert_eq!(Arc::weak_count(&arc), 0);
+        assert_eq!(*a, 0u64);
+        assert_eq!(Arc::strong_count(&a), 1);
+        assert_eq!(Arc::weak_count(&a), 0);
     }
 
     // --- Uninit → init bridge ----------------------------------------------

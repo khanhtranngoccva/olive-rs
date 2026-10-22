@@ -363,3 +363,124 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::alloc::CountingAllocator;
+    use olive_test_helpers::{Ledger, TrackedItem};
+    use std::string::String;
+    use std::sync::Arc;
+
+    #[test]
+    fn rc_try_clone_shares_allocation() {
+        let rc = Rc::try_new(String::from("hello")).unwrap();
+        let rc2 = rc.try_clone().unwrap();
+        assert_eq!(Rc::strong_count(&rc), 2);
+        assert!(Rc::ptr_eq(&rc, &rc2));
+        assert_eq!(&*rc2, "hello");
+    }
+
+    #[test]
+    fn weak_does_not_keep_alive() {
+        let rc = Rc::try_new(1).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert_eq!(Rc::weak_count(&rc), 1);
+        drop(rc);
+        assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_try_clone() {
+        let rc = Rc::try_new(3).unwrap();
+        let w1 = Rc::try_downgrade(&rc).unwrap();
+        let w2 = w1.try_clone().unwrap();
+        assert_eq!(Rc::weak_count(&rc), 2);
+        assert!(w1.ptr_eq(&w2));
+        assert_eq!(Rc::as_ptr(&rc), w1.as_ptr());
+        drop(rc);
+        assert!(w1.try_upgrade().unwrap().is_none());
+        assert!(w2.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_upgrade_restores_strong() {
+        let rc = Rc::try_new(7).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let upgraded = weak.try_upgrade().unwrap().unwrap();
+        assert_eq!(Rc::strong_count(&upgraded), 2);
+        assert_eq!(*upgraded, 7);
+        drop(upgraded);
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    /// Regression: cloning a dangling `Weak` (from `Weak::new`) must not
+    /// dereference the sentinel address. The clone must behave as another
+    /// dangling weak — it upgrades to `None` and compares pointer-equal —
+    /// and dropping both must remain a no-op.
+
+    #[test]
+    fn weak_new_try_clone_stays_dangling() {
+        let w: Weak<i32> = Weak::new();
+        let c = w.try_clone().unwrap();
+        assert!(c.try_upgrade().unwrap().is_none());
+        assert!(w.ptr_eq(&c));
+    }
+
+    #[test]
+    fn try_increment_strong_count_roundtrip() {
+        let rc = Rc::try_new(9).unwrap();
+        let raw = Rc::into_raw(rc);
+        // SAFETY: `raw` was produced by `into_raw` and strong == 1.
+        unsafe { Rc::try_increment_strong_count(raw) }.unwrap();
+        let rc2 = unsafe { Rc::from_raw(raw) };
+        assert_eq!(Rc::strong_count(&rc2), 2);
+        drop(rc2);
+        // The remaining strong reference is consumed manually: the payload is
+        // dropped and the block freed inside the decrement itself.
+        // SAFETY: `raw` still refers to the live allocation, strong == 1.
+        unsafe { Rc::try_decrement_strong_count(raw) }.unwrap();
+    }
+
+    #[test]
+    fn try_decrement_strong_count_in_drops_payload_and_frees_block() {
+        let ledger = Arc::new(Ledger::new());
+        let alloc = CountingAllocator::new();
+        let item = TrackedItem::construct(&ledger, 4u32);
+        let id = item.id();
+        let rc: Rc<TrackedItem<u32>, &CountingAllocator> = Rc::try_new_in(item, &alloc).unwrap();
+        let (raw, rc_alloc) = Rc::into_raw_with_allocator(rc);
+        assert_eq!(ledger.live_ids().len(), 1);
+        // SAFETY: `raw` was produced by `into_raw_with_allocator`; this is the
+        // sole strong reference, so the payload is dropped and the block freed.
+        unsafe { Rc::try_decrement_strong_count_in(raw, rc_alloc) }.unwrap();
+        assert!(ledger.live_ids().is_empty());
+        assert_eq!(ledger.drop_count(id), 1);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_strong_count_ops_error_at_zero_strong() {
+        let rc = Rc::try_new(1).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        drop(rc);
+        let raw = weak.as_ptr();
+        // SAFETY: `raw` comes from `into_raw`; the `weak` keeps the block
+        // alive while the payload is dropped.
+        unsafe { Rc::try_decrement_strong_count(raw) }.unwrap();
+        // The allocation now has strong == 0: both raw operations must report
+        // the imbalance instead of wrapping the counter.
+        // SAFETY: `raw` still refers to the live (weak-pinned) allocation.
+        assert!(matches!(
+            unsafe { Rc::try_increment_strong_count(raw) },
+            Err(TryRcOutOfBoundsError)
+        ));
+        // SAFETY: `raw` still refers to the live (weak-pinned) allocation.
+        assert!(matches!(
+            unsafe { Rc::try_decrement_strong_count(raw) },
+            Err(TryRcOutOfBoundsError)
+        ));
+        drop(weak);
+    }
+}

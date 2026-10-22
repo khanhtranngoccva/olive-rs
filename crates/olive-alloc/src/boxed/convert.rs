@@ -329,7 +329,7 @@ mod tests {
         let fat: *mut dyn Error = raw as *mut dyn Error;
         let e: Box<dyn Error, Global> = unsafe { Box::from_raw_in(fat, Global) };
         let recovered = e.downcast::<MyErr>().unwrap();
-        let _ = recovered; // just verify it works
+        assert_eq!(recovered.0, 0);
     }
 
     #[test]
@@ -353,4 +353,6 @@ mod tests {
         let recovered = e.downcast::<MyErr>().unwrap();
         assert_eq!(recovered.0, 9);
     }
+
+    // FIXME: failure paths for error downcasting
 }

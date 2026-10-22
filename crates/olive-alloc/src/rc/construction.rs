@@ -462,3 +462,347 @@ impl<T: ?Sized, A: AllocatorTryDefault> TryDefault for Weak<T, A> {
         Ok(Self::new_in(A::try_default()?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::alloc::CountingAllocator;
+    use olive_core::try_traits::try_clone::TryClone;
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
+    use std::string::String;
+
+    struct CyclicNode {
+        name: &'static str,
+        parent: Option<Weak<CyclicNode>>,
+    }
+
+    #[test]
+    fn basic_construction_and_deref() {
+        let rc = Rc::try_new(42).unwrap();
+        assert_eq!(*rc, 42);
+        assert_eq!(Rc::strong_count(&rc), 1);
+        assert_eq!(Rc::weak_count(&rc), 0);
+    }
+
+    #[test]
+    fn try_new_give_back_moves_value_in() {
+        // The give-back variant takes ownership of the payload and hands
+        // back a live handle when the allocation succeeds.
+        let rc = Rc::try_new_give_back(String::from("moved in")).unwrap();
+        assert_eq!(&*rc, "moved in");
+        assert_eq!(Rc::strong_count(&rc), 1);
+        assert_eq!(Rc::weak_count(&rc), 0);
+    }
+
+    #[test]
+    fn try_new_in_constructs_with_counting_allocator() {
+        // The `_in` variants build with a caller-supplied allocator; the
+        // counting allocator proves exactly one block is allocated for the
+        // payload and released again on drop.
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(42, &alloc).unwrap();
+        assert_eq!(*rc, 42);
+        assert_eq!(Rc::strong_count(&rc), 1);
+        assert_eq!(alloc.allocations(), 1);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_new_give_back_in_moves_value_in() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<String, &CountingAllocator> =
+            Rc::try_new_give_back_in(String::from("given back"), &alloc).unwrap();
+        assert_eq!(&*rc, "given back");
+        assert_eq!(alloc.allocations(), 1);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_new_in_with_fail_alloc_errors() {
+        let res: Result<Rc<i32, FailAlloc>, AllocError> = Rc::try_new_in(5, FailAlloc);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn try_new_give_back_in_oom_returns_error_and_gives_back_value() {
+        let res: Result<Rc<String, FailAlloc>, (String, AllocError)> =
+            Rc::try_new_give_back_in(String::from("oom"), FailAlloc);
+        let (given_back, err) = res.unwrap_err();
+        assert_eq!(given_back, "oom");
+        let _ = err;
+    }
+
+    #[test]
+    fn weak_new_dangling_upgrades_to_none() {
+        // A freshly constructed `Weak` refers to no allocation, so upgrading it
+        // must always yield `None`.
+        let w: Weak<i32> = Weak::new();
+        assert!(w.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_new_dropping_frees_nothing() {
+        // Dropping a dangling weak must not touch the allocator at all: the
+        // sentinel refers to no allocation, so construction and drop must
+        // both produce zero allocation and deallocation traffic.
+        let alloc = CountingAllocator::new();
+        {
+            let w: Weak<u32, &CountingAllocator> = Weak::new_in(&alloc);
+            assert!(w.try_upgrade().unwrap().is_none());
+            assert_eq!(alloc.allocations(), 0);
+            assert_eq!(alloc.deallocations(), 0);
+        }
+        assert_eq!(alloc.allocations(), 0);
+        assert_eq!(alloc.deallocations(), 0);
+        // The Global dangling weak walks the same zero-traffic path,
+        // including for unsized payloads.
+        let _ = Weak::<i32>::new();
+        let _ = Weak::<str>::new();
+        let _ = Weak::<[u8]>::new();
+    }
+
+    #[test]
+    fn try_new_uninit_write_and_assume_init() {
+        let mut rc = Rc::<u64>::try_new_uninit().unwrap();
+        *Rc::get_mut(&mut rc).unwrap() = MaybeUninit::new(123);
+        // SAFETY: the payload slot was initialized above.
+        let rc = unsafe { rc.assume_init() };
+        assert_eq!(*rc, 123);
+    }
+
+    #[test]
+    fn try_new_zeroed_reads_zero_then_mutates() {
+        let rc = Rc::<u64>::try_new_zeroed().unwrap();
+        // SAFETY: zeroed bytes are a valid `u64`.
+        let mut rc = unsafe { rc.assume_init() };
+        assert_eq!(*rc, 0);
+        *Rc::get_mut(&mut rc).unwrap() = 55;
+        assert_eq!(*rc, 55);
+    }
+
+    #[test]
+    fn try_new_uninit_in_and_zeroed_in_with_counting_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut rc: Rc<MaybeUninit<u32>, &CountingAllocator> =
+            Rc::try_new_uninit_in(&alloc).unwrap();
+        assert_eq!(alloc.allocations(), 1);
+        Rc::get_mut(&mut rc).unwrap().write(7);
+        // SAFETY: initialized above.
+        let rc = unsafe { rc.assume_init() };
+        assert_eq!(*rc, 7);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+        let rc: Rc<MaybeUninit<u32>, &CountingAllocator> = Rc::try_new_zeroed_in(&alloc).unwrap();
+        assert_eq!(alloc.allocations(), 2);
+        // SAFETY: zeroed bytes are a valid `u32`.
+        let rc = unsafe { rc.assume_init() };
+        assert_eq!(*rc, 0);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 2);
+    }
+
+    #[test]
+    fn try_new_cyclic_builds_back_reference() {
+        let leaf = Rc::try_new_cyclic(|weak| -> Result<CyclicNode, core::convert::Infallible> {
+            Ok(CyclicNode {
+                name: "leaf",
+                parent: Some(weak.try_clone().unwrap()),
+            })
+        })
+        .unwrap();
+        assert_eq!(leaf.name, "leaf");
+        // The back-reference upgrades to the very same allocation.
+        let parent = leaf
+            .parent
+            .as_ref()
+            .unwrap()
+            .try_upgrade()
+            .unwrap()
+            .unwrap();
+        assert!(Rc::ptr_eq(&leaf, &parent));
+        assert_eq!(Rc::strong_count(&leaf), 2);
+        assert_eq!(Rc::weak_count(&leaf), 1);
+    }
+
+    #[test]
+    fn try_new_cyclic_callback_error_releases_block() {
+        let alloc = CountingAllocator::new();
+        let res: Result<Rc<u32, &CountingAllocator>, TryRcWithError<&'static str>> =
+            Rc::try_new_cyclic_in(|_weak| Err("no cycle today"), &alloc);
+        assert!(matches!(
+            res,
+            Err(TryRcWithError::Callback("no cycle today"))
+        ));
+        // The half-built block was released; nothing is leaked.
+        assert_eq!(alloc.allocations(), 1);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_new_cyclic_in_with_counting_allocator() {
+        let alloc = CountingAllocator::new();
+        // The payload cannot embed a `Weak<CyclicNodeIn, &CountingAllocator>`
+        // (the allocator borrow is not nameable in a struct field), so the
+        // back-reference is parked in a cell instead.
+        let parked: Cell<Option<Weak<u32, &CountingAllocator>>> = Cell::new(None);
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_cyclic_in(
+            |weak| -> Result<u32, core::convert::Infallible> {
+                parked.set(Some(weak.try_clone().unwrap()));
+                Ok(42)
+            },
+            &alloc,
+        )
+        .unwrap();
+        assert_eq!(alloc.allocations(), 1);
+        assert_eq!(*rc, 42);
+        let upgraded = parked.take().unwrap().try_upgrade().unwrap().unwrap();
+        assert!(Rc::ptr_eq(&rc, &upgraded));
+        drop(upgraded);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_new_cyclic_in_alloc_failure_propagates() {
+        let res: Result<Rc<u32, FailAlloc>, TryRcWithError<core::convert::Infallible>> =
+            Rc::try_new_cyclic_in(|_weak| unreachable!(), FailAlloc);
+        assert!(matches!(res, Err(TryRcWithError::Alloc(_))));
+    }
+
+    #[test]
+    fn try_pin_returns_pinned_pointer() {
+        let pinned = Rc::try_pin(21).unwrap();
+        assert_eq!(*pinned, 21);
+        // `Rc` is `Unpin`, so the pinned wrapper can be unwrapped and the
+        // value mutated in place.
+        let mut rc = Pin::into_inner(pinned);
+        *Rc::get_mut(&mut rc).unwrap() = 22;
+        assert_eq!(*rc, 22);
+    }
+
+    #[test]
+    fn try_pin_in_oom() {
+        let _err = Rc::<i32, FailAlloc>::try_pin_in(9, FailAlloc).unwrap_err();
+    }
+
+    #[test]
+    fn try_pin_in_with_counting_allocator() {
+        let alloc = CountingAllocator::new();
+        let pinned = Rc::try_pin_in(5, &alloc).unwrap();
+        assert_eq!(*pinned, 5);
+        drop(pinned);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_pin_give_back_in_oom_returns_value() {
+        let (given_back, _err) =
+            Rc::<i32, FailAlloc>::try_pin_give_back_in(9, FailAlloc).unwrap_err();
+        assert_eq!(given_back, 9);
+    }
+
+    #[test]
+    fn try_default_constructs_wrapped_default() {
+        let rc = Rc::<i32>::try_default().unwrap();
+        assert_eq!(*rc, 0);
+        assert_eq!(Rc::strong_count(&rc), 1);
+        // A different payload type exercises the same path.
+        assert_eq!(*Rc::<u8>::try_default().unwrap(), 0);
+    }
+
+    #[test]
+    fn try_default_sized_with_global() {
+        let r = <Rc<u32, Global> as TryDefault>::try_default().unwrap();
+        assert_eq!(*r, 0);
+    }
+
+    #[test]
+    fn try_default_allocation_failure_propagates() {
+        // `FailAlloc`'s `TryDefault` succeeds, so the error here comes from
+        // allocating the block itself, not from `A::try_default()`.
+        let e = <Rc<u32, FailAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(e, TryDefaultError::Alloc(_)));
+    }
+
+    #[test]
+    fn try_default_allocator_failure_propagates() {
+        let e = <Rc<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn try_default_str_is_empty_with_one_strong_ref() {
+        let s = Rc::<str>::try_default().unwrap();
+        assert_eq!(&*s, "");
+        assert_eq!(Rc::strong_count(&s), 1);
+    }
+
+    #[test]
+    fn try_default_str_allocation_failure_propagates() {
+        // The empty string still needs a block for the counters, which
+        // `FailAlloc` refuses.
+        let e = <Rc<str, FailAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(e, TryDefaultError::Alloc(_)));
+    }
+
+    #[test]
+    fn try_default_str_allocator_failure_propagates() {
+        let e = <Rc<str, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn try_default_slice_is_empty() {
+        let a = Rc::<[u8]>::try_default().unwrap();
+        assert_eq!(a.len(), 0);
+        assert_eq!(Rc::strong_count(&a), 1);
+    }
+
+    #[test]
+    fn try_default_slice_allocation_failure_propagates() {
+        // The empty slice still needs a block for the counters, which
+        // `FailAlloc` refuses.
+        let e = <Rc<[u8], FailAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(e, TryDefaultError::Alloc(_)));
+    }
+
+    #[test]
+    fn try_default_slice_allocator_failure_propagates() {
+        let e = <Rc<[u8], FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+
+    #[test]
+    fn weak_default_equals_new() {
+        // Both infallible constructors produce an equivalent dangling weak.
+        let a: Weak<i32> = Default::default();
+        let b: Weak<i32> = Weak::new();
+        assert!(a.try_upgrade().unwrap().is_none());
+        assert!(b.try_upgrade().unwrap().is_none());
+        // And the fallible twin agrees.
+        let c: Weak<i32> = TryDefault::try_default().unwrap();
+        assert!(c.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn rc_weak_try_default_allocator_failure_propagates() {
+        let e = <Weak<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
+    }
+}

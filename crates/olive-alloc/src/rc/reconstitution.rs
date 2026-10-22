@@ -231,3 +231,171 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
         (ptr, alloc)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use olive_test_helpers::CountingAllocator;
+
+    #[test]
+    fn into_raw_roundtrip() {
+        let rc = Rc::try_new(99).unwrap();
+        let raw = Rc::into_raw(rc);
+        assert_eq!(unsafe { *raw }, 99);
+        let rc = unsafe { Rc::from_raw(raw) };
+        assert_eq!(*rc, 99);
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn unsized_into_raw_roundtrip_slice() {
+        let arr = [7u8, 8, 9];
+        let rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let raw = Rc::into_raw(rc);
+        let slice: &[u8] = unsafe { &*raw };
+        assert_eq!(slice.len(), 3);
+        assert_eq!(slice, [7, 8, 9]);
+        let rc = unsafe { Rc::from_raw(raw) };
+        assert_eq!(&*rc, [7, 8, 9]);
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn rc_into_raw_with_allocator_roundtrip_sized() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(64, &alloc).unwrap();
+        let (raw, ret_alloc) = Rc::into_raw_with_allocator(rc);
+        assert_eq!(unsafe { *raw }, 64);
+        assert_eq!(ret_alloc.allocations(), 1);
+        let rc = unsafe { Rc::from_raw_in(raw, ret_alloc) };
+        assert_eq!(*rc, 64);
+        assert_eq!(Rc::strong_count(&rc), 1);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn rc_into_raw_with_allocator_roundtrip_unsized_slice() {
+        let alloc = CountingAllocator::new();
+        let arr = [1u8, 2, 3];
+        let rc: Rc<[u8], &CountingAllocator> = Rc::try_from_slice_in(&arr[..], &alloc).unwrap();
+        let (raw, ret_alloc) = Rc::into_raw_with_allocator(rc);
+        let slice: &[u8] = unsafe { &*raw };
+        assert_eq!(slice, [1u8, 2, 3]);
+        let rc = unsafe { Rc::from_raw_in(raw, ret_alloc) };
+        assert_eq!(&*rc, [1u8, 2, 3]);
+        assert_eq!(Rc::strong_count(&rc), 1);
+        drop(rc);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn weak_non_dangling_into_raw_roundtrip_sized() {
+        let rc = Rc::try_new(11).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let raw = Weak::into_raw(weak);
+        assert_eq!(unsafe { *raw }, 11);
+        let weak = unsafe { Weak::from_raw(raw) };
+        // The raw pointer carried the weak reference over: the count stays 1.
+        assert_eq!(Rc::weak_count(&rc), 1);
+        assert_eq!(*weak.try_upgrade().unwrap().unwrap(), 11);
+        drop(rc);
+        assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_non_dangling_into_raw_roundtrip_unsized_str() {
+        let rc: Rc<str> = Rc::try_from_str("carry me").unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let raw = Weak::into_raw(weak);
+        assert_eq!(unsafe { &*raw }, "carry me");
+        let weak = unsafe { Weak::from_raw(raw) };
+        assert_eq!(&*weak.try_upgrade().unwrap().unwrap(), "carry me");
+        drop(rc);
+        assert!(weak.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_dangling_into_raw_roundtrip() {
+        // A dangling weak carries no allocation; its raw pointer is the
+        // misaligned sentinel, and reconstituting it yields another dangling
+        // weak that behaves identically.
+        let w: Weak<u32, Global> = Weak::new();
+        let raw = Weak::into_raw(w);
+        assert_ne!(raw.addr(), 0);
+        let w = unsafe { Weak::from_raw(raw) };
+        // `as_ptr` on a dangling weak returns the sentinel itself — exercising
+        // the same branch that `from_raw` relies on to detect the sentinel.
+        assert_eq!(w.as_ptr().addr(), raw.addr());
+        assert!(w.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_dangling_unsized_into_raw_roundtrip() {
+        let w = Weak::<str>::new();
+        let raw = Weak::into_raw(w);
+        let w = unsafe { Weak::from_raw(raw) };
+        assert_eq!(w.as_ptr().addr(), raw.addr());
+        assert!(w.try_upgrade().unwrap().is_none());
+    }
+
+    #[test]
+    fn weak_into_raw_with_allocator_roundtrip_sized() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<u32, &CountingAllocator> = Rc::try_new_in(5, &alloc).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let (raw, ret_alloc) = weak.into_raw_with_allocator();
+        assert_eq!(unsafe { *raw }, 5);
+        let weak = unsafe { Weak::from_raw_in(raw, ret_alloc) };
+        assert_eq!(Rc::weak_count(&rc), 1);
+        assert_eq!(*weak.try_upgrade().unwrap().unwrap(), 5);
+        drop(rc);
+        assert!(weak.try_upgrade().unwrap().is_none());
+        drop(weak);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn weak_into_raw_with_allocator_roundtrip_unsized_str() {
+        let alloc = CountingAllocator::new();
+        let rc: Rc<str, &CountingAllocator> = Rc::try_from_str_in("still here", &alloc).unwrap();
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        let (raw, ret_alloc) = weak.into_raw_with_allocator();
+        assert_eq!(unsafe { &*raw }, "still here");
+        let weak = unsafe { Weak::from_raw_in(raw, ret_alloc) };
+        assert_eq!(&*weak.try_upgrade().unwrap().unwrap(), "still here");
+        drop(rc);
+        assert!(weak.try_upgrade().unwrap().is_none());
+        drop(weak);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn weak_dangling_into_raw_with_allocator_roundtrip() {
+        let alloc = CountingAllocator::new();
+        let weak: Weak<u32, &CountingAllocator> = Weak::new_in(&alloc);
+        let (raw, ret_alloc) = weak.into_raw_with_allocator();
+        let weak = unsafe { Weak::from_raw_in(raw, ret_alloc) };
+        // The sentinel survives the round trip, and no allocator traffic
+        // happens for a weak that never pointed at anything.
+        assert_eq!(weak.as_ptr().addr(), raw.addr());
+        assert!(weak.try_upgrade().unwrap().is_none());
+        assert_eq!(alloc.allocations(), 0);
+        assert_eq!(alloc.deallocations(), 0);
+    }
+
+    #[test]
+    fn weak_dangling_into_raw_with_allocator_unsized_roundtrip() {
+        let alloc = CountingAllocator::new();
+        let weak: Weak<[u32], &CountingAllocator> = Weak::new_in(&alloc);
+        let (raw, ret_alloc) = weak.into_raw_with_allocator();
+        let weak = unsafe { Weak::from_raw_in(raw, ret_alloc) };
+        // The sentinel survives the round trip, and no allocator traffic
+        // happens for a weak that never pointed at anything.
+        assert_eq!(weak.as_ptr().addr(), raw.addr());
+        assert!(weak.try_upgrade().unwrap().is_none());
+        assert_eq!(alloc.allocations(), 0);
+        assert_eq!(alloc.deallocations(), 0);
+    }
+}

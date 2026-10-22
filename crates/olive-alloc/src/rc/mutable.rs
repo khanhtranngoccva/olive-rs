@@ -139,3 +139,109 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         Ok(unsafe { Self::get_mut_unchecked(this) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::cell::Cell;
+    use olive_core::try_traits::try_clone::TryClone;
+    use std::string::String;
+
+    #[test]
+    fn get_mut_requires_no_weak() {
+        let mut rc = Rc::try_new(String::from("hi")).unwrap();
+        *Rc::get_mut(&mut rc).unwrap() += "!";
+        assert_eq!(*rc, "hi!");
+
+        // A single Weak now blocks get_mut (matching std semantics).
+        let weak = Rc::try_downgrade(&rc).unwrap();
+        assert!(Rc::get_mut(&mut rc).is_none());
+        drop(weak);
+        assert!(Rc::get_mut(&mut rc).is_some());
+    }
+
+    #[test]
+    fn make_mut_unique_mutates_in_place() {
+        let mut rc = Rc::try_new(5u32).unwrap();
+        let addr = Rc::as_ptr(&rc) as usize;
+        *Rc::try_make_mut(&mut rc).unwrap() += 1;
+        assert_eq!(*rc, 6);
+        // No reallocation happened — same payload address.
+        assert_eq!(Rc::as_ptr(&rc) as usize, addr);
+    }
+
+    #[test]
+    fn make_mut_shared_clones_and_disassociates() {
+        let mut data = Rc::try_new(5i32).unwrap();
+        let other = data.try_clone().unwrap();
+
+        let old_addr = Rc::as_ptr(&data) as usize;
+        assert_eq!(Rc::strong_count(&data), 2);
+
+        *Rc::try_make_mut(&mut data).unwrap() += 1;
+
+        // `data` moved to a fresh allocation holding the mutated clone.
+        assert_eq!(*data, 6);
+        assert_ne!(Rc::as_ptr(&data) as usize, old_addr);
+        assert_eq!(Rc::strong_count(&data), 1);
+        // The original owner is untouched and still valid.
+        assert_eq!(*other, 5);
+        assert_eq!(Rc::strong_count(&other), 1);
+        assert!(!Rc::ptr_eq(&data, &other));
+    }
+    
+    #[test]
+    fn make_mut_with_weak_steals_without_cloning() {
+        // Only weak references remain: the value must be MOVED into a fresh
+        // block (not cloned), and the surviving Weaks become dangling.
+        struct Movable<'a>(&'a Cell<i32>, String);
+
+        impl TryClone for Movable<'_> {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                panic!("this test should not move");
+            }
+        }
+
+        impl Drop for Movable<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        // External counter so we can observe the destructor across the move
+        // (a counter embedded in the payload would itself be relocated).
+        let counter_cell = Cell::new(0i32);
+        let mut data = Rc::try_new(Movable(&counter_cell, String::from("payload"))).unwrap();
+        let weak = Rc::try_downgrade(&data).unwrap();
+        let old_addr = Rc::as_ptr(&data) as usize;
+
+        Rc::try_make_mut(&mut data).unwrap().1.push('x');
+
+        assert_eq!(data.1.as_str(), "payloadx");
+        assert_ne!(Rc::as_ptr(&data) as usize, old_addr);
+        assert_eq!(Rc::strong_count(&data), 1);
+        // The weak reference is now detached from any live value.
+        assert!(weak.try_upgrade().unwrap().is_none());
+        // Dropping the new sole owner runs the destructor exactly once.
+        drop(data);
+        assert_eq!(counter_cell.get(), 1);
+    }
+
+    #[test]
+    fn make_mut_unsized_slice_shared_clones() {
+        let arr = [1u8, 2, 3];
+        let mut rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
+        let other = rc.try_clone().unwrap();
+
+        let old_addr = Rc::as_ptr(&rc).cast::<u8>() as usize;
+
+        let m = Rc::try_make_mut(&mut rc).unwrap();
+        m[0] = 99;
+
+        assert_eq!(&*rc, [99, 2, 3]);
+        assert_ne!(Rc::as_ptr(&rc).cast::<u8>() as usize, old_addr);
+        // Original slice untouched.
+        assert_eq!(&*other, [1, 2, 3]);
+    }
+}
