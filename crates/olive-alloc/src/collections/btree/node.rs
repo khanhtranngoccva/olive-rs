@@ -1249,6 +1249,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// Inserts a new key-value pair between the key-value pairs to the right and left of
     /// this edge. This method assumes that there is enough space in the node for the new
     /// pair to fit.
+    /// 
+    /// # Safety
+    /// 
+    /// - The length of the node must be less than `CAPACITY`.
     pub(super) unsafe fn insert_fit(
         mut self,
         key: K,

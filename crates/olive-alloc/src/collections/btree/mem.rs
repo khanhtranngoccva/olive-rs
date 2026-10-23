@@ -3,7 +3,8 @@ use core::{mem, ptr};
 /// This replaces the value behind the `v` unique reference by calling the
 /// relevant function.
 ///
-/// If a panic occurs in the `change` closure, the entire process will be aborted.
+/// If a panic occurs in the `change` closure, the entire process will be
+/// aborted by invoking UB. Do not supply closures that panic.
 #[allow(dead_code)] // keep as illustration and for future use
 #[inline]
 pub fn take_mut<T>(v: &mut T, change: impl FnOnce(T) -> T) {
@@ -14,9 +15,11 @@ pub fn take_mut<T>(v: &mut T, change: impl FnOnce(T) -> T) {
 /// relevant function, and returns a result obtained along the way.
 ///
 /// If a panic occurs in the `change` closure, the entire process will be
-/// aborted by invoking UB.
+/// aborted by invoking UB. Do not supply closures that panic.
 #[inline]
 pub fn replace<T, R>(v: &mut T, change: impl FnOnce(T) -> (T, R)) -> R {
+    // Since the `v` is uninitialized, the process has to be aborted, 
+    // which is theoretically safe behavior, but we cannot use a sound intrinsic.
     struct PanicGuard;
     impl Drop for PanicGuard {
         fn drop(&mut self) {

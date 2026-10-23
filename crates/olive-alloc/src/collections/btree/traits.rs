@@ -398,7 +398,10 @@ impl<K: Ord + TryClone, V: TryClone, A: Allocator> TryExtendFromSlice<(K, V)>
                 .map_err(|e| (&other[i..], TryBTreeMapWithCloneError::Clone(e)))?;
             match self.try_insert_give_back(cloned_k, cloned_v) {
                 Ok(_) => {
-                    #[allow(clippy::arithmetic_side_effects, reason = "asserted i < other.len()")]
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "i < other.len(), loop is bounded to the source slice"
+                    )]
                     {
                         i += 1;
                     }

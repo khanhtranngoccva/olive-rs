@@ -20,7 +20,7 @@ use crate::alloc::Allocator;
 pub(crate) fn check_tree_invariant<K, V, A: Allocator>(map: &BTreeMap<K, V, A>) {
     if let Some(root) = map.root.as_ref() {
         let min_len = if root.height() > 0 { 1 } else { 0 };
-        root.reborrow().assert_min_len(min_len);
+        root.reborrow().assert_min_len_and_capacity(min_len);
 
         let actual = root.reborrow().calc_length();
         assert_eq!(

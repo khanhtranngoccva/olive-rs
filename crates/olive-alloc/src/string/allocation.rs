@@ -441,6 +441,7 @@ impl<A: Allocator> String<A> {
     pub fn try_insert(&mut self, index: usize, c: char) -> Result<(), TryStringInsertError> {
         let mut buf = [0u8; 4];
         let encoded = c.encode_utf8(&mut buf);
+        // This growth is amortized in the best case and exact on OOM.
         self.try_insert_str(index, encoded)
     }
 

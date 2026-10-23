@@ -29,16 +29,16 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
         }
     }
 
-    /// Attempts to insert a key-value pair, returning the key and value back
+    /// Attempts to insert a key-value pair. Returns the key and value back
     /// on allocation failure so the caller can retry or handle the error.
     ///
-    /// On success returns `Ok(Some(old_value))` if the key was already present,
-    /// or `Ok(None)` if it was newly inserted.
+    /// On success returns `Ok(Some(old_value))` (the evicted old value) if the
+    /// key was already present, or `Ok(None)` if it was newly inserted.
     ///
     /// # Errors
     ///
-    /// Returns `Err((key, value, AllocError))` if memory allocation fails. The tree is
-    /// left unmodified on failure.
+    /// Returns `Err((key, value, AllocError))` if memory allocation fails. 
+    /// The tree is left unmodified on failure.
     pub fn try_insert_give_back(
         &mut self,
         key: K,

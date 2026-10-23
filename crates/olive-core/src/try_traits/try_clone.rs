@@ -102,6 +102,8 @@ pub trait TryClone: Sized {
     /// Returns [`TryCloneError`] if a capacity reservation or allocation fails.
     /// See the [trait-level panic policy](#panic-policy) for when panics are
     /// permissible versus when errors must be returned.
+    /// 
+    /// On errors, any intermediate state of the new object is discarded.
     fn try_clone(&self) -> Result<Self, TryCloneError>;
 
     /// Fallibly overwrite `self` with a copy of `source`, mirroring

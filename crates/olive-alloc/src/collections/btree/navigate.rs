@@ -758,25 +758,41 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
         result
     }
 
-    /// Recursively asserts that this node has at least `min_len` keys, and that
-    /// every descendant has at least `MIN_LEN` keys. The `min_len` parameter
-    /// applies only to this node (the root gets a relaxed bound of 1 or 0);
+    /// Recursively asserts that this node has at least `min_len` keys,
+    /// every descendant has at least `MIN_LEN` keys, and all nodes have
+    /// less than `CAPACITY` keys.
+    ///
+    /// The `min_len` parameter applies only to this node
+    /// (the root gets a relaxed bound of 1 or 0);
     /// all children are checked against the strict `MIN_LEN` constant.
     /// Panics on the first violation.
     #[cfg(test)]
-    pub(crate) fn assert_min_len(self, min_len: usize) {
+    pub(crate) fn assert_min_len_and_capacity(self, min_len: usize) {
         use super::map::MIN_LEN;
+        use super::node::CAPACITY;
 
         match self.force() {
             Leaf(leaf) => {
                 assert!(
+                    leaf.len() < CAPACITY,
+                    "leaf node has {} keys, expected < {}",
+                    leaf.len(),
+                    CAPACITY
+                );
+                assert!(
                     leaf.len() >= min_len,
-                    "node has {} keys, expected >= {}",
+                    "leaf node has {} keys, expected >= {}",
                     leaf.len(),
                     min_len
                 );
             }
             Internal(internal) => {
+                assert!(
+                    internal.len() < CAPACITY,
+                    "internal node has {} keys, expected < {}",
+                    internal.len(),
+                    CAPACITY
+                );
                 assert!(
                     internal.len() >= min_len,
                     "internal node has {} keys, expected >= {}",
@@ -789,7 +805,7 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
                 for idx in 0..=len {
                     // SAFETY: idx is in range [0, len], which is a valid edge index.
                     let edge = unsafe { Handle::new_edge(internal, idx) };
-                    edge.descend().assert_min_len(MIN_LEN);
+                    edge.descend().assert_min_len_and_capacity(MIN_LEN);
                 }
             }
         }

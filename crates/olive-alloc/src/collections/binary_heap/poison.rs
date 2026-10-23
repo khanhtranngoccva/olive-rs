@@ -51,8 +51,8 @@ pub(super) struct PoisonOnUnwind<'a, T, A: Allocator> {
 }
 
 impl<'a, T, A: Allocator> PoisonOnUnwind<'a, T, A> {
-    /// Arm the guard over `heap`: unless [`defuse`](Self::defuse) runs
-    /// first, dropping this guard poisons the heap.
+    /// Arm the guard over `heap`: unless the defuse [`core::mem::forget`] runs
+    /// dropping this guard poisons the heap.
     #[inline]
     pub(super) const fn new(heap: &'a mut BinaryHeap<T, A>) -> Self {
         Self { heap }

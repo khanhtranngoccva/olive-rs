@@ -21,8 +21,10 @@ use olive_core::slice::{TrySliceRangeError, try_range};
 
 /// A draining iterator over the elements of a `VecDeque`.
 ///
-/// This `struct` is created by the [`drain`] method on [`VecDeque`]. See its
+/// This `struct` is created by the [`try_drain`] method on [`VecDeque`]. See its
 /// documentation for more.
+///
+/// [`try_drain`]: VecDeque::try_drain
 pub struct Drain<'a, T: 'a, A: Allocator = Global> {
     // We can't just use a &mut VecDeque<T, A>, as that would make Drain invariant over T
     // and we want it to be covariant instead
@@ -358,8 +360,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// # Leaking
     ///
     /// If [`mem::forget`](core::mem::forget) is called on the returned
-    /// iterator, the deque is left in an inconsistent state: the drained range
-    /// is excluded from its length but the tail has not been shifted.
+    /// iterator, elements at the tail beyond the start bound are leaked.
     pub fn try_drain<R: RangeBounds<usize>>(
         &mut self,
         range: R,

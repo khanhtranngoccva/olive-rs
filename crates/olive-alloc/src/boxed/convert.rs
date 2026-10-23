@@ -110,6 +110,8 @@ impl<T, A: Allocator> Box<T, A> {
 // Any downcasting
 // ---------------------------------------------------------------------------
 
+// FIXME: downcast should be done over a macro
+
 impl<A: Allocator> Box<dyn Any, A> {
     /// Attempts to downcast the box to a concrete type.
     pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
