@@ -291,14 +291,10 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         // Only step 1 can panic: `drop_in_place` over a fat slice runs every
         // `T` destructor in the hole, whereas step 2 (`ptr::copy`) is a pure
         // bitwise move that drops nothing and step 3 (`set_len`) just writes a
-        // field. Because the compiler lowers a fat-slice drop to a per-element
-        // sequence inside one function body, if one destructor panics mid-hole
-        // the unwinder still runs the remaining destructors as landing pads on
-        // the same frame before leaving it — so no hole element is leaked. What
-        // the unwind does NOT do is run any code placed after the
-        // `drop_in_place` call in this same `Drop` body; that is why the
-        // compaction (steps 2 and 3) lives in a separate guard whose `Drop`
-        // runs unconditionally. Arming the guard *before* step 1 guarantees the
+        // field. The `drop_in_place` ensures elements do not leak even if a 
+        // panic occurs.
+        //
+        // Arming the guard *before* step 1 guarantees the
         // compaction runs both on the happy path (guard falls out of scope
         // normally) and on unwind (the guard's `Drop` runs during stack
         // teardown).

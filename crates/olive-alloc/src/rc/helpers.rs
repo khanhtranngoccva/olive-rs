@@ -116,7 +116,8 @@ pub(super) unsafe fn ptr_get_data<T: ?Sized>(p: *const RcInner<T>) -> *const T {
 /// - `p` must point to a valid `RcInner<T>` allocation block.
 /// - The reference count fields must be initialized.
 /// - The `T` value does not have to be initialized.
-/// - `p` must have strong == 1 and weak == 0 (excluding implicit weak ref).
+/// - `p` must have strong <= 1 and weak == 0 (excluding implicit weak ref). 
+///   If strong == 0, the value must be treated as uninitialized.
 #[inline]
 pub(super) unsafe fn ptr_get_data_mut<T: ?Sized>(p: *mut RcInner<T>) -> *mut T {
     unsafe { &raw mut (*p).value }

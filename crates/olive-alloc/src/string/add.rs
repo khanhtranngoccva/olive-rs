@@ -54,6 +54,8 @@ use crate::string::String;
 /// failure. Once an error is recorded, further `+` operations are no-ops
 /// (the error is sticky), avoiding use-after-failure UB.
 ///
+/// On the first allocation failure, the string data is lost.
+///
 /// Call [`finish`](Self::finish) to consume the `Concat` and obtain the
 /// underlying `Result<String<A>, TryReserveError>`.
 #[must_use = "Concat is a builder; call finish() to extract the Result"]

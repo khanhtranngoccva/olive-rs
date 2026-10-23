@@ -27,8 +27,8 @@ impl<T: ?Sized, A: Allocator> Deref for Box<T, A> {
     #[inline]
     fn deref(&self) -> &T {
         // SAFETY: `inner` is always a valid, aligned, non-null pointer to an
-        // initialized `T` (or a dangling pointer for ZSTs, which is fine for
-        // `&T` since no read occurs).
+        // initialized `T` (or a dangling pointer for ZSTs, which does not have to
+        // be valid for reads).
         unsafe { self.inner.as_ref() }
     }
 }

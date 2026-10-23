@@ -69,8 +69,9 @@ impl<T> Vec<T, Global> {
         let mut this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
-        // We still want to extract the allocator for consistency even if it is a ZST.
-        let _alloc = unsafe { ptr::read(&this.allocator()) };
+        // We still want to extract the allocator for consistency even if it is a ZST,
+        // and do not care if it is a simple type.
+        let _alloc: Global = unsafe { ptr::read(this.allocator()) };
         (this.as_mut_ptr(), this.len(), this.capacity())
     }
 
@@ -94,7 +95,7 @@ impl<T> Vec<T, Global> {
         // SAFETY: we consume `self`; the pointer is handed to the caller, who
         // takes over ownership of the allocation.
         // We still want to extract the allocator for consistency even if it is a ZST.
-        let _alloc = unsafe { ptr::read(&this.allocator()) };
+        let _alloc: Global = unsafe { ptr::read(this.allocator()) };
         (this.raw.non_null(), this.len(), this.capacity())
     }
 }

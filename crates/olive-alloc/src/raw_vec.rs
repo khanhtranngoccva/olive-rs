@@ -139,7 +139,9 @@ impl<T> RawVec<T, Global> {
     /// Creates the biggest possible `RawVec` (on the system heap) without
     /// allocating. If `T` has positive size, then this makes a `RawVec` with
     /// capacity `0`. If `T` is zero-sized, then it makes a `RawVec` with
-    /// capacity `usize::MAX`. Useful for implementing delayed allocation.
+    /// capacity `usize::MAX` and a well-aligned dangling pointer.
+    ///
+    /// Useful for implementing delayed allocation.
     #[must_use]
     pub const fn new() -> Self {
         Self::new_in(Global)
@@ -203,11 +205,6 @@ const fn elem_layout<T>() -> Layout {
 }
 
 impl<T, A: Allocator> RawVec<T, A> {
-    /// Minimum non-zero capacity for this element size, matching std's growth
-    /// heuristic.
-    #[expect(unused)]
-    pub(crate) const MIN_NON_ZERO_CAP: usize = min_non_zero_cap(size_of::<T>());
-
     /// Like [`Self::new`], but parameterized over the choice of allocator for the
     /// returned `RawVec`.
     #[inline]
