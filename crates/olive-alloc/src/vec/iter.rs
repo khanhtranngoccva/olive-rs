@@ -490,8 +490,8 @@ mod tests {
                 v.try_push(TrackedItem::with_id(&ledger, i, ())).unwrap();
             }
             let mut it = v.into_iter();
-            let _ = it.next().unwrap(); // id 0
-            let _ = it.next_back().unwrap(); // id 4
+            let _first = it.next().unwrap(); // id 0
+            let _last = it.next_back().unwrap(); // id 4
             // Dropping the iterator must destroy only the unconsumed segments (ids 1,2,3).
             drop(it);
 

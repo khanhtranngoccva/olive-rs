@@ -320,8 +320,11 @@ mod tests {
     use crate::borrow::Cow;
     use olive_core::TryClone;
     use olive_core::try_traits::try_clone::TryCloneError;
-    use olive_test_helpers::{FailAlloc, FlakyClone};
+    use olive_test_helpers::{
+        BudgetedAlloc, CloneBudget, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
+    };
     use std::format;
+    use std::sync::Arc;
 
     #[test]
     fn try_into_array_error_display() {
@@ -358,7 +361,18 @@ mod tests {
         assert!(boxed.is_empty());
     }
 
-    // FIXME: add simple case for try_into_boxed_slice_give_back success
+    #[test]
+    fn try_into_boxed_slice_give_back_success() {
+        let v = {
+            let mut v: Vec<i32> = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let boxed = v.try_into_boxed_slice_give_back().expect("box ok");
+        assert_eq!(&boxed[..], &[0, 1, 2, 3, 4][..]);
+    }
 
     #[test]
     fn try_into_boxed_slice_give_back_on_oom() {
@@ -460,7 +474,25 @@ mod tests {
         assert_eq!(arr.as_ref(), &['a', 'b', 'c']);
     }
 
-    // FIXME: try_into_array_give_back misses OOM path
+    #[test]
+    fn try_into_array_give_back_on_oom() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut v: Vec<u8, BudgetedAlloc> =
+            Vec::try_with_capacity_in(10, alloc.clone()).expect("alloc ok");
+        for i in 0..3u8 {
+            v.try_push(i).unwrap();
+        }
+        assert!(v.capacity() > 3);
+        // With the budget drained, the shrink-to-fit reallocation must fail
+        // and hand the vector back intact.
+        alloc.drain();
+        let (vec_back, e) = v.try_into_array_give_back::<3>().unwrap_err();
+        match e {
+            TryVecIntoArrayError::Shrink(r) => assert!(r.is_alloc()),
+            other => panic!("expected Shrink, got {other:?}"),
+        }
+        assert_eq!(vec_back.as_slice(), &[0, 1, 2]);
+    }
 
     #[test]
     fn from_slice_in_fail_alloc_reports_reserve() {
@@ -468,7 +500,21 @@ mod tests {
         assert!(matches!(e, TryVecWithCloneError::Reserve(_)));
     }
 
-    // FIXME: try_from_slice_in misses clone path
+    #[test]
+    fn try_from_slice_in_reports_clone_failure() {
+        let ledger = Arc::new(Ledger::new());
+        // No tickets: the very first element clone must fail, and nothing
+        // transient may be created.
+        let budget = CloneBudget::new(0);
+        let src = [FlakyCloneTrackedItem::construct(&ledger, budget.share())];
+        let e = Vec::try_from_slice_in(&src, Global).expect_err("clone should fail");
+        assert!(matches!(e, TryVecWithCloneError::Clone(_)));
+        assert_eq!(ledger.live_ids(), [0]);
+        assert!(ledger.double_dropped().is_empty());
+        drop(src);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+    }
 
     #[test]
     fn try_from_array_moves_elements_without_cloning() {
@@ -510,7 +556,12 @@ mod tests {
         assert_eq!(v.capacity(), usize::MAX);
     }
 
-    // FIXME: try_from_array misses OOM errors
+    #[test]
+    fn try_from_array_in_reports_oom() {
+        let e = Vec::<i32, FailAlloc>::try_from_array_in([1, 2, 3], FailAlloc)
+            .expect_err("should fail");
+        assert!(e.is_alloc());
+    }
 
     #[test]
     fn from_boxed_slice_preserves_contents_and_capacity() {

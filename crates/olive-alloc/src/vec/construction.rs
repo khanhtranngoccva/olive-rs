@@ -199,7 +199,7 @@ mod tests {
     extern crate std;
     use super::*;
     use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
-    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc, MaybeUnclonable};
 
     #[test]
     fn new_is_empty() {
@@ -226,7 +226,13 @@ mod tests {
         assert!(v.capacity() == 10);
     }
 
-    // FIXME: try_with_capacity_in missing success path
+    #[test]
+    fn try_with_capacity_in_allocates_room() {
+        let v = Vec::<i32, Global>::try_with_capacity_in(10, Global).expect("alloc ok");
+        assert!(v.is_empty());
+        // Deterministic RawVec: the capacity is exactly what was asked for.
+        assert!(v.capacity() == 10);
+    }
 
     #[test]
     fn with_capacity_in_fail_alloc_reports_alloc() {
@@ -253,7 +259,19 @@ mod tests {
         assert!(v.is_empty());
     }
 
-    // FIXME: missing from_elem_in success
+    #[test]
+    fn from_elem_in_fills_with_clones() {
+        let v = Vec::try_from_elem_in(&7i32, 4, Global).expect("elem ok");
+        assert_eq!(v.as_slice(), &[7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn from_elem_in_clonable_fills() {
+        let item = MaybeUnclonable::clonable(7i32);
+        let v = Vec::try_from_elem_in(&item, 3, Global).expect("clone ok");
+        assert_eq!(v.len(), 3);
+        assert!(v.as_slice().iter().all(|m| m.inner == 7));
+    }
 
     #[test]
     fn from_elem_in_fail_alloc_reports_reserve() {
@@ -261,7 +279,12 @@ mod tests {
         assert!(matches!(e, TryVecWithCloneError::Reserve(r) if r.is_alloc()));
     }
 
-    // FIXME: use MaybeUnclonable to halt cloning for from_elem_in
+    #[test]
+    fn from_elem_in_unclonable_reports_clone_error() {
+        let item = MaybeUnclonable::unclonable(42i32);
+        let e = Vec::try_from_elem_in(&item, 3, Global).expect_err("clone should fail");
+        assert!(matches!(e, TryVecWithCloneError::Clone(_)));
+    }
 
     #[test]
     fn default_matches_new() {
@@ -269,7 +292,12 @@ mod tests {
         assert!(v.is_empty());
     }
 
-    // FIXME: success path for try_default
+    #[test]
+    fn vec_try_default_succeeds() {
+        let v = <Vec<u32> as TryDefault>::try_default().expect("default ok");
+        assert!(v.is_empty());
+        assert_eq!(v.capacity(), 0);
+    }
 
     #[test]
     fn vec_try_default_allocator_failure_propagates() {

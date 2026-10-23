@@ -918,7 +918,19 @@ mod tests {
         assert_eq!(v.capacity(), before);
     }
 
-    // FIXME: missing resize OOM
+    #[test]
+    fn resize_reports_oom_and_keeps_content() {
+        let alloc = BudgetedAlloc::new(4);
+        let mut v: Vec<i32, BudgetedAlloc> = Vec::new_in(alloc.clone());
+        for i in 0..2 {
+            v.try_push(i).unwrap();
+        }
+        alloc.drain();
+        let e = v.try_resize(6, &9).expect_err("reserve should fail");
+        assert!(matches!(e, TryVecWithCloneError::Reserve(r) if r.is_alloc()));
+        // The vector is untouched by the failed resize.
+        assert_eq!(v.as_slice(), &[0, 1]);
+    }
 
     #[test]
     fn resize_rollbacks_partial_on_clone_failure() {
@@ -967,7 +979,21 @@ mod tests {
         assert_eq!(v.as_slice(), &[1, 2, 3]);
     }
 
-    // FIXME: missing resize_with OOM
+    #[test]
+    fn resize_with_reports_oom_and_keeps_content() {
+        let alloc = BudgetedAlloc::new(4);
+        let mut v: Vec<i32, BudgetedAlloc> = Vec::new_in(alloc.clone());
+        for i in 0..2 {
+            v.try_push(i).unwrap();
+        }
+        alloc.drain();
+        let e = v
+            .try_resize_with(6, || -> Result<i32, ()> { Ok(0) })
+            .expect_err("reserve should fail");
+        assert!(matches!(e, TryVecWithClosureError::Reserve(r) if r.is_alloc()));
+        // The vector is untouched by the failed resize.
+        assert_eq!(v.as_slice(), &[0, 1]);
+    }
 
     #[test]
     fn resize_with_closure_error_rolls_back() {
@@ -1024,7 +1050,25 @@ mod tests {
         assert!(b.is_empty());
     }
 
-    // FIXME: missing append OOM
+    #[test]
+    fn append_reports_oom_and_keeps_both() {
+        let alloc = BudgetedAlloc::new(5);
+        // `a` gets exactly enough room for its one element, so appending the
+        // four-element `b` must grow the buffer — and the budget is drained.
+        let mut a: Vec<i32, BudgetedAlloc> =
+            Vec::try_with_capacity_in(4, alloc.clone()).expect("alloc ok");
+        a.try_push(1).unwrap();
+        let mut b: Vec<i32, BudgetedAlloc> = Vec::new_in(alloc.clone());
+        for i in 2..6 {
+            b.try_push(i).unwrap();
+        }
+        alloc.drain();
+        let e = a.try_append(&mut b).expect_err("reserve should fail");
+        assert!(e.is_alloc());
+        // Both vectors are untouched by the failed append.
+        assert_eq!(a.as_slice(), &[1]);
+        assert_eq!(b.as_slice(), &[2, 3, 4, 5]);
+    }
 
     #[test]
     fn shrink_to_fit_reduces_capacity() {

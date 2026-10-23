@@ -192,6 +192,7 @@ mod tests {
     use core::slice;
 
     use super::*;
+    use olive_test_helpers::CountingAllocator;
 
     #[test]
     fn into_raw_parts_roundtrip() {
@@ -207,36 +208,77 @@ mod tests {
         assert!(cap >= 4);
         assert_eq!(
             unsafe { slice::from_raw_parts(base, len) },
-            &[10, 20, 30, 40]
+            &[0, 10, 20, 30]
         );
         let rebuilt = unsafe { Vec::<i32>::from_raw_parts(base, len, cap) };
-        assert_eq!(rebuilt, [10, 20, 30, 40]);
+        assert_eq!(rebuilt, [0, 10, 20, 30]);
         assert_eq!(rebuilt.len(), len);
         assert_eq!(rebuilt.capacity(), cap);
     }
 
     #[test]
     fn into_raw_parts_with_allocator_roundtrip() {
-        // FIXME: use CountingAllocator
-        let v = {
-            let mut v = Vec::new();
-            for i in 0..4 {
-                v.try_push(i * 10).unwrap();
-            }
-            v
-        };
+        let allocator = CountingAllocator::new();
+        let mut v: Vec<i32, &CountingAllocator> =
+            Vec::try_with_capacity_in(12, &allocator).unwrap();
+        for i in 0..4 {
+            v.try_push(i * 10).unwrap();
+        }
         let (base, len, cap, alloc) = v.into_raw_parts_with_allocator();
         assert_eq!(len, 4);
         assert!(cap >= 4);
         assert_eq!(
             unsafe { slice::from_raw_parts(base, len) },
-            &[10, 20, 30, 40]
+            &[0, 10, 20, 30]
         );
-        let rebuilt = unsafe { Vec::<i32>::from_raw_parts_in(base, len, cap, alloc) };
-        assert_eq!(rebuilt, [10, 20, 30, 40]);
+        // The buffer must have come from the vector's own allocator.
+        assert!(alloc.allocations() >= 1);
+        assert_eq!(alloc.deallocations(), 0);
+
+        let rebuilt =
+            unsafe { Vec::<i32, &CountingAllocator>::from_raw_parts_in(base, len, cap, alloc) };
+        assert_eq!(rebuilt, [0, 10, 20, 30]);
+        assert_eq!(rebuilt.len(), len);
+        assert_eq!(rebuilt.capacity(), cap);
+        drop(rebuilt);
+        assert_eq!(alloc.deallocations(), alloc.allocations());
+    }
+
+    #[test]
+    fn into_parts_roundtrip() {
+        let mut v = Vec::new();
+        for i in 0..4 {
+            v.try_push(i * 10).unwrap();
+        }
+        let (base, len, cap) = v.into_parts();
+        assert_eq!(len, 4);
+        assert!(cap >= 4);
+        assert_eq!(
+            unsafe { slice::from_raw_parts(base.as_ptr(), len) },
+            &[0, 10, 20, 30]
+        );
+        let rebuilt = unsafe { Vec::<i32>::from_parts(base, len, cap) };
+        assert_eq!(rebuilt, [0, 10, 20, 30]);
         assert_eq!(rebuilt.len(), len);
         assert_eq!(rebuilt.capacity(), cap);
     }
 
-    // FIXME: add NonNull test counterparts
+    #[test]
+    fn into_parts_with_allocator_roundtrip() {
+        let mut v = Vec::new();
+        for i in 0..4 {
+            v.try_push(i * 10).unwrap();
+        }
+        let (base, len, cap, alloc) = v.into_parts_with_allocator();
+        assert_eq!(len, 4);
+        assert!(cap >= 4);
+        assert_eq!(
+            unsafe { slice::from_raw_parts(base.as_ptr(), len) },
+            &[0, 10, 20, 30]
+        );
+        let rebuilt = unsafe { Vec::<i32>::from_parts_in(base, len, cap, alloc) };
+        assert_eq!(rebuilt, [0, 10, 20, 30]);
+        assert_eq!(rebuilt.len(), len);
+        assert_eq!(rebuilt.capacity(), cap);
+    }
 }

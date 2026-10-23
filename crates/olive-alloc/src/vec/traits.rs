@@ -13,6 +13,7 @@ use core::ops::Deref;
 use core::ops::DerefMut;
 use core::ops::Index;
 use core::ops::IndexMut;
+use core::slice::SliceIndex;
 use olive_core::alloc::Allocator;
 use olive_core::alloc::AllocatorTryClone;
 use olive_core::alloc_errors::TryReserveError;
@@ -56,36 +57,27 @@ impl<T, A: Allocator> DerefMut for Vec<T, A> {
     }
 }
 
-impl<T, A: Allocator> Index<usize> for Vec<T, A> {
-    type Output = T;
+impl<T, I, A> Index<I> for Vec<T, A>
+where
+    I: SliceIndex<[T]>,
+    A: Allocator,
+{
+    type Output = I::Output;
 
     #[inline]
-    fn index(&self, index: usize) -> &T {
-        // Bounds-checked by the slice machinery.
-        &self.as_slice()[index]
+    fn index(&self, index: I) -> &I::Output {
+        Index::index(&**self, index)
     }
 }
 
-impl<T, A: Allocator> IndexMut<usize> for Vec<T, A> {
+impl<T, I, A> IndexMut<I> for Vec<T, A>
+where
+    I: SliceIndex<[T]>,
+    A: Allocator,
+{
     #[inline]
-    fn index_mut(&mut self, index: usize) -> &mut T {
-        &mut self.as_mut_slice()[index]
-    }
-}
-
-impl<T, A: Allocator> Index<core::ops::RangeFull> for Vec<T, A> {
-    type Output = [T];
-
-    #[inline]
-    fn index(&self, _: core::ops::RangeFull) -> &[T] {
-        self.as_slice()
-    }
-}
-
-impl<T, A: Allocator> IndexMut<core::ops::RangeFull> for Vec<T, A> {
-    #[inline]
-    fn index_mut(&mut self, _: core::ops::RangeFull) -> &mut [T] {
-        self.as_mut_slice()
+    fn index_mut(&mut self, index: I) -> &mut I::Output {
+        IndexMut::index_mut(&mut **self, index)
     }
 }
 
@@ -415,7 +407,8 @@ mod tests {
     use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use olive_test_helpers::{
-        CloneBudget, CountingAllocator, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
+        BudgetedAlloc, CloneBudget, CountingAllocator, FailAlloc, FlakyClone,
+        FlakyCloneTrackedItem, Ledger, PanicArmer,
     };
     use std::format;
     use std::sync::Arc;
@@ -465,7 +458,15 @@ mod tests {
         assert_eq!(s, &[1, 2]);
     }
 
-    // FIXME: missing DerefMut
+    #[test]
+    fn deref_mut_as_slice() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        v.try_push(2).unwrap();
+        let s: &mut [i32] = &mut v;
+        s[0] = 42;
+        assert_eq!(v.as_slice(), &[42, 2]);
+    }
 
     #[test]
     fn index_get_and_set() {
@@ -487,7 +488,24 @@ mod tests {
         assert_eq!(all, &[1, 2]);
     }
 
-    // FIXME: missing partial range
+    #[test]
+    fn range_partial_index() {
+        let mut v = Vec::new();
+        for i in 0..4 {
+            v.try_push(i).unwrap();
+        }
+        // Any `SliceIndex` works directly on the Vec: `usize`, `RangeFull`
+        // and the partial ranges alike.
+        let mid: &[i32] = &v[1..3];
+        assert_eq!(mid, &[1, 2]);
+        let tail: &[i32] = &v[2..];
+        assert_eq!(tail, &[2, 3]);
+        let head: &mut [i32] = &mut v[..2];
+        head[0] = 9;
+        assert_eq!(v.as_slice(), &[9, 1, 2, 3]);
+        let first_two: &[i32] = &v[..=1];
+        assert_eq!(first_two, &[9, 1]);
+    }
 
     #[test]
     fn vec_partial_eq_same_len_equal() {
@@ -905,7 +923,97 @@ mod tests {
         assert!(ledger.all_dropped_once(0..6));
     }
 
-    // FIXME: panic safety for the rollback
+    #[test]
+    fn extend_from_slice_with_rollback_is_panic_safe() {
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        // One ticket: the first source clone succeeds, the second fails, so
+        // the rollback has exactly one transient to drop — and that drop is
+        // the one that panics.
+        let budget = CloneBudget::new(1);
+
+        /// A tracked payload whose clone shares the armer and whose drop
+        /// panics exactly once while armed.
+        struct RollbackPanicPayload {
+            id: u32,
+            ledger: Arc<Ledger>,
+            armer: Arc<PanicArmer>,
+            budget: CloneBudget,
+        }
+
+        impl RollbackPanicPayload {
+            fn construct(
+                ledger: &Arc<Ledger>,
+                armer: &Arc<PanicArmer>,
+                budget: &CloneBudget,
+            ) -> Self {
+                let id = ledger.allocate();
+                ledger.register(id);
+                Self {
+                    id,
+                    ledger: ledger.clone(),
+                    armer: armer.clone(),
+                    budget: budget.share(),
+                }
+            }
+        }
+
+        impl TryClone for RollbackPanicPayload {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                if !self.budget.try_consume() {
+                    return Err(TryCloneError::Other("rollback budget exhausted"));
+                }
+                let id = self.ledger.allocate();
+                self.ledger.register(id);
+                Ok(Self {
+                    id,
+                    ledger: self.ledger.clone(),
+                    armer: self.armer.clone(),
+                    budget: self.budget.share(),
+                })
+            }
+        }
+
+        impl Drop for RollbackPanicPayload {
+            fn drop(&mut self) {
+                self.ledger.unregister(self.id);
+                if self.armer.fetch_and_disarm() {
+                    panic!("forced panic in rollback drop");
+                }
+            }
+        }
+
+        let mut v: Vec<RollbackPanicPayload> = Vec::new();
+        v.try_push(RollbackPanicPayload::construct(&ledger, &armer, &budget))
+            .unwrap();
+        let mut source: Vec<RollbackPanicPayload> = Vec::new();
+        for _ in 0..3 {
+            source
+                .try_push(RollbackPanicPayload::construct(&ledger, &armer, &budget))
+                .unwrap();
+        }
+
+        armer.arm();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = v.try_extend_from_slice_with_rollback(source.as_slice());
+        }));
+
+        assert!(
+            result.is_err(),
+            "the rollback must surface the panicking drop"
+        );
+        // The destination rolled back to just its original.
+        assert_eq!(v.len(), 1);
+        drop(source);
+        drop(v);
+        // Seed and sources dropped exactly once; the transient's own drop ran
+        // before panicking; nothing was dropped twice.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
+    }
 
     #[test]
     fn try_clone_vec_basic() {
@@ -926,7 +1034,45 @@ mod tests {
         assert!(c.is_empty());
     }
 
-    // FIXME: try_clone should test element clone failures and allocation failures
+    #[test]
+    fn try_clone_element_failure_leaves_source_intact() {
+        let ledger = Arc::new(Ledger::new());
+        // Two tickets: the clones of the first two elements succeed, the
+        // third fails mid-way through building the copy.
+        let budget = CloneBudget::new(2);
+        let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+        for _ in 0..3 {
+            v.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
+                .unwrap();
+        }
+        let e = v.try_clone().unwrap_err();
+        assert!(matches!(e, TryCloneError::Other("budget exhausted")));
+        // The source is untouched; the two transient clones were dropped once.
+        assert_eq!(v.len(), 3);
+        assert_eq!(ledger.live_ids(), [0, 1, 2]);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        assert_eq!(ledger.drop_count(5), 0);
+        drop(v);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
+    }
+
+    #[test]
+    fn try_clone_reports_allocation_failure() {
+        let alloc = BudgetedAlloc::new(4);
+        let mut v: Vec<i32, BudgetedAlloc> = Vec::new_in(alloc.clone());
+        for i in 0..3 {
+            v.try_push(i).unwrap();
+        }
+        // Drain the shared budget: the clone's own reservation must fail.
+        alloc.drain();
+        let e = v.try_clone().unwrap_err();
+        assert!(matches!(e, TryCloneError::Reserve(r) if r.is_alloc()));
+        // The source is untouched.
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
 
     #[test]
     fn try_collect_uses_size_hint() {

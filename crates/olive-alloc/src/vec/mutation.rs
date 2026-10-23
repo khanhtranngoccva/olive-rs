@@ -662,7 +662,53 @@ mod tests {
         assert_eq!(v.capacity(), cap_before);
     }
 
-    // FIXME: panic safety for clear()
+    // FIXME: use the existing PanickyDrop
+    #[test]
+    fn clear_panicking_drop_is_safe() {
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        /// Panics exactly once, on the first drop that fires while armed.
+        struct ClearPanicDrop {
+            id: u32,
+            ledger: Arc<Ledger>,
+            armer: Arc<PanicArmer>,
+        }
+        impl Drop for ClearPanicDrop {
+            fn drop(&mut self) {
+                self.ledger.unregister(self.id);
+                if self.armer.fetch_and_disarm() {
+                    panic!("forced panic in drop");
+                }
+            }
+        }
+
+        armer.arm();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut v = Vec::new();
+            for i in 0..4u32 {
+                v.try_push(ClearPanicDrop {
+                    id: i,
+                    ledger: ledger.clone(),
+                    armer: armer.clone(),
+                })
+                .unwrap();
+            }
+            // `clear` drops every element; the first drop to fire panics,
+            // which also disarms the armer for every later drop.
+            v.clear();
+        }));
+
+        assert!(result.is_err(), "expected a drop to panic during clear");
+
+        // Every element must have been dropped exactly once and nothing may
+        // have been dropped twice: the shrinking length keeps the drop path
+        // safe even in the face of the panic.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4));
+    }
 
     #[test]
     fn pop_if_matches() {

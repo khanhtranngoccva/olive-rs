@@ -183,7 +183,7 @@ impl<'a> TryFromIterator<&'a str> for String {
     }
 }
 
-// FIXME: add try_from_iterator_in or something like that
+// FIXME: add try_from_iter or something like that
 
 impl<A: Allocator> Write for String<A> {
     /// Makes [`String`] usable as a fallible formatting sink.
