@@ -144,6 +144,32 @@ impl<T, A: Allocator> Vec<T, A> {
         let raw = RawVec::try_with_capacity_in(capacity, alloc)?;
         Ok(Self { raw, len: 0 })
     }
+
+    /// Creates a `Vec<T>` containing `value` cloned `count` times.
+    ///
+    /// Equivalent to `vec![value; count]` but fully fallible.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryVecWithCloneError`] on a reservation or clone failure.
+    pub fn try_from_elem_in(value: &T, count: usize, alloc: A) -> Result<Self, TryVecWithCloneError>
+    where
+        T: TryClone,
+    {
+        let mut vec =
+            Self::try_with_capacity_in(count, alloc).map_err(TryVecWithCloneError::Reserve)?;
+
+        for _ in 0..count {
+            match value.try_clone() {
+                Ok(cloned) => {
+                    // SAFETY: Capacity was reserved above, so this cannot fail.
+                    unsafe { vec.force_push(cloned) };
+                }
+                Err(e) => return Err(TryVecWithCloneError::Clone(e)),
+            }
+        }
+        Ok(vec)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,5 +191,92 @@ impl<T, A: AllocatorTryDefault> TryDefault for Vec<T, A> {
     #[inline]
     fn try_default() -> Result<Self, TryDefaultError> {
         Ok(Self::new_in(A::try_default()?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
+    use olive_test_helpers::{FailAlloc, FailDefaultAlloc};
+
+    #[test]
+    fn new_is_empty() {
+        let v: Vec<i32> = Vec::new();
+        assert!(v.is_empty());
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), 0);
+    }
+
+    #[test]
+    fn new_in_custom_allocator() {
+        let v: Vec<i32, FailAlloc> = Vec::new_in(FailAlloc);
+        assert!(v.is_empty());
+        // No allocation happened yet, so this is still usable.
+        assert_eq!(v.as_slice(), []);
+    }
+
+    #[test]
+    fn try_with_capacity_allocates_room() {
+        let v = Vec::<i32>::try_with_capacity(10).expect("alloc ok");
+        assert!(v.is_empty());
+        // We guarantee determinism for the RawVec, lest we cannot deterministically
+        // test its behaviors.
+        assert!(v.capacity() == 10);
+    }
+
+    // FIXME: try_with_capacity_in missing success path
+
+    #[test]
+    fn with_capacity_in_fail_alloc_reports_alloc() {
+        let err: TryReserveError =
+            Vec::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc).expect_err("should fail");
+        assert!(err.is_alloc());
+    }
+
+    #[test]
+    fn try_with_capacity_zero_is_fine() {
+        let v = Vec::<i32>::try_with_capacity(0).expect("zero cap ok");
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn from_elem_clones_count_times() {
+        let v = Vec::try_from_elem(&7i32, 4).expect("elem ok");
+        assert_eq!(v.as_slice(), &[7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn from_elem_zero_count_is_empty() {
+        let v = Vec::try_from_elem(&7i32, 0).expect("empty ok");
+        assert!(v.is_empty());
+    }
+
+    // FIXME: missing from_elem_in success
+
+    #[test]
+    fn from_elem_in_fail_alloc_reports_reserve() {
+        let e = Vec::try_from_elem_in(&1i32, 4, FailAlloc).expect_err("should fail");
+        assert!(matches!(e, TryVecWithCloneError::Reserve(r) if r.is_alloc()));
+    }
+
+    // FIXME: use MaybeUnclonable to halt cloning for from_elem_in
+
+    #[test]
+    fn default_matches_new() {
+        let v: Vec<i32> = Default::default();
+        assert!(v.is_empty());
+    }
+
+    // FIXME: success path for try_default
+
+    #[test]
+    fn vec_try_default_allocator_failure_propagates() {
+        let e = <Vec<u32, FailDefaultAlloc> as TryDefault>::try_default().unwrap_err();
+        assert!(matches!(
+            e,
+            TryDefaultError::Other("allocator default failed")
+        ));
     }
 }

@@ -23,7 +23,7 @@ impl<A: Allocator> String<A> {
     /// Unlike the fallible cousin [`Self::try_into_boxed_str`], this does not shrink
     /// the string and may cause the string to hold more memory than needed.
     pub fn into_boxed_str(self) -> Box<str, A> {
-        let (ptr, len, _cap, alloc) = unsafe { self.buf.into_raw_parts_with_alloc() };
+        let (ptr, len, _cap, alloc) = self.buf.into_raw_parts_with_allocator();
         // SAFETY: `ptr` points to `len` bytes of valid UTF-8 allocated by
         // `alloc`; reinterpreting the fat pointer as `str` preserves the
         // invariant and keeps the same allocator for eventual deallocation.
@@ -188,7 +188,6 @@ mod tests {
         let err = s.try_into_boxed_str().unwrap_err();
         assert!(err.is_alloc());
     }
-
 
     #[test]
     fn try_into_boxed_str_give_back_returns_string_on_failure() {

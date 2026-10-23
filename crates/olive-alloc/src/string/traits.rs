@@ -384,7 +384,10 @@ mod tests {
         // An iterator hinting `usize::MAX` items makes the initial
         // reservation overflow, which is the deterministic OOM path for the
         // `Global`-only collect impls.
-        let err = (0..usize::MAX).map(|_| 'x').try_collect::<String>().unwrap_err();
+        let err = (0..usize::MAX)
+            .map(|_| 'x')
+            .try_collect::<String>()
+            .unwrap_err();
         assert!(err.is_capacity_overflow());
     }
 
@@ -398,7 +401,10 @@ mod tests {
 
     #[test]
     fn collect_strs_oom_on_capacity_overflow() {
-        let err = (0..usize::MAX).map(|_| "x").try_collect::<String>().unwrap_err();
+        let err = (0..usize::MAX)
+            .map(|_| "x")
+            .try_collect::<String>()
+            .unwrap_err();
         assert!(err.is_capacity_overflow());
     }
 

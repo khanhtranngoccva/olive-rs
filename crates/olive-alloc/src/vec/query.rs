@@ -1,5 +1,5 @@
-use core::slice;
 use super::Vec;
+use core::slice;
 use olive_core::alloc::Allocator;
 
 // ---------------------------------------------------------------------------

@@ -73,9 +73,7 @@ impl<T, A: Allocator> Vec<T, A> {
         // Decompose by value: `into_raw_parts_with_alloc` wraps `self` in
         // `ManuallyDrop`, so nothing here double-frees. The buffer and the
         // allocator handle are handed straight to the reconstructed deque.
-        //
-        // SAFETY: we consume `self`; the pointer is handed back to us.
-        let (ptr, len, cap, alloc) = unsafe { self.into_raw_parts_with_alloc() };
+        let (ptr, len, cap, alloc) = self.into_raw_parts_with_allocator();
 
         // SAFETY: a `Vec`'s buffer is a linear run starting at `ptr`, so a
         // deque with `head == 0` and `len` elements reads exactly those slots.

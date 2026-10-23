@@ -442,3 +442,510 @@ impl<T, A: Allocator> Vec<T, A> {
         Ok(drain)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use olive_test_helpers::{CloneBudget, Counter, FlakyCloneTrackedItem, Ledger, PanicArmer};
+    use std::sync::Arc;
+
+    #[test]
+    fn drain_as_slice() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut d = v.try_drain(1..4).unwrap();
+        assert_eq!(d.as_slice(), &[1, 2, 3]);
+        let _ = d.next();
+        assert_eq!(d.as_slice(), &[2, 3]);
+    }
+
+    #[test]
+    fn drain_from_front() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(..2).unwrap().collect();
+        assert_eq!(drained, std::vec![0, 1]);
+        assert_eq!(v.as_slice(), &[2, 3, 4]);
+    }
+
+    #[test]
+    fn drain_at_end() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(3..).unwrap().collect();
+        assert_eq!(drained, std::vec![3, 4]);
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn drain_entire_vec() {
+        let mut v = Vec::new();
+        for i in 0..4i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(..).unwrap().collect();
+        assert_eq!(drained, std::vec![0, 1, 2, 3]);
+        assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn drain_middle_range() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(1..3).unwrap().collect();
+        assert_eq!(drained, std::vec![1, 2]);
+        assert_eq!(v.as_slice(), &[0, 3, 4]);
+    }
+
+    #[test]
+    fn drain_single_element() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(2..3).unwrap().collect();
+        assert_eq!(drained, std::vec![2]);
+        assert_eq!(v.as_slice(), &[0, 1, 3, 4]);
+    }
+
+    #[test]
+    fn drain_empty_range() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let drained: std::vec::Vec<i32> = v.try_drain(2..2).unwrap().collect();
+        assert!(drained.is_empty());
+        assert_eq!(v.as_slice(), &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn drain_out_of_bounds_errors() {
+        let mut v = Vec::new();
+        for i in 0..3i32 {
+            v.try_push(i).unwrap();
+        }
+        assert!(v.try_drain(3..5).is_err());
+        // Reversed range must be rejected (lint suppressed: this is the point of the test).
+        #[allow(
+            clippy::reversed_empty_ranges,
+            reason = "intentionally testing a reversed range"
+        )]
+        {
+            assert!(v.try_drain(2..1).is_err());
+        }
+        assert!(v.try_drain(..100).is_err());
+        // Vec is unmodified by failed drains.
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+        // Valid: empty range (does not mutate).
+        let d = v.try_drain(1..1).unwrap();
+        assert_eq!(d.len(), 0);
+        drop(d);
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn drain_double_ended_mixed() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut d = v.try_drain(1..4).unwrap();
+        assert_eq!(d.next_back(), Some(3));
+        assert_eq!(d.next(), Some(1));
+        drop(d);
+        // Elements 1 and 3 yielded, element 2 destroyed. Range [1..4) fully removed.
+        assert_eq!(v.as_slice(), &[0, 4]);
+    }
+
+    #[test]
+    fn drain_zst() {
+        let mut v: Vec<()> = Vec::new();
+        for _ in 0..5 {
+            v.try_push(()).unwrap();
+        }
+        let count = v.try_drain(1..3).unwrap().count();
+        assert_eq!(count, 2);
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn drain_zst_len_size_hint_is_empty() {
+        let mut v: Vec<()> = Vec::new();
+        for _ in 0..5 {
+            v.try_push(()).unwrap();
+        }
+        // Drain the middle range [1, 4): three elements outstanding.
+        let mut d = v.try_drain(1..4).unwrap();
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.size_hint(), (3, Some(3)));
+        assert_eq!(d.as_slice().len(), 3);
+
+        // Yield one from each end: one remains, and the slice length tracks it.
+        assert_eq!(d.next(), Some(()));
+        assert_eq!(d.next_back(), Some(()));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.size_hint(), (1, Some(1)));
+        assert_eq!(d.as_slice().len(), 1);
+
+        // Exhaustion: all views agree on 0.
+        assert_eq!(d.next(), Some(()));
+        assert_eq!(d.len(), 0);
+        assert_eq!(d.as_slice().len(), 0);
+        assert!(d.is_empty());
+        drop(d);
+    }
+
+    #[test]
+    fn drain_len_size_hint_is_empty() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut d = v.try_drain(1..4).unwrap();
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.size_hint(), (3, Some(3)));
+        assert!(!d.is_empty());
+        assert_eq!(d.next(), Some(1));
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.size_hint(), (2, Some(2)));
+        assert_eq!(d.next_back(), Some(3));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.size_hint(), (1, Some(1)));
+        assert_eq!(d.next(), Some(2));
+        assert_eq!(d.len(), 0);
+        assert_eq!(d.size_hint(), (0, Some(0)));
+        assert!(d.is_empty());
+        assert_eq!(d.next(), None);
+    }
+
+    #[test]
+    fn drain_partial_consume_drops_rest_of_range() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut d = v.try_drain(1..3).unwrap();
+        assert_eq!(d.next(), Some(1));
+        drop(d);
+        // Element 1 yielded, element 2 destroyed. Entire range removed.
+        assert_eq!(v.as_slice(), &[0, 3, 4]);
+    }
+
+    #[test]
+    fn drain_no_consume_still_removes_range() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let d = v.try_drain(1..3).unwrap();
+        drop(d);
+        assert_eq!(v.as_slice(), &[0, 3, 4]);
+    }
+
+    #[test]
+    fn drain_fully_collected_compacts_and_drops_once() {
+        let counter = Arc::new(Counter::new());
+
+        #[allow(dead_code)]
+        struct Tracked(u32, Arc<Counter>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.1.record();
+            }
+        }
+
+        let mut v: Vec<Tracked> = Vec::new();
+        for i in 0..5u32 {
+            v.try_push(Tracked(i, counter.clone())).unwrap();
+        }
+        // Collect the whole drained range; the temporary Drain drops at end of stmt
+        // and compacts the vec back to [0, 3, 4].
+        let collected: std::vec::Vec<Tracked> = v.try_drain(1..3).unwrap().collect();
+        assert_eq!(collected[0].0, 1);
+        assert_eq!(collected[1].0, 2);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice()[0].0, 0);
+        assert_eq!(v.as_slice()[1].0, 3);
+        assert_eq!(v.as_slice()[2].0, 4);
+        // Nothing dropped yet: 1,2 alive in `collected`, 0,3,4 alive in v.
+        assert_eq!(counter.get(), 0);
+        drop(collected);
+        // 1, 2 drop now.
+        assert_eq!(counter.get(), 2);
+        drop(v);
+        // 0, 3, 4 drop as well -> total 5. Every element dropped exactly once.
+        assert_eq!(counter.get(), 5);
+    }
+
+    /// Regression: `Drain::drop` used to skip the step-1 destruction of the
+    /// unconsumed remainder whenever `size_of::<T>() == 0`, so a partially
+    /// consumed drain over a ZST with a `Drop` impl leaked destructor calls.
+    /// A ZST still owns a logical value, and every unconsumed element must run
+    /// its destructor exactly once.
+    #[test]
+    fn drain_partial_consume_of_zst_runs_destructors() {
+        use std::cell::Cell;
+        use std::thread_local;
+
+        thread_local! {
+            static DROPS: Cell<usize> = const { Cell::new(0) };
+        }
+
+        struct ZstWithDrop;
+        impl Drop for ZstWithDrop {
+            fn drop(&mut self) {
+                DROPS.set(DROPS.get() + 1);
+            }
+        }
+
+        let mut v: Vec<ZstWithDrop> = Vec::new();
+        for _ in 0..5 {
+            v.try_push(ZstWithDrop).unwrap();
+        }
+
+        let mut d = v.try_drain(1..3).unwrap();
+        // Consume exactly one of the two drained elements.
+        let taken = d.next().expect("drained element");
+        drop(taken);
+        // Dropping the drain must destroy the one unconsumed element.
+        drop(d);
+
+        // Both elements of the drained range have now been destroyed.
+        assert_eq!(DROPS.get(), 2);
+        // The three survivors are untouched.
+        assert_eq!(v.len(), 3);
+        drop(v);
+        assert_eq!(DROPS.get(), 5);
+    }
+
+    // Regression test for the stored-head-pointer OOB bug (see agents/BUGBOT.md):
+    // once a drain is fully consumed, an advancing head pointer might sit at
+    // `base + end`. This is OOB relative to the allocation and a hard
+    // overflow on small pointer-width targets. The redesigned `Drain` tracks
+    // position by integer offset instead.
+    #[test]
+    fn drain_exhausted_tail_query_is_safe() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut d = v.try_drain(3..5).unwrap();
+        // Consume everything; the "head" would now be at base + 5 (past the end).
+        assert_eq!(d.next(), Some(3));
+        assert_eq!(d.next(), Some(4));
+        assert_eq!(d.next(), None);
+        // Querying the exhausted drainer must not form an OOB pointer.
+        assert_eq!(d.len(), 0);
+        assert!(d.is_empty());
+        assert_eq!(d.as_slice(), &[] as &[i32]);
+        drop(d);
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    /// Regression: a partially-consumed drain's `Drop` must destroy the hole at
+    /// `original_start + consumed`, not `original_start + (original_count - remaining)`.
+    ///
+    /// The naive formula `start + (count - remaining)` derives the offset from
+    /// `remaining` alone. It ignores the number of elements being taken from the back,
+    /// thus double items that are taken out on there. It will also leak items on the
+    /// left.
+    ///
+    /// This test exercises BOTH directions simultaneously: `next()` × 2 (front) and
+    /// `next_back()` × 1 (back), so any formula that mishandles either side fails.
+    #[test]
+    fn drain_interleaved_drop_destroys_correct_hole() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Single-threaded local sink that records drop.
+        let sink: Rc<RefCell<std::vec::Vec<u32>>> = Rc::new(RefCell::new(std::vec::Vec::new()));
+
+        struct Rec(u32, Option<Rc<RefCell<std::vec::Vec<u32>>>>);
+
+        impl Rec {
+            /// Detach the sink reference so this element's `Drop` will NOT record
+            /// itself. Returns the payload for inspection.
+            fn disarm(mut self) -> u32 {
+                self.1.take(); // drop our Rc clone; destructor now sees None
+                self.0
+            }
+        }
+
+        impl Drop for Rec {
+            fn drop(&mut self) {
+                if let Some(s) = self.1.take() {
+                    RefCell::<std::vec::Vec<u32>>::borrow_mut(&s).push(self.0);
+                }
+            }
+        }
+
+        let mut v: Vec<Rec> = Vec::new();
+        for i in 0..6u32 {
+            v.try_push(Rec(i, Some(Rc::clone(&sink)))).unwrap();
+        }
+
+        let mut d = v.try_drain(1..5).unwrap();
+        // Disarm each yielded element: pull its payload out and detach its sink
+        // clone, so only the drainer's own step-1 destruction reaches the sink.
+        assert_eq!(d.next().expect("first drain element").disarm(), 1);
+        assert_eq!(d.next().expect("second drain element").disarm(), 2);
+        assert_eq!(d.next_back().expect("back drain element").disarm(), 4);
+        drop(d);
+
+        // The drainer must have destroyed exactly the single unconsumed hole
+        // element, payload 3.
+        let recorded = RefCell::<std::vec::Vec<u32>>::borrow(&sink);
+        assert_eq!(*recorded, std::vec![3u32]);
+        // Compaction removed the whole range: only payloads 0 and 5 survive.
+        assert_eq!(v.len(), 2);
+    }
+
+    // Regression test for the hole-bookkeeping fix: `try_drain` caps the vector's
+    // length to `start` at construction, so the drained range is a hole the vec no
+    // longer counts. If a partially-consumed Drain is forgotten mid-iteration, the
+    // vec must NOT try to drop the (partially uninitialized) hole — it only owns
+    // the prefix. The unconsumed hole and the suffix leak, matching std's
+    // documented behaviour for `mem::forget` on a `Drain`. Crucially there is no
+    // double-drop and no UB from dropping uninitialized memory.
+    //
+    // We pull one element from each end (`next` and `next_back`) so both directions
+    // of the drain are exercised before the forget. The ledger records each element
+    // id so we can name precisely which ones dropped and which leaked.
+    //
+    // Ignored under Miri: `mem::forget` deliberately leaks four elements, which
+    // Miri reports as unreachable-but-still-referenced memory at exit.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn drain_forget_mid_iteration_leaks_hole_not_prefix() {
+        let ledger = Arc::new(Ledger::new());
+        let budget = CloneBudget::new(u32::MAX);
+
+        let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+        for i in 0..6u32 {
+            v.try_push(FlakyCloneTrackedItem::with_id(&ledger, i, budget.share()))
+                .unwrap();
+        }
+
+        // Drain [1..4): elements 1, 2, 3 live in the hole. Pull one from each end:
+        // element 1 via `next`, element 3 via `next_back`, leaving element 2 as the
+        // sole unconsumed hole member.
+        let mut d = v.try_drain(1..4).unwrap();
+        let front = d.next().expect("front drain element");
+        assert_eq!(front.id(), 1);
+        let back = d.next_back().expect("back drain element");
+        assert_eq!(back.id(), 3);
+
+        core::mem::forget(d);
+        // Only the prefix (id 0) is owned by the vec now.
+        assert!(ledger.drop_counts().is_empty());
+        assert_eq!(v.len(), 1);
+        drop(v);
+        assert_eq!(ledger.live_ids(), [1, 2, 3, 4, 5]);
+        assert_eq!(
+            ledger.drop_count(0),
+            1,
+            "only the prefix may be dropped by the vec"
+        );
+
+        drop(front); // id 1
+        drop(back); // id 3q
+        // Final tally: ids 0, 1, 3 dropped exactly once. Ids 2, 4, 5 leaked (the
+        // accepted cost of mem::forget). No double-free anywhere.
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.leaked_ids(), [2, 4, 5]);
+        assert_eq!(ledger.drop_count(0), 1);
+        assert_eq!(ledger.drop_count(1), 1);
+        assert_eq!(ledger.drop_count(3), 1);
+    }
+
+    // Regression test for the drain compaction guard: dropping the center
+    // slice withstands a panic, but compaction is not panic-safe by default
+    // unless a guard is in place.
+    #[test]
+    fn drain_panic_in_destructor_still_compacts() {
+        let armer = Arc::new(PanicArmer::new());
+        let counter = Arc::new(Counter::new());
+
+        #[allow(dead_code)]
+        struct Panicky(u32, Arc<PanicArmer>, Arc<Counter>);
+        impl Drop for Panicky {
+            fn drop(&mut self) {
+                self.2.record();
+                if self.1.is_armed() && self.0 == 2 {
+                    panic!("boom");
+                }
+            }
+        }
+
+        let mut v: Vec<Panicky> = Vec::new();
+        for i in 0..6u32 {
+            v.try_push(Panicky(i, armer.clone(), counter.clone()))
+                .unwrap();
+        }
+
+        // Drain [1..4): elements 1, 2, 3 live in the hole; consume only element 1
+        // so 2 and 3 remain to be destroyed in step 1. Arm the panic before the
+        // drainer drops.
+        let mut d = v.try_drain(1..4).unwrap();
+        let taken = d.next().expect("first drain element");
+        assert_eq!(taken.0, 1);
+        armer.arm();
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(d)));
+        assert!(panicked.is_err(), "expected the destructor to panic");
+
+        // The unwind ran the compaction guard: the suffix (4, 5) was shifted left
+        // over the drained gap and the length restored past the prefix. So the vec
+        // now holds exactly [0, 4, 5], not a stranded prefix of just [0].
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.as_slice()[0].0, 0);
+        assert_eq!(v.as_slice()[1].0, 4);
+        assert_eq!(v.as_slice()[2].0, 5);
+
+        // Both hole elements (2 and 3) were destroyed by the fat-slice teardown,
+        // even though #2's destructor panicked.
+        assert_eq!(
+            counter.get(),
+            2,
+            "both hole elements must be dropped despite the panic"
+        );
+
+        // Disarm before dropping the rest so the panic isn't re-triggered.
+        armer.disarm();
+        drop(taken); // element 1 -> 3
+        drop(v); // elements 0, 4, 5 -> 6 total
+        assert_eq!(
+            counter.get(),
+            6,
+            "every element dropped exactly once overall"
+        );
+    }
+
+    // An empty range sitting exactly at the tail (`start == len`) would force
+    // construction-time pointer arithmetic to `base.add(len)` and cause OOB
+    // if pointer were used as state.
+    #[test]
+    fn drain_empty_range_at_tail_constructs_cleanly() {
+        let mut v = Vec::new();
+        for i in 0..4i32 {
+            v.try_push(i).unwrap();
+        }
+        let d = v.try_drain(4..4).unwrap();
+        assert_eq!(d.len(), 0);
+        assert!(d.is_empty());
+        assert_eq!(d.as_slice(), &[] as &[i32]);
+        drop(d);
+        assert_eq!(v.as_slice(), &[0, 1, 2, 3]);
+    }
+}

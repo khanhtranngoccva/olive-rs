@@ -270,9 +270,7 @@ impl<T, A: Allocator> IntoIterator for Vec<T, A> {
         // directly rather than nesting a whole `Vec`. The `ManuallyDrop` inside
         // `into_parts_with_alloc` prevents the original `Vec` from freeing the
         // buffer; the iterator takes over responsibility for it.
-        // SAFETY: `self` is a well-formed `Vec`; its pointer, length, capacity,
-        // and allocator satisfy all the invariants `new_from_parts` requires.
-        let (ptr, len, cap, alloc) = unsafe { self.into_parts_with_alloc() };
+        let (ptr, len, cap, alloc) = self.into_parts_with_allocator();
         // SAFETY: as above — the parts come straight off a valid `Vec`.
         unsafe { IntoIter::new_from_parts(ptr, len, cap, alloc) }
     }
@@ -322,7 +320,8 @@ mod tests {
     use olive_core::try_traits::try_clone::TryClone;
     use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
     use olive_test_helpers::{
-        BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc, Ledger, TrackedItem,
+        BudgetedAlloc, CloneBudget, Counter, DropCountingAlloc, FailDefaultAlloc, FlakyCloneAlloc,
+        Ledger, TrackedItem,
     };
     use std::sync::Arc as StdArc;
 
@@ -332,6 +331,218 @@ mod tests {
             v.try_push(x).unwrap();
         }
         v
+    }
+
+    #[test]
+    fn into_iter_yields_all() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let collected: std::vec::Vec<i32> = v.into_iter().collect();
+        assert_eq!(collected, std::vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn into_iter_size_hint() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.len(), 5);
+        let _ = it.next();
+        assert_eq!(it.size_hint(), (4, Some(4)));
+        assert_eq!(it.len(), 4);
+    }
+
+    #[test]
+    fn into_iter_double_ended() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        assert_eq!(it.next(), Some(0));
+        assert_eq!(it.next_back(), Some(4));
+        assert_eq!(it.next(), Some(1));
+        assert_eq!(it.next_back(), Some(3));
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn into_iter_size_hint_double_ended() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.len(), 5);
+        let _ = it.next();
+        assert_eq!(it.size_hint(), (4, Some(4)));
+        assert_eq!(it.len(), 4);
+    }
+
+    // Regression test for the stored-head-pointer OOB bug (see agents/BUGBOT.md):
+    //
+    // The redesigned iterator tracks position by integer offset,
+    // so querying `as_slice`/`len` after exhaustion must be well defined and
+    // return an empty slice rather than forming an OOB pointer.
+    #[test]
+    fn into_iter_exhausted_query_is_safe() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..4i32 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        assert_eq!(it.next(), Some(0));
+        assert_eq!(it.next(), Some(1));
+        assert_eq!(it.next(), Some(2));
+        assert_eq!(it.next(), Some(3));
+        assert_eq!(it.next(), None);
+        // Querying the exhausted iterator must not form an OOB pointer.
+        assert_eq!(it.len(), 0);
+        assert!(it.is_empty());
+        assert_eq!(it.as_slice(), &[] as &[i32]);
+    }
+
+    // Same concern reached from the rear: exhaust via `next_back` only, then query.
+    // Guards `next_back`'s back-offset arithmetic against forming an OOB pointer.
+    #[test]
+    fn into_iter_exhausted_from_back_is_safe() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..3i32 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        assert_eq!(it.next_back(), Some(2));
+        assert_eq!(it.next_back(), Some(1));
+        assert_eq!(it.next_back(), Some(0));
+        assert_eq!(it.next_back(), None);
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.as_slice(), &[] as &[i32]);
+    }
+
+    #[test]
+    fn into_iter_zst_exhausted_is_safe() {
+        let v = {
+            let mut v: Vec<()> = Vec::new();
+            for _ in 0..5 {
+                v.try_push(()).unwrap();
+            }
+            v
+        };
+        let mut it = v.into_iter();
+        // Five elements outstanding: all three views must agree on 5.
+        assert_eq!(it.len(), 5);
+        assert_eq!(it.size_hint(), (5, Some(5)));
+        assert_eq!(it.as_slice().len(), 5);
+
+        // Consume two from the front and one from the back: two remain. The slice
+        // length must track down to 2, never snap to 0.
+        assert_eq!(it.next(), Some(()));
+        assert_eq!(it.next(), Some(()));
+        assert_eq!(it.next_back(), Some(()));
+        assert_eq!(it.len(), 2);
+        assert_eq!(it.size_hint(), (2, Some(2)));
+        assert_eq!(it.as_slice().len(), 2);
+
+        // Exhaustion: everything agrees on 0.
+        assert_eq!(it.next(), Some(()));
+        assert_eq!(it.next(), Some(()));
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.as_slice(), &[] as &[()]);
+        assert_eq!(it.as_slice().len(), 0);
+    }
+
+    /// Regression test: dropping an `IntoIter` partway through must drop only the
+    /// not-yet-yielded chunk. Here we yield two of five, then drop the iterator;
+    /// exactly three drops should occur (the unconsumed parts).
+    #[test]
+    fn into_iter_drop_mid_way_drops_only_tail() {
+        let ledger = StdArc::new(Ledger::new());
+
+        // Yield two elements, then drop the iterator while three remain.
+        {
+            let mut v: Vec<TrackedItem<()>> = Vec::new();
+            for i in 0..5u32 {
+                v.try_push(TrackedItem::with_id(&ledger, i, ())).unwrap();
+            }
+            let mut it = v.into_iter();
+            let _ = it.next().unwrap(); // id 0
+            let _ = it.next_back().unwrap(); // id 4
+            // Dropping the iterator must destroy only the unconsumed segments (ids 1,2,3).
+            drop(it);
+
+            assert_eq!(ledger.live_ids(), [0, 4]);
+            assert!(ledger.double_dropped().is_empty());
+            assert_eq!(ledger.drop_count(1), 1);
+            assert_eq!(ledger.drop_count(2), 1);
+            assert_eq!(ledger.drop_count(3), 1);
+        }
+
+        // All five dropped exactly once: 3 (middle) + 2 (yielded). No leaks, no
+        // double-frees.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
+    }
+
+    #[test]
+    fn into_iter_drops_allocator_exactly_once() {
+        let counter = StdArc::new(Counter::new());
+        let alloc = DropCountingAlloc::new(counter.clone());
+        let mut v: Vec<i32, DropCountingAlloc> = Vec::new_in(alloc);
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let mut it = v.into_iter();
+        assert_eq!(it.next(), Some(0));
+        assert_eq!(it.next(), Some(1));
+        // Drop with three elements still held; the owned RawVec (and hence the
+        // allocator) must be released here.
+        drop(it);
+
+        // Exactly one allocator instance lived inside the iterator and was dropped
+        // when the iterator was. No leak (count > 0), no double-free (count == 1).
+        assert_eq!(counter.get(), 1);
+    }
+
+    /// Regression test: `Debug for IntoIter` must match std's format, which wraps
+    /// the not-yet-yielded elements in an `IntoIter(...)` tuple rather than printing
+    /// a bare list. Before the fix the impl printed `[0, 1, 2]`.
+    #[test]
+    fn into_iter_debug_matches_std_format() {
+        let mut v = Vec::new();
+        for i in 0..3 {
+            v.try_push(i).unwrap();
+        }
+        let mut it = v.into_iter();
+        assert_eq!(std::format!("{it:?}"), "IntoIter([0, 1, 2])");
+        let _ = it.next();
+        assert_eq!(std::format!("{it:?}"), "IntoIter([1, 2])");
+        let _ = it.next_back();
+        assert_eq!(std::format!("{it:?}"), "IntoIter([1])");
     }
 
     #[test]
@@ -397,6 +608,8 @@ mod tests {
         }
         assert!(clone.next().is_none());
 
+        // 4 elements from the original, 3 cloned.
+        assert_eq!(ledger.total_allocated(), 7);
         assert!(
             ledger.double_dropped().is_empty(),
             "double-dropped ids: {:?}",
@@ -436,7 +649,7 @@ mod tests {
 
         // Exactly the three live originals remain.
         assert!(ledger.double_dropped().is_empty());
-        assert_eq!(ledger.live_ids().len(), 3, "only the originals live");
+        assert_eq!(ledger.live_ids(), [1, 2, 3], "only the originals live");
 
         // Draining the original cleans up the rest: every id minted during
         // the test died exactly once.

@@ -283,11 +283,11 @@ impl<T, A: Allocator> Vec<T, A> {
     /// the number of elements rather than quadratic in deletions.
     ///
     /// Retention never grows the buffer, so this cannot fail.
-    pub fn retain<F>(&mut self, predicate: F)
+    pub fn retain<F>(&mut self, mut predicate: F)
     where
-        F: FnMut(&mut T) -> bool,
+        F: FnMut(&T) -> bool,
     {
-        self.retain_mut(predicate);
+        self.retain_mut(|i| predicate(i));
     }
 
     /// Retains only the elements selected by `predicate`, using a two-pass
@@ -639,5 +639,391 @@ impl<T, A: Allocator> Vec<T, A> {
         // SAFETY: spare capacity was just confirmed above.
         unsafe { self.force_push(value) };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use olive_core::try_traits::TryFromIterator;
+    use olive_test_helpers::{CloneBudget, FlakyCloneTrackedItem, Ledger, PanicArmer, TrackedItem};
+    use std::sync::Arc;
+
+    #[test]
+    fn clear_keeps_capacity() {
+        let mut v = Vec::new();
+        for i in 0..5 {
+            v.try_push(i).unwrap();
+        }
+        let cap_before = v.capacity();
+        v.clear();
+        assert!(v.is_empty());
+        assert_eq!(v.capacity(), cap_before);
+    }
+
+    // FIXME: panic safety for clear()
+
+    #[test]
+    fn pop_if_matches() {
+        let mut v = Vec::new();
+        for i in [1, 2, 3, 4] {
+            v.try_push(i).unwrap();
+        }
+        let popped = v.pop_if(|x| *x % 2 == 0);
+        assert_eq!(popped, Some(4));
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn pop_if_no_match() {
+        let mut v = Vec::new();
+        for i in [1, 3, 5] {
+            v.try_push(i).unwrap();
+        }
+        let popped = v.pop_if(|x| *x % 2 == 0);
+        assert_eq!(popped, None);
+        assert_eq!(v.as_slice(), &[1, 3, 5]);
+    }
+
+    #[test]
+    fn pop_if_empty() {
+        let mut v: Vec<i32> = Vec::new();
+        let popped = v.pop_if(|_| true);
+        assert_eq!(popped, None);
+    }
+
+    #[test]
+    fn swap_and_reverse() {
+        let mut v = Vec::new();
+        for i in 0..4 {
+            v.try_push(i).unwrap();
+        }
+        v.try_swap(0, 3).unwrap();
+        assert_eq!(v.as_slice(), &[3, 1, 2, 0]);
+        v.reverse();
+        assert_eq!(v.as_slice(), &[0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn try_swap_out_of_bounds_reports_error() {
+        let mut v = Vec::new();
+        for i in 0..3 {
+            v.try_push(i).unwrap();
+        }
+        let err = v.try_swap(0, 3).unwrap_err();
+        assert_eq!(err.index, 3);
+        assert_eq!(err.len, 3);
+        // Nothing was swapped on failure.
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn sort_orders_elements() {
+        let mut v = Vec::new();
+        for x in [3, 1, 4, 1, 5, 9, 2, 6] {
+            v.try_push(x).unwrap();
+        }
+        v.sort();
+        assert_eq!(v.as_slice(), &[1, 1, 2, 3, 4, 5, 6, 9]);
+    }
+
+    #[test]
+    fn truncate_drops_tail() {
+        let mut v = Vec::new();
+        for i in 0..5 {
+            v.try_push(i).unwrap();
+        }
+        v.truncate(2);
+        assert_eq!(v.as_slice(), &[0, 1]);
+        // Capacity is preserved by truncate.
+        assert!(v.capacity() >= 5);
+    }
+
+    #[test]
+    fn truncate_drop_runs_each_element_once() {
+        let ledger = Arc::new(Ledger::new());
+        let budget = CloneBudget::new(u32::MAX);
+        let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+        for i in 0..5u32 {
+            v.try_push(FlakyCloneTrackedItem::with_id(&ledger, i, budget.share()))
+                .unwrap();
+        }
+        // truncate(3) destroys the tail (ids 3 and 4).
+        v.truncate(3);
+        assert_eq!(ledger.live_ids(), [0, 1, 2]);
+        assert_eq!(ledger.drop_count(3), 1);
+        assert_eq!(ledger.drop_count(4), 1);
+        // Drops the remaining IDs
+        drop(v);
+        // All five dropped exactly once; no leaks, no double-frees.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..5));
+    }
+
+    /// Regression test: if a destructor in the truncated tail panics, `truncate`
+    /// must have already shrunk `len` before dropping, so unwinding the Vec cannot
+    /// drop (double-free) those elements again.
+    #[test]
+    fn truncate_panicking_drop_is_safe() {
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        /// Panics exactly once, the first time it runs while armed; records its id.
+        struct PanicDrop {
+            id: u32,
+            ledger: Arc<Ledger>,
+            armer: Arc<PanicArmer>,
+        }
+        impl Drop for PanicDrop {
+            fn drop(&mut self) {
+                self.ledger.unregister(self.id);
+                if self.armer.fetch_and_disarm() {
+                    panic!("forced panic in drop");
+                }
+            }
+        }
+
+        armer.arm();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let l = ledger.clone();
+            let a = armer.clone();
+            move || {
+                let mut v = Vec::new();
+                for i in 0..4u32 {
+                    l.register(i);
+                    v.try_push(PanicDrop {
+                        id: i,
+                        ledger: l.clone(),
+                        armer: a.clone(),
+                    })
+                    .unwrap();
+                }
+                // Truncate off the last two (ids 2 and 3); the first one dropped
+                // (id 3) panics, which disarms the armer for any later drops.
+                v.truncate(2);
+            }
+        }));
+
+        assert!(result.is_err(), "expected the drop to panic");
+
+        // Every element must be accounted for properly.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4));
+    }
+
+    #[test]
+    fn set_len_after_manual_write() {
+        let mut v: Vec<i32> = Vec::try_with_capacity(4).unwrap();
+        // SAFETY: we write valid values into allocated-but-uninit slots.
+        unsafe {
+            v.as_mut_ptr().add(0).write(10);
+            v.as_mut_ptr().add(1).write(20);
+            v.as_mut_ptr().add(2).write(30);
+            v.set_len(3);
+        }
+        assert_eq!(v.as_slice(), &[10, 20, 30]);
+    }
+
+    #[test]
+    fn swap_remove_replaces_with_last() {
+        let mut v = Vec::new();
+        for i in 0..5i32 {
+            v.try_push(i).unwrap();
+        }
+        let removed = v.try_swap_remove(1).unwrap();
+        assert_eq!(removed, 1);
+        // Last element (4) moved to index 1.
+        assert_eq!(v.as_slice(), &[0, 4, 2, 3]);
+    }
+
+    #[test]
+    fn swap_remove_last_element() {
+        let mut v = Vec::new();
+        v.try_push(10).unwrap();
+        v.try_push(20).unwrap();
+        let removed = v.try_swap_remove(1).unwrap();
+        assert_eq!(removed, 20);
+        assert_eq!(v.as_slice(), &[10]);
+    }
+
+    #[test]
+    fn try_swap_remove_out_of_bounds() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        let err = v.try_swap_remove(5).unwrap_err();
+        assert_eq!(err.index, 5);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn try_remove_shifts_left() {
+        let mut v = Vec::new();
+        for i in 0..5 {
+            v.try_push(i).unwrap();
+        }
+        assert_eq!(v.try_remove(0).unwrap(), 0);
+        assert_eq!(v.try_remove(2).unwrap(), 3);
+        assert_eq!(v.as_slice(), &[1, 2, 4]);
+    }
+
+    #[test]
+    fn try_remove_out_of_bounds() {
+        let mut v = Vec::new();
+        v.try_push(7).unwrap();
+        let err = v.try_remove(3).unwrap_err();
+        assert_eq!(err.index, 3);
+        assert_eq!(err.len, 1);
+    }
+
+    #[test]
+    fn retain_filters_in_place() {
+        let mut v = Vec::new();
+        for i in 0..6 {
+            v.try_push(i).unwrap();
+        }
+        v.retain(|x| *x % 2 == 0);
+        assert_eq!(v.as_slice(), &[0, 2, 4]);
+    }
+
+    #[test]
+    fn retain_mut_filters_in_place() {
+        let mut v = Vec::new();
+        for i in 0..6i32 {
+            v.try_push(i).unwrap();
+        }
+        v.retain_mut(|x| {
+            if *x % 2 == 0 {
+                *x *= 2;
+                true
+            } else {
+                false
+            }
+        });
+        assert_eq!(v.as_slice(), &[0, 4, 8]);
+    }
+
+    #[test]
+    fn retain_mut_all_removed() {
+        let mut v = Vec::new();
+        for i in 0..3i32 {
+            v.try_push(i).unwrap();
+        }
+        v.retain_mut(|_| false);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn retain_mut_none_removed() {
+        let mut v = Vec::new();
+        for i in 0..3i32 {
+            v.try_push(i).unwrap();
+        }
+        v.retain_mut(|_| true);
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn dedup_by_key_consecutive() {
+        let mut v = Vec::new();
+        for i in [10, 20, 21, 30, 20] {
+            v.try_push(i).unwrap();
+        }
+        v.dedup_by_key(|&mut x| x / 10);
+        assert_eq!(v.as_slice(), &[10, 20, 30, 20]);
+    }
+
+    #[test]
+    fn dedup_by_sorted_duplicates() {
+        let mut v = Vec::new();
+        for i in [1, 1, 2, 3, 3, 3, 4] {
+            v.try_push(i).unwrap();
+        }
+        v.dedup_by_key(|&mut x| x);
+        assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn dedup_by_single_element() {
+        let mut v = Vec::new();
+        v.try_push(42).unwrap();
+        v.dedup_by_key(|&mut x| x);
+        assert_eq!(v.as_slice(), &[42]);
+    }
+
+    #[test]
+    fn dedup_by_custom_predicate() {
+        let mut v: Vec<std::string::String> = Vec::new();
+        for s in ["foo", "bar", "Bar", "baz", "bar"] {
+            v.try_push(std::string::String::from(s)).unwrap();
+        }
+        v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        assert_eq!(
+            v.as_slice(),
+            &[
+                std::string::String::from("foo"),
+                std::string::String::from("bar"),
+                std::string::String::from("baz"),
+                std::string::String::from("bar")
+            ]
+        );
+    }
+
+    /// Regression test: `dedup_by` must leave the buffer in a consistent state if
+    /// the predicate panics mid-loop. Before the drop-guard fix, a panic after some
+    /// duplicates had been dropped would leak the tail and/or double-free the
+    /// already-dropped slots when the Vec was unwound.
+    #[test]
+    fn dedup_by_panic_is_safe() {
+        let ledger = Arc::new(Ledger::new());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            || {
+                let mut v: Vec<TrackedItem<i32>> = Vec::try_from_iter([
+                    TrackedItem::construct(&ledger, 1),
+                    TrackedItem::construct(&ledger, 1),
+                    TrackedItem::construct(&ledger, 2),
+                    TrackedItem::construct(&ledger, 3),
+                ])
+                .unwrap();
+                // Panic on the third predicate call, mid-gap-fill, so some duplicate
+                // elements have already been destroyed by the time we unwind.
+                let mut calls = 0usize;
+                v.dedup_by(|a, b| {
+                    calls += 1;
+                    if calls == 3 {
+                        panic!("forced panic mid-dedup");
+                    }
+                    a.id() == b.id()
+                });
+            }
+        }));
+
+        assert!(result.is_err(), "expected the predicate to panic");
+        // After the catch, the partially-deduplicated Vec has been unwound.
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.double_dropped().is_empty());
+        assert!(ledger.all_dropped_once(0..4));
+    }
+
+    #[test]
+    fn try_push_within_capacity_success() {
+        let mut v: Vec<i32> = Vec::try_with_capacity(4).unwrap();
+        v.try_push_within_capacity(1).unwrap();
+        v.try_push_within_capacity(2).unwrap();
+        v.try_push_within_capacity(3).unwrap();
+        v.try_push_within_capacity(4).unwrap();
+        assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn try_push_within_capacity_full() {
+        let mut v: Vec<i32> = Vec::try_with_capacity(2).unwrap();
+        v.try_push_within_capacity(1).unwrap();
+        v.try_push_within_capacity(2).unwrap();
+        let err = v.try_push_within_capacity(3).unwrap_err();
+        assert_eq!(err.len, 2);
     }
 }

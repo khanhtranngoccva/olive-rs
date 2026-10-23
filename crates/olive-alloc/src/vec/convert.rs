@@ -97,7 +97,7 @@ impl<T, A: Allocator> Vec<T, A> {
         }
         // SAFETY: the buffer holds exactly `len` initialized elements.
         unsafe {
-            let (buf, len, _cap, alloc) = self.into_raw_parts_with_alloc();
+            let (buf, len, _cap, alloc) = self.into_raw_parts_with_allocator();
             let slice = ptr::slice_from_raw_parts_mut(buf, len);
             Ok(Box::from_raw_in(slice, alloc))
         }
@@ -155,7 +155,7 @@ impl<T, A: Allocator> Vec<T, A> {
         // SAFETY: the buffer holds exactly `N` initialized elements allocated by `A`;
         // casting to `*mut [T; N]` is layout-compatible. Allocator is moved out.
         unsafe {
-            let (raw_ptr, _len, _cap, alloc) = self.into_raw_parts_with_alloc();
+            let (raw_ptr, _len, _cap, alloc) = self.into_raw_parts_with_allocator();
             let array_ptr = raw_ptr.cast::<[T; N]>();
             Ok(Box::from_raw_in(array_ptr, alloc))
         }
@@ -167,32 +167,6 @@ impl<T, A: Allocator> Vec<T, A> {
 // ---------------------------------------------------------------------------
 
 impl<T, A: Allocator> Vec<T, A> {
-    /// Creates a `Vec<T>` containing `value` cloned `count` times.
-    ///
-    /// Equivalent to `vec![value; count]` but fully fallible.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TryVecWithCloneError`] on a reservation or clone failure.
-    pub fn try_from_elem_in(value: &T, count: usize, alloc: A) -> Result<Self, TryVecWithCloneError>
-    where
-        T: TryClone,
-    {
-        let mut vec =
-            Self::try_with_capacity_in(count, alloc).map_err(TryVecWithCloneError::Reserve)?;
-
-        for _ in 0..count {
-            match value.try_clone() {
-                Ok(cloned) => {
-                    // SAFETY: Capacity was reserved above, so this cannot fail.
-                    unsafe { vec.force_push(cloned) };
-                }
-                Err(e) => return Err(TryVecWithCloneError::Clone(e)),
-            }
-        }
-        Ok(vec)
-    }
-
     /// Creates a [`Vec<T>`] from a slice by cloning each element via
     /// [`TryClone`].
     ///
@@ -336,5 +310,317 @@ impl<T: TryClone> TryFrom<&[T]> for Vec<T, Global> {
 
     fn try_from(slice: &[T]) -> Result<Self, Self::Error> {
         Self::try_from_slice_in(slice, Global)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::borrow::Cow;
+    use olive_core::TryClone;
+    use olive_core::try_traits::try_clone::TryCloneError;
+    use olive_test_helpers::{FailAlloc, FlakyClone};
+    use std::format;
+
+    #[test]
+    fn try_into_array_error_display() {
+        let e = TryVecIntoArrayError::LengthMismatch {
+            expected: 4,
+            actual: 2,
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("[T; 4]"));
+        assert!(msg.contains("2"));
+
+        let e2 = TryVecIntoArrayError::Shrink(TryReserveError::new_capacity_overflow());
+        let msg2 = format!("{e2}");
+        assert!(msg2.contains("shrink"));
+    }
+
+    #[test]
+    fn try_into_boxed_slice_preserves_contents() {
+        let v = {
+            let mut v: Vec<i32> = Vec::new();
+            for i in 0..5 {
+                v.try_push(i).unwrap();
+            }
+            v
+        };
+        let boxed = v.try_into_boxed_slice().expect("box ok");
+        assert_eq!(boxed.as_ref(), [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn try_into_boxed_slice_empty() {
+        let v: Vec<i32> = Vec::new();
+        let boxed = v.try_into_boxed_slice().expect("box ok");
+        assert!(boxed.is_empty());
+    }
+
+    // FIXME: add simple case for try_into_boxed_slice_give_back success
+
+    #[test]
+    fn try_into_boxed_slice_give_back_on_oom() {
+        let v: Vec<i32, FailAlloc> = Vec::new_in(FailAlloc);
+        // Empty vec: shrink-to-fit on an empty buffer shouldn't need to allocate,
+        // but FailAlloc makes any realloc fail. Either way, no data is lost.
+        match v.try_into_boxed_slice_give_back() {
+            Ok(boxed) => assert!(boxed.is_empty()),
+            Err((vec_back, e)) => {
+                assert!(e.is_alloc());
+                assert!(vec_back.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn try_into_array_exact_length() {
+        let mut v = Vec::new();
+        for i in 0..4u8 {
+            v.try_push(i).unwrap();
+        }
+        let arr: Box<[u8; 4]> = v.try_into_array().expect("should succeed");
+        assert_eq!(arr.as_ref(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn try_into_array_wrong_length_too_few() {
+        let mut v = Vec::new();
+        v.try_push(1u8).unwrap();
+        v.try_push(2).unwrap();
+        let err = v.try_into_array::<4>().unwrap_err();
+        match err {
+            TryVecIntoArrayError::LengthMismatch { expected, actual } => {
+                assert_eq!(expected, 4);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("expected LengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_into_array_wrong_length_too_many() {
+        let mut v = Vec::new();
+        for i in 0..6u8 {
+            v.try_push(i).unwrap();
+        }
+        let err = v.try_into_array::<3>().unwrap_err();
+        match err {
+            TryVecIntoArrayError::LengthMismatch { expected, actual } => {
+                assert_eq!(expected, 3);
+                assert_eq!(actual, 6);
+            }
+            other => panic!("expected LengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_into_array_zero_size() {
+        let v: Vec<u32> = Vec::new();
+        let arr: Box<[u32; 0]> = v.try_into_array().expect("empty array ok");
+        assert_eq!(arr.len(), 0);
+    }
+
+    #[test]
+    fn try_into_array_with_excess_capacity() {
+        // Push enough elements to trigger growth, then pop down to exactly N.
+        let mut v = Vec::try_with_capacity(10).unwrap();
+        for i in 0..3u8 {
+            v.try_push(i).unwrap();
+        }
+        assert!(v.capacity() > 3);
+        let arr: Box<[u8; 3]> = v.try_into_array().expect("shrink + convert");
+        assert_eq!(arr.as_ref(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn try_into_array_give_back_length_mismatch() {
+        let mut v = Vec::new();
+        v.try_push(99u8).unwrap();
+        let (vec_back, err) = v.try_into_array_give_back::<5>().unwrap_err();
+        assert_eq!(vec_back.len(), 1);
+        assert_eq!(vec_back[0], 99);
+        match err {
+            TryVecIntoArrayError::LengthMismatch { expected, actual } => {
+                assert_eq!(expected, 5);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected LengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_into_array_give_back_success() {
+        let mut v = Vec::new();
+        for i in ['a', 'b', 'c'] {
+            v.try_push(i).unwrap();
+        }
+        let arr: Box<[char; 3]> = v.try_into_array_give_back().expect("ok");
+        assert_eq!(arr.as_ref(), &['a', 'b', 'c']);
+    }
+
+    // FIXME: try_into_array_give_back misses OOM path
+
+    #[test]
+    fn from_slice_in_fail_alloc_reports_reserve() {
+        let e = Vec::try_from_slice_in(&[1, 2], FailAlloc).expect_err("should fail");
+        assert!(matches!(e, TryVecWithCloneError::Reserve(_)));
+    }
+
+    // FIXME: try_from_slice_in misses clone path
+
+    #[test]
+    fn try_from_array_moves_elements_without_cloning() {
+        use core::cell::Cell;
+        struct Counting(u32, Cell<u32>);
+        impl TryClone for Counting {
+            fn try_clone(&self) -> Result<Self, TryCloneError> {
+                self.1.set(self.1.get() + 1);
+                Ok(Self(self.0, Cell::new(self.1.get())))
+            }
+        }
+        let clones = Cell::new(0);
+        let arr = [Counting(1, clones.clone()), Counting(2, clones.clone())];
+        let v: Vec<Counting, Global> = Vec::try_from(arr).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].0, 1);
+        assert_eq!(v[1].0, 2);
+        // Elements were moved, not cloned.
+        assert_eq!(clones.get(), 0);
+    }
+
+    #[test]
+    fn try_from_empty_array_is_empty() {
+        let v: Vec<i32, Global> = Vec::try_from([]).unwrap();
+        assert!(v.is_empty());
+        // An empty vector of a non-ZST never allocates, so it reports no usable
+        // slots (`usize::MAX` is reserved for zero-sized elements).
+        assert_eq!(v.capacity(), 0);
+    }
+
+    #[test]
+    fn try_from_zst_array_no_alloc() {
+        #[derive(TryClone, PartialEq, Copy, Clone)]
+        struct Zst;
+        let v: Vec<Zst, Global> = Vec::try_from([Zst; 5]).unwrap();
+        assert_eq!(v.len(), 5);
+        // ZST elements occupy no memory and never require a real allocation, so
+        // the reported capacity is `usize::MAX` (matching std's convention).
+        assert_eq!(v.capacity(), usize::MAX);
+    }
+
+    // FIXME: try_from_array misses OOM errors
+
+    #[test]
+    fn from_boxed_slice_preserves_contents_and_capacity() {
+        // Build a vector with exactly `len` of capacity (no growth slack), so the
+        // boxed slice carries a tight allocation and the round-trip is exact.
+        let mut src = Vec::new();
+        src.try_reserve_exact(3).unwrap();
+        for x in [10, 20, 30] {
+            src.try_push(x).unwrap();
+        }
+        let boxed: Box<[i32]> = src.try_into_boxed_slice().unwrap();
+        let out: Vec<i32> = Vec::from(boxed);
+        assert_eq!(out.as_slice(), &[10, 20, 30]);
+        // The buffer was taken over untouched, so the reported capacity matches
+        // the original allocation exactly.
+        assert_eq!(out.capacity(), 3);
+    }
+
+    #[test]
+    fn from_boxed_empty_slice() {
+        let src: Vec<u8> = Vec::new();
+        let boxed: Box<[u8]> = src.try_into_boxed_slice().unwrap();
+        let v: Vec<u8> = Vec::from(boxed);
+        assert!(v.is_empty());
+        // The empty box carried no real allocation, so the reconstructed vector
+        // of a non-ZST reports zero usable slots.
+        assert_eq!(v.capacity(), 0);
+    }
+
+    #[test]
+    fn try_from_cow_borrowed_clones_elements() {
+        let src: &[i32] = &[11, 22];
+        let cow = Cow::Borrowed(src);
+        let v: Vec<i32> = Vec::try_from(cow).unwrap();
+        assert_eq!(v.as_slice(), &[11, 22]);
+    }
+
+    #[test]
+    fn try_from_cow_borrowed_fails_when_element_clone_fails() {
+        // The Borrowed arm delegates to `try_from_slice_in`, which clones each
+        // element via `TryClone`. A `FlakyClone` with threshold 0 fails its first
+        // clone attempt, so the very first element cannot be copied into the new
+        // vector and the conversion surfaces a `Clone` error.
+        let items = [FlakyClone::new(0), FlakyClone::new(0)];
+        let cow = Cow::Borrowed(items.as_slice());
+        match Vec::try_from(cow).expect_err("first element clone should fail") {
+            TryVecWithCloneError::Clone(TryCloneError::Other(_)) => {}
+            other => panic!("expected a clone failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_from_cow_owned_passes_through() {
+        let mut owned: Vec<i32> = Vec::new();
+        for x in [7, 8, 9] {
+            owned.try_push(x).unwrap();
+        }
+        // Give the source vec surplus capacity so we can verify it's preserved.
+        owned.try_reserve(5).unwrap();
+        let src_cap = owned.capacity();
+        assert!(src_cap > 3);
+
+        let cow = Cow::Owned(owned);
+        let v: Vec<i32> = Vec::try_from(cow).unwrap();
+        assert_eq!(v.as_slice(), &[7, 8, 9]);
+        // The Owned arm transfers the buffer wholesale — capacity is preserved.
+        assert_eq!(v.capacity(), src_cap);
+    }
+
+    #[test]
+    fn try_from_cow_borrowed_fails_when_reservation_fails() {
+        // We cannot test the global allocator, so we mimic the code path that is used.
+        let src: &[i32] = &[1, 2, 3];
+        let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_slice_in(src, FailAlloc);
+        match res.expect_err("reservation should fail") {
+            TryVecWithCloneError::Reserve(r) => assert!(r.is_alloc()),
+            other => panic!("expected a reserve failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_from_borrowed_slice_clones_elements() {
+        let src: &[i32] = &[10, 20, 30];
+        let v: Vec<i32, Global> = Vec::try_from(src).unwrap();
+        assert_eq!(v.as_slice(), &[10, 20, 30]);
+    }
+
+    #[test]
+    fn try_from_borrowed_slice_fails_when_reservation_fails() {
+        // The `Global`-scoped trait impl can't target a failing allocator, so drive
+        // the same code path through the `_in` seam with one that does.
+        let src: &[i32] = &[1, 2, 3];
+        let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_slice_in(src, FailAlloc);
+        match res.expect_err("reservation should fail") {
+            TryVecWithCloneError::Reserve(r) => {
+                assert!(r.is_alloc());
+            }
+            other => panic!("expected a reserve failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_from_borrowed_slice_fails_when_element_clone_fails() {
+        // `FlakyClone` with threshold 0 fails its first clone attempt, so the very
+        // first element in the slice cannot be copied into the new vector.
+        let items = [FlakyClone::new(0), FlakyClone::new(0)];
+        let res: Result<Vec<FlakyClone, Global>, _> = Vec::try_from(&items[..]);
+        match res.expect_err("first element clone should fail") {
+            TryVecWithCloneError::Clone(TryCloneError::Other(_)) => {}
+            other => panic!("expected a clone failure, got {other:?}"),
+        }
     }
 }

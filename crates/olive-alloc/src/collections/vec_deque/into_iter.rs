@@ -170,12 +170,8 @@ mod tests {
         let budget = CloneBudget::new(u32::MAX);
         let mut dq: VecDeque<FlakyCloneTrackedItem> = VecDeque::new();
         for i in 0..4u32 {
-            dq.try_push_back(FlakyCloneTrackedItem::with_id(
-                &ledger,
-                i,
-                budget.share(),
-            ))
-            .unwrap();
+            dq.try_push_back(FlakyCloneTrackedItem::with_id(&ledger, i, budget.share()))
+                .unwrap();
         }
         assert!(ledger.live_ids().len() == 4);
         let last = dq.into_iter().last();

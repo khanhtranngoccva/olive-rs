@@ -151,12 +151,10 @@ impl<T, A: Allocator> Vec<T, A> {
     /// Decomposes a `Vec<T, A>` into its constituent parts: a raw pointer, a
     /// length, a capacity, and the allocator.
     ///
-    /// # Safety
-    ///
     /// After calling this function, the caller assumes responsibility for the
     /// allocation: it must eventually deallocate `ptr` with `alloc`.
     #[must_use = "losing the pointer will leak memory"]
-    pub unsafe fn into_raw_parts_with_alloc(self) -> (*mut T, usize, usize, A) {
+    pub fn into_raw_parts_with_allocator(self) -> (*mut T, usize, usize, A) {
         let mut this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller.
         unsafe {
@@ -172,11 +170,9 @@ impl<T, A: Allocator> Vec<T, A> {
     /// Decomposes a `Vec<T, A>` into a non-null pointer, length, capacity, and
     /// allocator.
     ///
-    /// # Safety
-    ///
     /// See [`Self::into_raw_parts_with_alloc`].
     #[must_use = "losing the pointer will leak memory"]
-    pub unsafe fn into_parts_with_alloc(self) -> (NonNull<T>, usize, usize, A) {
+    pub fn into_parts_with_allocator(self) -> (NonNull<T>, usize, usize, A) {
         let this = ManuallyDrop::new(self);
         // SAFETY: we consume `self`; the pointer is handed to the caller.
         unsafe {
@@ -188,4 +184,59 @@ impl<T, A: Allocator> Vec<T, A> {
             )
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use core::slice;
+
+    use super::*;
+
+    #[test]
+    fn into_raw_parts_roundtrip() {
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..4 {
+                v.try_push(i * 10).unwrap();
+            }
+            v
+        };
+        let (base, len, cap) = v.into_raw_parts();
+        assert_eq!(len, 4);
+        assert!(cap >= 4);
+        assert_eq!(
+            unsafe { slice::from_raw_parts(base, len) },
+            &[10, 20, 30, 40]
+        );
+        let rebuilt = unsafe { Vec::<i32>::from_raw_parts(base, len, cap) };
+        assert_eq!(rebuilt, [10, 20, 30, 40]);
+        assert_eq!(rebuilt.len(), len);
+        assert_eq!(rebuilt.capacity(), cap);
+    }
+
+    #[test]
+    fn into_raw_parts_with_allocator_roundtrip() {
+        // FIXME: use CountingAllocator
+        let v = {
+            let mut v = Vec::new();
+            for i in 0..4 {
+                v.try_push(i * 10).unwrap();
+            }
+            v
+        };
+        let (base, len, cap, alloc) = v.into_raw_parts_with_allocator();
+        assert_eq!(len, 4);
+        assert!(cap >= 4);
+        assert_eq!(
+            unsafe { slice::from_raw_parts(base, len) },
+            &[10, 20, 30, 40]
+        );
+        let rebuilt = unsafe { Vec::<i32>::from_raw_parts_in(base, len, cap, alloc) };
+        assert_eq!(rebuilt, [10, 20, 30, 40]);
+        assert_eq!(rebuilt.len(), len);
+        assert_eq!(rebuilt.capacity(), cap);
+    }
+
+    // FIXME: add NonNull test counterparts
 }

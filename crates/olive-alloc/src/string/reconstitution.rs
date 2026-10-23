@@ -61,16 +61,9 @@ impl<A: Allocator> String<A> {
     /// Same as [`into_raw_parts`](Self::into_raw_parts), but for any
     /// allocator: decomposes the string into its raw components plus the
     /// allocator, which the caller must use for the eventual deallocation.
-    ///
-    /// # Safety
-    ///
-    /// See
-    /// [`Vec::into_raw_parts_with_alloc`](crate::vec::Vec::into_raw_parts_with_alloc)
-    /// for the full list of preconditions.
     #[inline]
-    pub unsafe fn into_raw_parts_with_alloc(self) -> (*mut u8, usize, usize, A) {
-        // SAFETY: forwarding the caller's obligation unchanged.
-        unsafe { self.buf.into_raw_parts_with_alloc() }
+    pub fn into_raw_parts_with_allocator(self) -> (*mut u8, usize, usize, A) {
+        self.buf.into_raw_parts_with_allocator()
     }
 
     /// Leaks the string and its allocator instance, returning a string reference
@@ -87,7 +80,7 @@ impl<A: Allocator> String<A> {
         // out of allocator scope.
         A: 'a,
     {
-        let (ptr, len, _cap, alloc) = unsafe { self.buf.into_raw_parts_with_alloc() };
+        let (ptr, len, _cap, alloc) = self.buf.into_raw_parts_with_allocator();
         // Must leak the allocator to prevent the backing storage from being lost.
         mem::forget(alloc);
         // SAFETY: `ptr` points to `len` bytes of valid UTF-8 allocated by
@@ -129,7 +122,7 @@ mod tests {
     fn into_raw_parts_with_alloc_roundtrips_through_from_raw_parts_in() {
         let alloc = CountingAllocator::new();
         let s: String<&CountingAllocator> = String::try_from_str_in("payload", &alloc).unwrap();
-        let (ptr, len, cap, returned) = unsafe { s.into_raw_parts_with_alloc() };
+        let (ptr, len, cap, returned) = s.into_raw_parts_with_allocator();
         assert_eq!(len, 7);
         // The allocator travels with the parts: reconstruction deallocates
         // through the very same instance.

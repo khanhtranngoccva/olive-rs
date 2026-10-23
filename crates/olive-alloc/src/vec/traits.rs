@@ -403,3 +403,621 @@ impl<T, A: Allocator> Vec<T, A> {
         Ok(vec)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use crate::borrow::Cow;
+    use olive_core::try_traits::try_clone::TryCloneError;
+    use olive_core::try_traits::try_collect::TryCollect;
+    use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
+    use olive_core::try_traits::try_from_iterator::TryFromIterator;
+    use olive_test_helpers::{
+        CloneBudget, CountingAllocator, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger,
+    };
+    use std::format;
+    use std::sync::Arc;
+
+    /// Builds an olive `Vec` from literals without relying on a `vec!` macro.
+    fn mk_vec(items: &[i32]) -> Vec<i32, Global> {
+        let mut v = Vec::new();
+        for x in items {
+            v.try_push(*x).unwrap();
+        }
+        v
+    }
+
+    /// An iterator whose `size_hint` advertises a far larger upper bound than the
+    /// number of elements it actually yields — the canonical "over-reporting" case.
+    struct OverhintedIter {
+        remaining: usize,
+        advertised_upper: usize,
+    }
+
+    impl Iterator for OverhintedIter {
+        type Item = i32;
+
+        fn next(&mut self) -> Option<i32> {
+            if self.remaining == 0 {
+                return None;
+            }
+            self.remaining -= 1;
+            let value = (self.advertised_upper - self.remaining) as i32;
+            Some(value)
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (
+                self.remaining.min(self.advertised_upper),
+                Some(self.advertised_upper),
+            )
+        }
+    }
+
+    #[test]
+    fn deref_as_slice() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        v.try_push(2).unwrap();
+        let s: &[i32] = &v;
+        assert_eq!(s, &[1, 2]);
+    }
+
+    // FIXME: missing DerefMut
+
+    #[test]
+    fn index_get_and_set() {
+        let mut v = Vec::new();
+        for i in 0..3 {
+            v.try_push(i).unwrap();
+        }
+        assert_eq!(v[1], 1);
+        v[1] = 99;
+        assert_eq!(v.as_slice(), &[0, 99, 2]);
+    }
+
+    #[test]
+    fn range_full_index() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        v.try_push(2).unwrap();
+        let all: &[i32] = &v[..];
+        assert_eq!(all, &[1, 2]);
+    }
+
+    // FIXME: missing partial range
+
+    #[test]
+    fn vec_partial_eq_same_len_equal() {
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 2, 3]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn vec_partial_eq_differs_at_element() {
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 2, 4]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vec_partial_eq_different_lengths() {
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 2]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vec_partial_eq_cross_type_vs_slice() {
+        let v = mk_vec(&[1, 2, 3]);
+        let s: &[i32] = &[1, 2, 3];
+        let s_mut: &mut [i32] = &mut [1, 2, 3];
+        assert_eq!(v, s);
+        assert_eq!(v, s_mut);
+        assert_eq!(v, *s);
+
+        let ne = mk_vec(&[1, 2, 4]);
+        assert_ne!(ne, s);
+        assert_ne!(ne, s_mut);
+        assert_ne!(ne, *s);
+    }
+
+    #[test]
+    fn vec_partial_eq_reverse_vs_slice() {
+        let v = mk_vec(&[1, 2, 3]);
+        let s: &[i32] = &[1, 2, 3];
+        let s_mut: &mut [i32] = &mut [1, 2, 3];
+
+        assert_eq!(s, v);
+        assert_eq!(s_mut, v);
+        assert_eq!(*s, v);
+
+        let ne: &[i32] = &[1, 2, 4];
+        let ne_mut: &mut [i32] = &mut [1, 2, 4];
+
+        assert_ne!(ne, v);
+        assert_ne!(ne_mut, v);
+        assert_ne!(*ne, v);
+    }
+
+    #[test]
+    fn vec_partial_eq_cross_type_vs_array() {
+        let v = mk_vec(&[1, 2, 3]);
+        let mut a: [i32; 3] = [1, 2, 3];
+        assert_eq!(v, a);
+        assert_eq!(v, &a);
+        assert_eq!(v, &mut a);
+
+        let ne = mk_vec(&[1, 2, 4]);
+        assert_ne!(ne, a);
+        assert_ne!(ne, &a);
+        assert_ne!(ne, &mut a);
+    }
+
+    #[test]
+    fn vec_partial_eq_reverse_vs_array() {
+        let v = mk_vec(&[1, 2, 3]);
+        let mut a: [i32; 3] = [1, 2, 3];
+        assert_eq!(a, v);
+        assert_eq!(&a, v);
+        assert_eq!(&mut a, v);
+
+        let mut ne: [i32; 3] = [1, 2, 4];
+        assert_ne!(ne, v);
+        assert_ne!(&ne, v);
+        assert_ne!(&mut ne, v);
+
+        // Length and element mismatches compare unequal.
+        assert_ne!(a, mk_vec(&[1, 2, 4]));
+        assert_ne!(a, mk_vec(&[1, 2]));
+    }
+
+    #[test]
+    fn vec_partial_eq_cross_allocator() {
+        use olive_test_helpers::allocators::ByteCapAlloc;
+
+        let a = mk_vec(&[1, 2, 3]);
+        let mut b: Vec<i32, ByteCapAlloc> =
+            Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+        for x in [1, 2, 3] {
+            b.try_push(x).unwrap();
+        }
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+
+        let mut c: Vec<i32, ByteCapAlloc> =
+            Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+        for x in [1, 2, 4] {
+            c.try_push(x).unwrap();
+        }
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn cow_slice_eq_vec_and_slices() {
+        let src: &[i32] = &[1, 2, 3];
+
+        let owned: Cow<'_, [i32]> = Cow::Owned(mk_vec(&[1, 2, 3]));
+        let borrowed: Cow<'_, [i32]> = Cow::Borrowed(src);
+
+        let v = mk_vec(&[1, 2, 3]);
+        assert_eq!(borrowed, v);
+        assert_eq!(v, borrowed);
+        assert_eq!(owned, v);
+        assert_eq!(v, owned);
+
+        let other: &[i32] = &[1, 2, 3];
+        assert_eq!(borrowed, other);
+        assert_eq!(other, borrowed);
+        assert_eq!(owned, other);
+        assert_eq!(other, owned);
+        let other_mut: &mut [i32] = &mut [1, 2, 3];
+        assert_eq!(borrowed, other_mut);
+        assert_eq!(other_mut, borrowed);
+        assert_eq!(owned, other_mut);
+        assert_eq!(other_mut, owned);
+        let other_arr: [i32; 3] = [1, 2, 3];
+        assert_eq!(borrowed, other_arr);
+        assert_eq!(other_arr, borrowed);
+        assert_eq!(owned, other_arr);
+        assert_eq!(other_arr, owned);
+
+        // Length and element mismatches compare unequal.
+        assert_ne!(borrowed, mk_vec(&[1, 2]));
+        assert_ne!(borrowed, mk_vec(&[1, 2, 4]));
+        assert_ne!(owned, mk_vec(&[1, 2]));
+        assert_ne!(owned, mk_vec(&[1, 2, 4]));
+        assert_ne!(mk_vec(&[1, 2]), borrowed);
+        assert_ne!(mk_vec(&[1, 2, 4]), borrowed);
+        assert_ne!(mk_vec(&[1, 2]), owned);
+        assert_ne!(mk_vec(&[1, 2, 4]), owned);
+    }
+
+    #[test]
+    fn vec_partial_ord_cross_allocator() {
+        use core::cmp::{Ordering, PartialOrd};
+        use olive_test_helpers::allocators::ByteCapAlloc;
+
+        let a = mk_vec(&[1, 2]);
+        let mut b: Vec<i32, ByteCapAlloc> =
+            Vec::try_with_capacity_in(3, ByteCapAlloc::new(64)).expect("should create vector");
+        for x in [1, 2, 3] {
+            b.try_push(x).unwrap();
+        }
+        assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+        assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
+
+        let mut equal: Vec<i32, ByteCapAlloc> =
+            Vec::try_with_capacity_in(2, ByteCapAlloc::new(64)).expect("should create vector");
+        for x in [1, 2] {
+            equal.try_push(x).unwrap();
+        }
+        assert_eq!(PartialOrd::partial_cmp(&a, &equal), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn vec_partial_ord_less_than_by_prefix_then_length() {
+        use core::cmp::{Ordering, PartialOrd};
+        let a = mk_vec(&[1, 2]);
+        let b = mk_vec(&[1, 2, 3]);
+        // Explicit `PartialOrd` dispatch — operators would route through `Ord`.
+        assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+        assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn vec_partial_ord_lexicographic() {
+        use core::cmp::{Ordering, PartialOrd};
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 3, 2]);
+        assert_eq!(PartialOrd::partial_cmp(&a, &b), Some(Ordering::Less));
+        assert_eq!(PartialOrd::partial_cmp(&b, &a), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn vec_ord_less_than_by_prefix_then_length() {
+        use core::cmp::{Ord, Ordering};
+        let a = mk_vec(&[1, 2]);
+        let b = mk_vec(&[1, 2, 3]);
+        assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
+        assert_eq!(Ord::cmp(&b, &a), Ordering::Greater);
+    }
+
+    #[test]
+    fn vec_ord_lexicographic() {
+        use core::cmp::{Ord, Ordering};
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 3, 2]);
+        assert_eq!(Ord::cmp(&a, &b), Ordering::Less);
+        assert_eq!(Ord::cmp(&b, &a), Ordering::Greater);
+    }
+
+    #[test]
+    fn vec_hash_consistent_for_equal_vectors() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 2, 3]);
+
+        let mut ha = DefaultHasher::new();
+        let mut hb = DefaultHasher::new();
+        a.hash(&mut ha);
+        b.hash(&mut hb);
+        assert_eq!(ha.finish(), hb.finish());
+    }
+
+    #[test]
+    fn vec_hash_differs_for_different_vectors() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let a = mk_vec(&[1, 2, 3]);
+        let b = mk_vec(&[1, 2, 4]);
+
+        let mut ha = DefaultHasher::new();
+        let mut hb = DefaultHasher::new();
+        a.hash(&mut ha);
+        b.hash(&mut hb);
+        assert_ne!(ha.finish(), hb.finish());
+    }
+
+    #[test]
+    fn debug_format_lists_elements() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        v.try_push(2).unwrap();
+        let s = format!("{v:?}");
+        assert_eq!(s, "[1, 2]");
+    }
+
+    #[test]
+    fn try_extend_trait_success() {
+        let mut v: Vec<i32> = Vec::new();
+        v.try_extend(0..3).expect("extend ok");
+        assert_eq!(v.as_slice(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn try_extend_trait_oom_carries_resume() {
+        let mut v: Vec<i32, FailAlloc> = Vec::new_in(FailAlloc);
+        let (resume, err) = v.try_extend(0..3).expect_err("oom");
+        assert!(err.is_alloc());
+        // Nothing was committed (because the vec has no capacity yet).
+        assert!(v.is_empty());
+        // The resume carries the unconsumed remainder.
+        let remaining: std::vec::Vec<i32> = resume.into_remainder().collect();
+        assert!(!remaining.is_empty());
+    }
+
+    #[test]
+    fn try_extend_retry_recovers() {
+        // Simulate: first attempt fails partway, retry with the resume completes.
+        // We can't force a real mid-way OOM easily, so verify the resume round-trips
+        // through a second call on a healthy allocator.
+        let mut v: Vec<i32> = Vec::new();
+        let start = Resume::compose(Some(0), 1..4);
+        v.try_extend(start).expect("retry ok");
+        assert_eq!(v.as_slice(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn try_extend_overhint_falls_back_to_incremental_growth() {
+        // An iterator that advertises a huge upper bound but yields only a few
+        // elements. The upfront batch reserve is too large for the byte-capped
+        // allocator and fails silently; extend then proceeds via per-element
+        // reserves that each stay within the cap.
+        use olive_test_helpers::allocators::ByteCapAlloc;
+
+        let alloc = ByteCapAlloc::new(64);
+        let mut v: Vec<i32, _> = Vec::new_in(alloc.clone());
+
+        v.try_extend(OverhintedIter {
+            remaining: 4,
+            advertised_upper: 10000,
+        })
+        .map_err(|(_, e)| e)
+        .expect("incremental growth should succeed");
+        assert_eq!(v.as_slice(), &[9997, 9998, 9999, 10000]);
+    }
+
+    #[test]
+    fn try_extend_underhint_grows_mid_iteration() {
+        // An iterator whose size hint severely underestimates the true count
+        // forces mid-extension growth once the initially reserved capacity is
+        // exhausted.
+        #[derive(Debug)]
+        struct Underhinted(core::ops::Range<i32>);
+        impl Iterator for Underhinted {
+            type Item = i32;
+            fn next(&mut self) -> Option<i32> {
+                self.0.next()
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (0, Some(1))
+            }
+        }
+
+        let mut v: Vec<i32> = Vec::new();
+        v.try_push(99).unwrap();
+        v.try_extend(Underhinted(0..8)).expect("extend ok");
+        assert_eq!(v.as_slice(), &[99, 0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn try_extend_from_slice_trait_success() {
+        let mut v: Vec<i32> = Vec::new();
+        v.try_extend_from_slice(&[7, 8]).expect("ok");
+        assert_eq!(v.as_slice(), &[7, 8]);
+    }
+
+    #[test]
+    fn try_extend_from_slice_uses_adaptive_reserve_under_byte_cap() {
+        use olive_test_helpers::allocators::ByteCapAlloc;
+        let mut v: Vec<i32, ByteCapAlloc> =
+            Vec::try_with_capacity_in(15, ByteCapAlloc::new(64)).expect("should create vector");
+        v.try_extend(0..15).expect("capacity is sufficient");
+        v.try_extend_from_slice(&[15])
+            .expect("adaptive reserve should absorb the over-provisioned request");
+        assert_eq!(v.len(), 16);
+        assert_eq!(v.last(), Some(&15));
+    }
+
+    #[test]
+    fn try_extend_from_slice_trait_returns_remainder_on_clone_fail() {
+        let mut v: Vec<FlakyClone> = Vec::new();
+        let mut src: Vec<FlakyClone> = Vec::new();
+        src.try_push(FlakyClone::new(2)).unwrap();
+        src.try_push(FlakyClone::at(1, 2)).unwrap();
+        src.try_push(FlakyClone::at(2, 2)).unwrap(); // fails to clone
+        let (rest, e) = v
+            .try_extend_from_slice(src.as_slice())
+            .expect_err("clone fail");
+        assert!(matches!(
+            e,
+            TryVecWithCloneError::Clone(TryCloneError::Other(_))
+        ));
+        // Remainder begins at the failing element.
+        assert_eq!(rest.len(), 1);
+        assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn extend_from_slice_with_rollback_success() {
+        let mut v = Vec::new();
+        v.try_push(1).unwrap();
+        v.try_extend_from_slice_with_rollback(&[2, 3])
+            .expect("extend ok");
+        assert_eq!(v.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn extend_from_slice_rolls_back_on_clone_failure() {
+        let ledger = Arc::new(Ledger::new());
+        let budget = CloneBudget::new(2);
+
+        // One live seed in the destination (id 0).
+        let mut v: Vec<FlakyCloneTrackedItem> = Vec::new();
+        v.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
+            .unwrap();
+
+        // Source slice of three payloads (ids 1, 2, 3). Extending clones them in
+        // order; the budget allows exactly two successful clones (of ids 1 and 2),
+        // then the third clone (of id 3) fails → rollback discards the two appends.
+        let mut fv: Vec<FlakyCloneTrackedItem> = Vec::new();
+        for _ in 0..3 {
+            fv.try_push(FlakyCloneTrackedItem::construct(&ledger, budget.share()))
+                .unwrap();
+        }
+
+        let e = v
+            .try_extend_from_slice_with_rollback(fv.as_slice())
+            .expect_err("clone fail");
+        assert!(matches!(e, TryVecWithCloneError::Clone(_)));
+
+        // Destination rolled back to just its seed.
+        assert_eq!(v.len(), 1);
+        // The two transient copies of source ids 1 and 2 were created as NEW ids
+        // (4 and 5) and dropped during rollback. Still alive at this point: id 0
+        // (seed, in v) and ids 1, 2, 3 (the sources, in fv). No double-free, and
+        // exactly the two transients have been dropped.
+        assert_eq!(ledger.live_ids(), [0, 1, 2, 3]);
+        assert!(ledger.double_dropped().is_empty());
+        assert_eq!(ledger.total_allocated(), 6);
+        assert_eq!(
+            ledger.drop_count(4),
+            1,
+            "transient copy of source[0] dropped once"
+        );
+        assert_eq!(
+            ledger.drop_count(5),
+            1,
+            "transient copy of source[1] dropped once"
+        );
+
+        // Tear down both vecs: seed (0) + sources (1,2,3) all drop → 5 more, total 7.
+        drop(fv);
+        drop(v);
+        assert!(ledger.leaked_ids().is_empty());
+        assert!(ledger.all_dropped_once(0..6));
+    }
+
+    // FIXME: panic safety for the rollback
+
+    #[test]
+    fn try_clone_vec_basic() {
+        let mut v: Vec<i32> = Vec::new();
+        for i in 0..5 {
+            v.try_push(i).unwrap();
+        }
+        let c = v.try_clone().expect("clone ok");
+        assert_eq!(c.as_slice(), &[0, 1, 2, 3, 4]);
+        // Independent buffer.
+        assert_ne!(v.as_ptr(), c.as_ptr());
+    }
+
+    #[test]
+    fn try_clone_empty_vec() {
+        let v: Vec<i32> = Vec::new();
+        let c = v.try_clone().expect("clone ok");
+        assert!(c.is_empty());
+    }
+
+    // FIXME: try_clone should test element clone failures and allocation failures
+
+    #[test]
+    fn try_collect_uses_size_hint() {
+        let v: Vec<i32> = (0..5).try_collect().expect("collect ok");
+        assert_eq!(v.as_slice(), &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn try_collect_grows_past_hint() {
+        // An iterator that lies about its size hint (claims small, yields more).
+        struct LyingIter {
+            n: usize,
+            yielded: usize,
+        }
+        impl Iterator for LyingIter {
+            type Item = i32;
+            fn next(&mut self) -> Option<i32> {
+                if self.yielded < self.n {
+                    let v = self.yielded as i32;
+                    self.yielded += 1;
+                    Some(v)
+                } else {
+                    None
+                }
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (0, Some(0)) // Deliberately under-reports.
+            }
+        }
+        let v: Vec<i32> = LyingIter { n: 10, yielded: 0 }
+            .try_collect()
+            .expect("grow ok");
+        assert_eq!(
+            v.as_slice(),
+            std::vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].as_slice()
+        );
+    }
+
+    #[test]
+    fn try_from_iterator_collects() {
+        let v: Vec<i32> = TryFromIterator::try_from_iter(0..4).expect("iter ok");
+        assert_eq!(v.as_slice(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn try_from_iter_in_fail_alloc_reports_reserve() {
+        let e = Vec::<i32, FailAlloc>::try_from_iter_in(0..3, FailAlloc).expect_err("should fail");
+        assert!(e.is_alloc());
+    }
+
+    #[test]
+    fn try_from_iter_in_builds_vec_on_target_allocator() {
+        let alloc = CountingAllocator::new();
+        let v: Vec<i32, _> = Vec::try_from_iter_in(1..=4, &alloc).expect("create OK");
+        assert_eq!(alloc.allocations(), 1);
+        assert_eq!(v.as_slice(), &[1, 2, 3, 4]);
+        drop(v);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn try_from_iter_in_fails_when_allocation_fails() {
+        use olive_core::alloc_errors::TryReserveErrorKind;
+        // The `Global`-scoped trait impl can't target a failing allocator, so drive
+        // the same code path through the `_in` seam with one that does.
+        let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_iter_in(1..=4, FailAlloc);
+        let r = res.expect_err("allocation should fail");
+        assert!(matches!(r.kind(), TryReserveErrorKind::AllocError { .. }))
+    }
+
+    #[test]
+    fn try_from_iter_in_absorbs_overhint_and_grows_incrementally() {
+        use olive_test_helpers::allocators::ByteCapAlloc;
+        // The iterator advertises an upper bound of 1_000 but yields only 4
+        // elements (16 bytes).
+        let iter = OverhintedIter {
+            remaining: 4,
+            advertised_upper: 1_000,
+        };
+        let v: Vec<i32, ByteCapAlloc> = Vec::try_from_iter_in(iter, ByteCapAlloc::new(64))
+            .expect("over-hint should be absorbed via incremental growth");
+        assert_eq!(v.as_slice(), &[997, 998, 999, 1_000]);
+    }
+
+    #[test]
+    fn try_from_iter_in_still_fails_on_genuine_oom_under_byte_cap() {
+        use olive_test_helpers::allocators::ByteCapAlloc;
+        let iter = std::iter::repeat(1i32).take(20);
+        let res: Result<Vec<i32, ByteCapAlloc>, _> =
+            Vec::try_from_iter_in(iter, ByteCapAlloc::new(64));
+        let e = res.expect_err("genuine OOM should surface");
+        assert!(e.is_alloc())
+    }
+}

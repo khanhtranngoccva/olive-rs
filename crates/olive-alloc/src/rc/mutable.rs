@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(Rc::strong_count(&other), 1);
         assert!(!Rc::ptr_eq(&data, &other));
     }
-    
+
     #[test]
     fn make_mut_with_weak_steals_without_cloning() {
         // Only weak references remain: the value must be MOVED into a fresh

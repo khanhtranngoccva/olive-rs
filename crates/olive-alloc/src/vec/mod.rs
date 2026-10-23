@@ -200,4 +200,31 @@ impl<T, A: Allocator> Drop for Vec<T, A> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::{alloc::Layout, convert::Infallible};
+    use olive_core::try_traits::try_clone::TryCloneError;
+    use std::format;
+
+    #[test]
+    fn error_types_display() {
+        let wce = TryVecWithCloneError::Clone(TryCloneError::Other("boom"));
+        assert!(format!("{wce}").contains("boom"));
+
+        let wcle = TryVecWithClosureError::Closure(TryCloneError::Other("boom"));
+        assert!(format!("{wcle}").contains("boom"));
+
+        let wcle =
+            TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_capacity_overflow());
+        assert!(format!("{wcle}").contains("capacity overflow"));
+
+        let wcle = TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_alloc(
+            Layout::new::<i32>(),
+        ));
+        assert!(
+            format!("{wcle}").contains("4"),
+            "should include layout size in an alloc error"
+        );
+    }
+}
