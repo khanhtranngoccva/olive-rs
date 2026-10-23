@@ -347,6 +347,7 @@ impl<A: Allocator> String<A> {
             (true, ([], v, [])) => Self::try_from_utf16_lossy_in(v, alloc),
             (true, ([], v, [_remainder])) => {
                 // Reserve one more byte for the replacement
+                // (the iterator chains 1 extra replacement because it is lossy)
                 let len_with_replacement = v
                     .len()
                     .checked_add(1)
@@ -381,6 +382,7 @@ impl<A: Allocator> String<A> {
             (true, ([], v, [])) => Self::try_from_utf16_lossy_in(v, alloc),
             (true, ([], v, [_remainder])) => {
                 // Reserve one more byte for the replacement
+                // (the iterator chains 1 extra replacement because it is lossy)
                 let len_with_replacement = v
                     .len()
                     .checked_add(1)
@@ -478,16 +480,15 @@ impl<A: Allocator> String<A> {
 
 /// Lossily converts a byte slice to a known-size u16 iterator using little-endian encoding,
 /// adding a replacement character in place of the last malformed byte.
+/// (which the caller has to account for)
 /// If the number of bytes in the slice is even, the conversion can be lossless, making the
 /// function usable in lossless implementations.
 fn convert_slice_to_u16_le_iter(
     input: &[u8],
 ) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
-    // If `even_bytes` is false, then the last chunk is odd and malformed, and input.len() / 2
-    // will round down, so adding 1 is necessary.
-    let even_bytes = input.len() & 1 == 0;
+    let odd_bytes = input.len() & 1 != 0;
     let len = (input.len() / 2)
-        .checked_add(even_bytes as usize)
+        .checked_add(odd_bytes as usize)
         .ok_or(TryReserveError::new_capacity_overflow())?;
     Ok((
         input.chunks(2).map(|chunk| {
@@ -503,14 +504,13 @@ fn convert_slice_to_u16_le_iter(
 /// adding a replacement character in place of the last malformed byte.
 /// If the number of bytes in the slice is even, the conversion can be lossless, making the
 /// function usable in lossless implementations.
+/// (which the caller has to account for)
 fn convert_slice_to_u16_be_iter(
     input: &[u8],
 ) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
-    // If `even_bytes` is false, then the last chunk is odd and malformed, and input.len() / 2
-    // will round down, so adding 1 is necessary.
-    let even_bytes = input.len() & 1 == 0;
+    let odd_bytes = input.len() & 1 != 0;
     let len = (input.len() / 2)
-        .checked_add(even_bytes as usize)
+        .checked_add(odd_bytes as usize)
         .ok_or(TryReserveError::new_capacity_overflow())?;
     Ok((
         input.chunks(2).map(|chunk| {

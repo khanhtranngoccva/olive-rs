@@ -130,6 +130,8 @@ impl<A: Allocator> DoubleEndedIterator for IntoChars<A> {
         }
         // Decode the trailing character of the not-yet-emitted region.
         let tail = &self.s.as_str()[..self.end];
+        // This invocation takes constant time, making full
+        // iteration linear.
         let ch = tail.chars().last()?;
         #[allow(
             clippy::arithmetic_side_effects,
