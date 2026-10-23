@@ -83,7 +83,7 @@ impl<K, V> Root<K, V> {
                     Found(kv) => kv.idx(),
                     GoDown(edge) => edge.idx(),
                 };
-                debug_assert!(depth < MAX_PATH);
+                assert!(depth < MAX_PATH);
                 path[depth] = edge_idx;
                 #[allow(clippy::arithmetic_side_effects, reason = "depth + 1 <= MAX_PATH")]
                 {

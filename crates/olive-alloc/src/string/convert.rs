@@ -22,6 +22,9 @@ impl<A: Allocator> String<A> {
     ///
     /// Unlike the fallible cousin [`Self::try_into_boxed_str`], this does not shrink
     /// the string and may cause the string to hold more memory than needed.
+    // FIXME: This is actually unsound! If len < cap, then deallocation may encounter a smaller layout than 
+    // expected. Shrinking must be called first, and only return the box on reallocation success. 
+    // Other methods that naively assume `len` as the box parameter also runs into this error.
     pub fn into_boxed_str(self) -> Box<str, A> {
         let (ptr, len, _cap, alloc) = self.buf.into_raw_parts_with_allocator();
         // SAFETY: `ptr` points to `len` bytes of valid UTF-8 allocated by
@@ -60,8 +63,8 @@ impl<A: Allocator> String<A> {
     }
 }
 
-// We intentionally do not allow easy trivial conversions to a Box because it
-// misses a shrinking opportunity.
+// We do not allow easy trivial conversions to a Box because it misses a shrinking 
+// opportunity (or perhaps it can't because it's undefined behavior!).
 impl<A: Allocator> TryFrom<String<A>> for Box<str, A> {
     type Error = TryReserveError;
 

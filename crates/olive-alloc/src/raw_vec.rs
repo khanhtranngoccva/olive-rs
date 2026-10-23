@@ -107,6 +107,15 @@ impl Cap {
 /// `capacity()` always returns `usize::MAX`. This means that you need to be
 /// careful when round-tripping this type with a `Box<[T]>`, since `capacity()`
 /// won't yield the length.
+///
+/// Note that the RawVec may increase the requested capacity before forwarding the
+/// allocation request to the allocator, and the allocator can in turn increase the
+/// size of the allocated block (the current implementation ignores the allocator's
+/// excess for now). 
+/// 
+/// Method that inflate or amortize the requested capacity like this 
+/// may leave an intuitive total (e.g. len + additional), but this number is 
+/// unsuitable for [`Self::into_box`] or any equivalent .
 #[allow(missing_debug_implementations)]
 pub(crate) struct RawVec<T, A: Allocator = Global> {
     inner: RawVecInner<A>,
@@ -153,6 +162,10 @@ impl<T> RawVec<T, Global> {
     /// that if `T` is zero-sized this means you will *not* get a `RawVec` with
     /// the requested capacity.
     ///
+    /// # Notes
+    ///
+    /// The capacity here can be used as the lower length bound for [`Self::into_box`].
+    ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
@@ -168,6 +181,10 @@ impl<T> RawVec<T, Global> {
     }
 
     /// Like [`Self::try_with_capacity`], but guarantees the buffer is zeroed.
+    ///
+    /// # Notes
+    ///
+    /// The capacity here can be used as the lower length bound for [`Self::into_box`].
     ///
     /// # Errors
     ///
@@ -232,6 +249,8 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// the allocator returns a buffer larger than the request, the reported
     /// capacity is still clamped to the requested `capacity`.
     ///
+    /// The capacity here can be used as the lower length bound for [`Self::into_box`].
+    ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the requested capacity overflows or the
@@ -247,6 +266,8 @@ impl<T, A: Allocator> RawVec<T, A> {
 
     /// Like [`Self::try_with_capacity_zeroed`], but parameterized over the choice of
     /// allocator for the returned `RawVec`.
+    ///
+    /// The capacity here can be used as the lower length bound for [`Self::into_box`].
     ///
     /// # Errors
     ///
@@ -271,8 +292,17 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// * `len` must be greater than or equal to the most recently requested capacity, and
     /// * `len` must be less than or equal to `self.capacity()`.
     ///
-    /// Note, that the requested capacity and `self.capacity()` could differ, as
-    /// an allocator could overallocate and return a greater memory block than requested.
+    /// Note, that the requested capacity (as seen by the allocator) and `self.capacity()`
+    /// could differ, as an allocator could overallocate and return a greater memory block
+    /// than requested.
+    ///
+    /// For example, the caller could request a total capacity of 4 items, but the RawVec
+    /// requests 6 items from the allocator instead, depending on which method was used,
+    /// and get 8 items worth of capacity instead.
+    ///
+    /// 6 items would be the "most recently requested capacity" in this scenario, and
+    /// calling `into_box(4)` causes undefined behavior, because the allocator would deallocate
+    /// the pointer using the 4-item layout instead of the minimum of 6-item layout.
     #[inline]
     pub unsafe fn into_box(self, len: usize) -> Box<[MaybeUninit<T>], A> {
         // Sanity-check one half of the safety requirement (we cannot check the other half).
@@ -370,6 +400,15 @@ impl<T, A: Allocator> RawVec<T, A> {
     ///
     /// This is ideal for implementing a bulk-push operation like `extend`.
     ///
+    /// # Notes
+    ///
+    /// Even if the naive total `len` + `additional` > `self.capacity()`, this total
+    /// may seem like a new capacity number, but the requested capacity may have been
+    /// internally increased by the amortization algorithm.
+    ///
+    /// Therefore, this naive total cannot be used as a lower length bound for
+    /// [`Self::into_box`]. (but `self.capacity()` can)
+    ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the new capacity overflows or the
@@ -387,6 +426,13 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// If `len` exceeds `self.capacity()`, this may fail to actually allocate
     /// the requested space. This is not really unsafe, but the unsafe code
     /// *you* write that relies on the behavior of this function may break.
+    ///
+    /// # Notes
+    ///
+    /// If the total `len` + `additional` > `self.capacity()`, this total
+    /// will be honored by the algorithm and will be passed as-is into the allocator.
+    ///
+    /// Therefore, it can be used as the lower length bound for [`Self::into_box`].
     ///
     /// # Errors
     ///
@@ -406,10 +452,22 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// A specialized version of `self.reserve(len, 1)` which requires the
     /// caller to ensure `len == self.capacity()`.
     ///
+    /// # Notes
+    /// 
+    /// The total `len` + 1 may look like a capacity, but the actually requested 
+    /// capacity (when requesting from the allocator) may be higher than this total.
+    /// 
+    /// herefore, this naive total cannot be used as a lower length bound for
+    /// [`Self::into_box`]. (but `self.capacity()` can)
+    ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the new capacity overflows or the
     /// allocation fails.
+    /// 
+    /// # Safety
+    /// 
+    /// The caller must ensure `len == self.capacity()`.
     #[inline(never)]
     pub unsafe fn try_grow_one(&mut self) -> Result<(), TryReserveError> {
         unsafe { self.inner.try_grow_one(elem_layout::<T>()) }
@@ -417,6 +475,13 @@ impl<T, A: Allocator> RawVec<T, A> {
 
     /// Shrinks the buffer down to the specified capacity. If the given amount
     /// is 0, actually completely deallocates.
+    /// 
+    /// # Notes
+    /// 
+    /// The algorithm honors the `cap` figure as the requested capacity (with 
+    /// respect to the allocator) instead of inflating the number.
+    /// 
+    /// Therefore, this can be used for [`Self::into_box`].
     ///
     /// # Panics
     ///
@@ -513,10 +578,17 @@ impl<A: Allocator> RawVecInner<A> {
     /// - `elem_layout` must be valid for `self`, i.e. it must be the same `elem_layout` used to
     ///   initially construct `self`
     /// - `elem_layout`'s size must be a multiple of its alignment
+    ///
+    /// # Errors
+    /// - Fails with a capacity overflow error if the element is a ZST (ZST vectors always have
+    ///   usize::MAX capacity)
+    /// - Fails with a capacity overflow on non-ZSTs if the total size exceeds Layout allowance
+    /// - Fails with an allocation error if memory allocation fails
     #[inline]
     unsafe fn try_grow_one(&mut self, elem_layout: Layout) -> Result<(), TryReserveError> {
         // SAFETY: Precondition passed to caller.
         // additionally `self.cap.0` is meaningless if elem_layout encodes ZST
+        // (always assumed to be usize::MAX)
         unsafe { self.grow_amortized(self.cap.0, 1, elem_layout) }
     }
 
@@ -595,6 +667,10 @@ impl<A: Allocator> RawVecInner<A> {
     /// - `elem_layout` must be valid for `self`, i.e. it must be the same `elem_layout` used to
     ///   initially construct `self`
     /// - `elem_layout`'s size must be a multiple of its alignment
+    ///
+    /// # Errors
+    /// - Fails with a capacity overflow on non-ZSTs if the total size exceeds Layout allowance
+    /// - Fails with an allocation error if memory allocation fails
     unsafe fn try_reserve(
         &mut self,
         len: usize,
@@ -713,7 +789,13 @@ impl<A: Allocator> RawVecInner<A> {
     /// - `elem_layout` must be valid for `self`, i.e. it must be the same `elem_layout` used to
     ///   initially construct `self`
     /// - `elem_layout`'s size must be a multiple of its alignment
-    /// - The sum of `len` and `additional` must be greater than the current capacity
+    /// - The sum of `len` and `additional` must be greater than the current capacity\
+    ///
+    /// # Errors
+    /// - Fails with a capacity overflow error if the element is a ZST (ZST vectors always have
+    ///   usize::MAX capacity)
+    /// - Fails with a capacity overflow on non-ZSTs if the total size exceeds Layout allowance
+    /// - Fails with an allocation error if memory allocation fails
     unsafe fn grow_amortized(
         &mut self,
         len: usize,

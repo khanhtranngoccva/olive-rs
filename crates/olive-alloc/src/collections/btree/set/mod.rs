@@ -8,7 +8,9 @@
 //! # Fallibility
 //!
 //! Every operation that may allocate returns a `Result` whose error carries the
-//! offending value plus an [`AllocError`]. On failure the set is left unmodified.
+//! offending value plus an [`AllocError`].
+//! 
+//! Some operations are atomic, on failure, these leave the set unmodified.
 
 use core::fmt;
 

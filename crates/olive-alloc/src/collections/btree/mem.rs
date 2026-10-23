@@ -18,14 +18,14 @@ pub fn take_mut<T>(v: &mut T, change: impl FnOnce(T) -> T) {
 /// aborted by invoking UB. Do not supply closures that panic.
 #[inline]
 pub fn replace<T, R>(v: &mut T, change: impl FnOnce(T) -> (T, R)) -> R {
-    // Since the `v` is uninitialized, the process has to be aborted, 
-    // which is theoretically safe behavior, but we cannot use a sound intrinsic.
+    // Since the `v` is uninitialized, the process has to be aborted.
+    // This crate is no_std, so std::process::abort is inaccessible.
+    // Letting the panic run off with an uninitialized cell is strictly
+    // *worse* behavior than invoking an abort using a null pointer
+    // dereference.
     struct PanicGuard;
     impl Drop for PanicGuard {
         fn drop(&mut self) {
-            // Aborts by invoking null deref (portable substitute for
-            // `core::intrinsics::abort()`, which is perma-unstable).
-            // This code path should NOT be exercised in practice.
             #[allow(deref_nullptr)]
             #[allow(clippy::zero_ptr)]
             #[allow(unused_must_use)]

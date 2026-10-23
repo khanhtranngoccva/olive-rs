@@ -478,6 +478,8 @@ impl<A: Allocator> String<A> {
     }
 }
 
+// FIXME: add regression test that accounts for odd bytes
+
 /// Lossily converts a byte slice to a known-size u16 iterator using little-endian encoding,
 /// adding a replacement character in place of the last malformed byte.
 /// (which the caller has to account for)
@@ -499,6 +501,8 @@ fn convert_slice_to_u16_le_iter(
         len,
     ))
 }
+
+// FIXME: add regression test that accounts for odd bytes
 
 /// Lossily converts a byte slice to a known-size u16 iterator using big-endian encoding,
 /// adding a replacement character in place of the last malformed byte.
