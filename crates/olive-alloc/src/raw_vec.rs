@@ -111,10 +111,10 @@ impl Cap {
 /// Note that the RawVec may increase the requested capacity before forwarding the
 /// allocation request to the allocator, and the allocator can in turn increase the
 /// size of the allocated block (the current implementation ignores the allocator's
-/// excess for now). 
-/// 
-/// Method that inflate or amortize the requested capacity like this 
-/// may leave an intuitive total (e.g. len + additional), but this number is 
+/// excess for now).
+///
+/// Method that inflate or amortize the requested capacity like this
+/// may leave an intuitive total (e.g. len + additional), but this number is
 /// unsuitable for [`Self::into_box`] or any equivalent .
 #[allow(missing_debug_implementations)]
 pub(crate) struct RawVec<T, A: Allocator = Global> {
@@ -453,10 +453,10 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// caller to ensure `len == self.capacity()`.
     ///
     /// # Notes
-    /// 
-    /// The total `len` + 1 may look like a capacity, but the actually requested 
+    ///
+    /// The total `len` + 1 may look like a capacity, but the actually requested
     /// capacity (when requesting from the allocator) may be higher than this total.
-    /// 
+    ///
     /// herefore, this naive total cannot be used as a lower length bound for
     /// [`Self::into_box`]. (but `self.capacity()` can)
     ///
@@ -464,9 +464,9 @@ impl<T, A: Allocator> RawVec<T, A> {
     ///
     /// Returns [`TryReserveError`] if the new capacity overflows or the
     /// allocation fails.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// The caller must ensure `len == self.capacity()`.
     #[inline(never)]
     pub unsafe fn try_grow_one(&mut self) -> Result<(), TryReserveError> {
@@ -475,12 +475,12 @@ impl<T, A: Allocator> RawVec<T, A> {
 
     /// Shrinks the buffer down to the specified capacity. If the given amount
     /// is 0, actually completely deallocates.
-    /// 
+    ///
     /// # Notes
-    /// 
-    /// The algorithm honors the `cap` figure as the requested capacity (with 
+    ///
+    /// The algorithm honors the `cap` figure as the requested capacity (with
     /// respect to the allocator) instead of inflating the number.
-    /// 
+    ///
     /// Therefore, this can be used for [`Self::into_box`].
     ///
     /// # Panics

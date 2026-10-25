@@ -3,11 +3,11 @@
 //!
 //! This includes the notable type [`Option`] and the iterator types
 //! that accompany it.
-//! 
+//!
 //! # Constraints
-//! 
-//! Due to API constraints, it is impossible to soundly implement 
-//! [`TryClone`] for certain iterator types like [`IntoIter`], at least 
+//!
+//! Due to API constraints, it is impossible to soundly implement
+//! [`TryClone`] for certain iterator types like [`IntoIter`], at least
 //! without hacky solutions that assume layout and may silently break.
 
 // Re-export the whole `core::option` surface so this shadowing module stays a

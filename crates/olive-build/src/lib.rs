@@ -61,9 +61,10 @@ pub fn is_nightly() -> bool {
 /// Returns `true` if the `RUSTC_BOOTSTRAP` environment variable permits
 /// unstable features for the current crate.
 ///
-/// `RUSTC_BOOTSTRAP` can take three forms:
+/// `RUSTC_BOOTSTRAP` can take four forms:
 /// - `1`: applies to all crates.
-/// - A crate name: applies only to that specific crate.
+/// - A comma-separated list of crate names: applies only to the crates named
+///   in the list.
 /// - `-1`: explicitly disables bootstrap (acts as stable even on nightly).
 ///
 /// The `crate_name` parameter should be the name of the crate whose build
@@ -72,10 +73,11 @@ pub fn is_bootstrap(crate_name: &str) -> bool {
     match std::env::var("RUSTC_BOOTSTRAP") {
         Err(_) => false,
         Ok(val) => match val.as_str() {
-            "" => false,
-            "-1" => false,
-            // FIXME: multi-crate string not accounted for
-            _ => val == "1" || val == crate_name,
+            "" | "-1" => false,
+            "1" => true,
+            // rustc accepts either a single crate name or a comma-separated
+            // list of crate names; the current crate must be named among them.
+            names => names.split(',').any(|name| name == crate_name),
         },
     }
 }

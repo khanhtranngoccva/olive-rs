@@ -95,10 +95,10 @@ pub mod iter;
 pub mod marker;
 /// Foundational-trait impls for the [`core::num`] non-zero integer newtypes.
 pub mod num;
-/// Foundational-trait impls for the [`core::option`] iterators.
-pub mod option;
 /// Foundational-trait impls for [`core::ops`] types (ranges, control flow).
 pub mod ops;
+/// Foundational-trait impls for the [`core::option`] iterators.
+pub mod option;
 /// Iterator recovery primitives: [`Resume`](recovery::Resume) and the [`Stall`](recovery::Stall) trait.
 pub mod recovery;
 /// Foundational-trait impls for the [`core::result`] iterators.

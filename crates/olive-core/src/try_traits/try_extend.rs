@@ -79,7 +79,7 @@ pub trait TryExtendFromSlice<Item>: Sized {
     /// documentation for details.
     ///
     /// # Errors
-    /// 
+    ///
     /// - The accompanying slice of unprocessed items in the original slice.
     /// - The [`Self::Error`] type defined by the implementation.
     fn try_extend_from_slice<'s>(

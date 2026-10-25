@@ -2,6 +2,7 @@
 //! comparison functions.
 
 use super::String;
+use crate::alloc::Global;
 use core::{
     borrow::{Borrow, BorrowMut},
     fmt::{self, Write},
@@ -157,14 +158,7 @@ impl TryFromIterator<char> for String {
     type Error = TryReserveError;
 
     fn try_from_iter<I: IntoIterator<Item = char>>(iter: I) -> Result<Self, Self::Error> {
-        let iter = iter.into_iter();
-        let (lower, upper) = iter.size_hint();
-        let capacity = upper.unwrap_or(lower);
-        let mut out = Self::try_with_capacity(capacity)?;
-        for c in iter {
-            out.try_push(c)?;
-        }
-        Ok(out)
+        String::try_from_iter_in(iter, Global)
     }
 }
 
@@ -172,18 +166,57 @@ impl<'a> TryFromIterator<&'a str> for String {
     type Error = TryReserveError;
 
     fn try_from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Result<Self, Self::Error> {
+        String::try_from_str_iter_in(iter, Global)
+    }
+}
+
+impl<A: Allocator> String<A> {
+    /// Fallibly collects an iterator of `char`s into a `String` on the given
+    /// allocator, using the iterator's size hint as a capacity hint.
+    ///
+    /// This is the allocator-aware backend for
+    /// [`TryFromIterator<char>`](olive_core::try_traits::try_from_iterator::TryFromIterator).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the initial reservation or a push fails.
+    pub fn try_from_iter_in<I: IntoIterator<Item = char>>(
+        iter: I,
+        alloc: A,
+    ) -> Result<Self, TryReserveError> {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let capacity = upper.unwrap_or(lower);
-        let mut out = Self::try_with_capacity(capacity)?;
+        let mut out = Self::try_with_capacity_in(capacity, alloc)?;
+        for c in iter {
+            out.try_push(c)?;
+        }
+        Ok(out)
+    }
+
+    /// Fallibly collects an iterator of string slices into a `String` on the
+    /// given allocator, using the iterator's size hint as a capacity hint.
+    ///
+    /// This is the allocator-aware backend for
+    /// [`TryFromIterator<&str>`](olive_core::try_traits::try_from_iterator::TryFromIterator).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the initial reservation or a push fails.
+    pub fn try_from_str_iter_in<'a, I: IntoIterator<Item = &'a str>>(
+        iter: I,
+        alloc: A,
+    ) -> Result<Self, TryReserveError> {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let capacity = upper.unwrap_or(lower);
+        let mut out = Self::try_with_capacity_in(capacity, alloc)?;
         for s in iter {
             out.try_push_str(s)?;
         }
         Ok(out)
     }
 }
-
-// FIXME: add try_from_iter or something like that
 
 impl<A: Allocator> Write for String<A> {
     /// Makes [`String`] usable as a fallible formatting sink.

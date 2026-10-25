@@ -71,8 +71,8 @@ pub use peek::PeekMut;
 /// Since the Ord implementation should not panic, it is best to avoid logic bugs
 /// in the first place - these issues are usually not recoverable.
 ///
-/// When applicable, a user code panic will trigger the heap to restore its 
-/// invariants during unwinding instead of poisoning the heap (similar to std), 
+/// When applicable, a user code panic will trigger the heap to restore its
+/// invariants during unwinding instead of poisoning the heap (similar to std),
 /// and a second panic there may trigger an abort.
 ///
 /// [`try_with_capacity_in`]: BinaryHeap::try_with_capacity_in

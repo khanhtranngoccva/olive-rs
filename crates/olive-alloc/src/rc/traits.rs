@@ -224,6 +224,4 @@ mod tests {
             std::format!("{:p}", weak.as_ptr())
         );
     }
-
-    // FIXME: missing Pointer impl
 }

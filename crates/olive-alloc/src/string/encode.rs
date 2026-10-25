@@ -478,11 +478,8 @@ impl<A: Allocator> String<A> {
     }
 }
 
-// FIXME: add regression test that accounts for odd bytes
-
 /// Lossily converts a byte slice to a known-size u16 iterator using little-endian encoding,
-/// adding a replacement character in place of the last malformed byte.
-/// (which the caller has to account for)
+/// adding a replacement character in place of the last malformed byte (and increment the count by 1).
 /// If the number of bytes in the slice is even, the conversion can be lossless, making the
 /// function usable in lossless implementations.
 fn convert_slice_to_u16_le_iter(
@@ -502,13 +499,10 @@ fn convert_slice_to_u16_le_iter(
     ))
 }
 
-// FIXME: add regression test that accounts for odd bytes
-
 /// Lossily converts a byte slice to a known-size u16 iterator using big-endian encoding,
-/// adding a replacement character in place of the last malformed byte.
+/// adding a replacement character in place of the last malformed byte (and increment the count by 1).
 /// If the number of bytes in the slice is even, the conversion can be lossless, making the
 /// function usable in lossless implementations.
-/// (which the caller has to account for)
 fn convert_slice_to_u16_be_iter(
     input: &[u8],
 ) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
@@ -699,7 +693,47 @@ mod tests {
         assert_eq!(&*s, "\u{FFFD}");
     }
 
-    // Need OOM test for all the functions covered
+    // FIXME: Need OOM test for all the functions with the try_from_*_in suffix covered
+
+    #[test]
+    fn convert_slice_to_u16_le_iter_odd_bytes_replaced() {
+        // An odd-length slice ends in a lone byte that cannot form a code
+        // unit; it must surface as exactly one replacement character.
+        let (mut iter, len) = convert_slice_to_u16_le_iter(&[0x61, 0x62, 0x63]).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        assert_eq!(iter.next(), Some(0x6261));
+        assert_eq!(iter.next(), Some(char::REPLACEMENT_CHARACTER as u16));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn convert_slice_to_u16_le_iter_even_bytes_lossless() {
+        let (mut iter, len) = convert_slice_to_u16_le_iter(&[0x61, 0x62]).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(iter.size_hint(), (1, Some(1)));
+        assert_eq!(iter.next(), Some(0x6261));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn convert_slice_to_u16_be_iter_odd_bytes_replaced() {
+        let (mut iter, len) = convert_slice_to_u16_be_iter(&[0x61, 0x62, 0x63]).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        assert_eq!(iter.next(), Some(0x6162));
+        assert_eq!(iter.next(), Some(char::REPLACEMENT_CHARACTER as u16));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn convert_slice_to_u16_be_iter_even_bytes_lossless() {
+        let (mut iter, len) = convert_slice_to_u16_be_iter(&[0x61, 0x62]).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(iter.size_hint(), (1, Some(1)));
+        assert_eq!(iter.next(), Some(0x6162));
+        assert_eq!(iter.next(), None);
+    }
 
     #[test]
     fn try_from_utf16_error_display_and_debug() {

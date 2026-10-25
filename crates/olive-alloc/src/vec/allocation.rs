@@ -453,14 +453,14 @@ impl<T, A: AllocatorTryClone> Vec<T, A> {
     /// `at` in `self` and returning the portion from `at` onward as a new `Vec`.
     ///
     /// This is the fallible-port analogue of std's `Vec::split_off`. The only
-    /// failure modes are an out-of-bounds index or a failed allocation for the
-    /// right-hand half.
+    /// failure modes are an out-of-bounds index, a failed allocation for the
+    /// right-hand half, or a failed clone of the allocator.
     ///
     /// # Errors
     ///
-    /// Returns [`TryVecSplitOffError::OutOfBounds`] if `at > len()`, or
-    /// [`TryVecSplitOffError::Reserve`] if allocating the new vector fails.
-    // FIXME: splitting off should deal with allocator cloning
+    /// Returns [`TryVecSplitOffError::OutOfBounds`] if `at > len()`,
+    /// [`TryVecSplitOffError::Reserve`] if allocating the new vector fails, or
+    /// [`TryVecSplitOffError::CloneAlloc`] if cloning the allocator fails.
     pub fn try_split_off(&mut self, at: usize) -> Result<Vec<T, A>, TryVecSplitOffError> {
         let len = self.len;
         if at > len {

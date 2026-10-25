@@ -164,20 +164,26 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         // If end <= 2, then we have 2 elements and a tree without any node having 2 children, so
         // the code below cannot fire. It is guaranteed by the fact child >= 1 > end.saturating_sub(2) == 0.
         while child <= end.saturating_sub(2) {
+            // The sibling comparison decides the direction: `false`
+            // takes the left child, `true` the right one.
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted child + 1 < end <= len, so the sibling index is in range"
+            )]
+            let go_right =
+                unsafe { self.data.get_unchecked(child) <= self.data.get_unchecked(child + 1) };
             #[allow(
                 clippy::arithmetic_side_effects,
                 reason = "asserted child + 1 < end <= len, so both the sibling index and the increment are in range"
             )]
             {
-                child += (unsafe {
-                    self.data.get_unchecked(child) <= self.data.get_unchecked(child + 1)
-                }) as usize;
+                child += go_right as usize;
             }
             // If we are already in order, stop.
             if element >= unsafe { self.data.get_unchecked(child) } {
                 return stack.drain();
             }
-            stack.push_offset(child);
+            stack.push_step(go_right);
             child = child.saturating_mul(2).saturating_add(1);
         }
 
@@ -187,14 +193,15 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             reason = "asserted pos < end, so end >= 1"
         )]
         if child == end - 1 && element < unsafe { self.data.get_unchecked(child) } {
-            stack.push_offset(child);
+            stack.push_step(false);
         }
 
         stack.drain()
     }
 
     /// Commit a plan produced by [`compute_sift_down`]: the element at
-    /// `pos` is moved down the recorded path to its final position.
+    /// `pos` is moved down the recorded path to its final position,
+    /// which is returned.
     ///
     /// The commit invokes no user code and cannot panic.
     ///
@@ -205,12 +212,12 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     /// - The heap's contents must not change after the call to [`compute_sift_down`].
     ///
     /// [`compute_sift_down`]: Self::compute_sift_down
-    pub(super) unsafe fn finalize_sift_down(&mut self, pos: usize, plan: Plan) {
-        debug_assert_eq!(plan.offsets().first(), Some(&pos));
+    pub(super) unsafe fn finalize_sift_down(&mut self, pos: usize, plan: Plan) -> usize {
+        debug_assert_eq!(plan.start, pos);
         // SAFETY: The caller guarantees that `pos` still holds the
         // element the plan was computed for, and that the plan
         // describes a real walk over the untouched data.
-        unsafe { plan.apply(self.data.as_mut_slice()) };
+        unsafe { plan.apply(self.data.as_mut_slice()) }
     }
 
     /// Take an element at `pos` and move it down the heap,
@@ -230,12 +237,9 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     pub(super) unsafe fn sift_down_range(&mut self, pos: usize, end: usize) -> usize {
         let mut stack = SiftStack::new();
         let plan = self.compute_sift_down(&mut stack, pos, end);
-        let final_position = *plan
-            .offsets()
-            .last()
-            .expect("sifting down plan should have a final position");
-        unsafe { self.finalize_sift_down(pos, plan) };
-        final_position
+        // SAFETY: pos < end <= self.len() is guaranteed by the caller,
+        // and the plan is a real walk over the untouched data.
+        unsafe { self.finalize_sift_down(pos, plan) }
     }
 
     /// Same as [`sift_down_range`], but sifts to the end of the heap.
@@ -336,9 +340,6 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     }
 }
 
-/// The most positions any single sift walk can visit, including the initial position.
-pub(super) const PATH_CAPACITY: usize = usize::BITS as usize + 1;
-
 /// A fixed-capacity recorder for one sift-down walk.
 ///
 /// The decision recorded at each level is which child won the sibling
@@ -347,9 +348,19 @@ pub(super) const PATH_CAPACITY: usize = usize::BITS as usize + 1;
 /// ancestor chain can; storing it is what lets the down-sift be computed
 /// entirely before anything is committed, and the committed phase then
 /// consists of plain, panic-free moves.
+///
+/// Only the direction of each move is recorded, one bit per level,
+/// alongside the starting position: together they determine the full
+/// sequence of positions end-to-end, since each move descends from
+/// position `p` to `2 * p + 1` (left) or `2 * p + 2` (right).
+///
+/// A single `usize` of bits always suffices, because a tree of `2^n - 1`
+/// items will record `n - 1` steps, with `n` being the number of bits on the
+/// target system and thus `2^n - 1` being usize::MAX.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SiftStack {
-    offsets: [usize; PATH_CAPACITY],
+    start: usize,
+    path: usize,
     depth: usize,
 }
 
@@ -359,37 +370,48 @@ impl SiftStack {
     #[inline]
     pub(super) const fn new() -> Self {
         Self {
-            offsets: [0; PATH_CAPACITY],
+            start: 0,
+            path: 0,
             depth: 0,
         }
     }
 
-    /// Start a new recording with the beginning offset.
+    /// Start a new recording at the beginning position.
     #[inline]
-    pub(super) const fn begin(&mut self, offset: usize) {
+    pub(super) const fn begin(&mut self, start: usize) {
+        self.start = start;
+        self.path = 0;
         self.depth = 0;
-        self.push_offset(offset);
     }
 
-    /// Record the next position visited by the walk.
+    /// Record one move of the walk: `true` for the right child,
+    /// `false` for the left one. The move's bit is set on `true` and
+    /// cleared with an and-not on `false`, so the recording is
+    /// correct regardless of the bit's previous state.
     #[inline]
-    pub(super) const fn push_offset(&mut self, offset: usize) {
-        self.offsets[self.depth] = offset;
+    pub(super) const fn push_step(&mut self, right: bool) {
         #[allow(
             clippy::arithmetic_side_effects,
-            reason = "PATH_CAPACITY bounds any real walk and begin() resets the fill, so depth < PATH_CAPACITY holds here"
+            reason = "a real walk visits fewer than usize::BITS positions (one level of the tree per move), so the shift amount stays below usize::BITS and the increment cannot overflow"
         )]
         {
+            let mask = 1 << self.depth;
+            if right {
+                self.path |= mask;
+            } else {
+                self.path &= !mask;
+            }
             self.depth += 1;
         }
     }
 
     /// Finish the recording and take the resulting [`Plan`], resetting
-    /// the fill for the next walk.
+    /// the recorder for the next walk.
     #[inline]
     pub(super) const fn drain(&mut self) -> Plan {
         let plan = Plan {
-            offsets: self.offsets,
+            start: self.start,
+            path: self.path,
             depth: self.depth,
         };
         *self = Self::new();
@@ -397,44 +419,52 @@ impl SiftStack {
     }
 }
 
-/// The recorded path of one completed sift-down walk: the positions the
-/// hole visited, outermost first.
+/// The recorded path of one completed sift-down walk: the starting
+/// position plus one direction bit per move (`false` = left child,
+/// `true` = right child), outermost move first.
 ///
-/// The plan is pure data, captured before any element moves, so applying
-/// it cannot invoke user code and cannot panic.
-//
-// FIXME: Given a starting position and a bit vector of exactly that usize::BITS
-// (basically an usize) one can derive the positioning end-to-end (left/right).
+/// From the start and the bit vector the positions of the walk can be
+/// derived end-to-end, so the plan is a fixed-size piece of pure data,
+/// captured before any element moves; applying it cannot invoke user
+/// code and cannot panic.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Plan {
-    offsets: [usize; PATH_CAPACITY],
+    start: usize,
+    path: usize,
     depth: usize,
 }
 
 impl Plan {
-    /// The recorded positions, in visit order.
-    #[inline]
-    pub(super) fn offsets(&self) -> &[usize] {
-        &self.offsets[..self.depth]
-    }
-
-    /// Commit the walk: swap the element at `offsets[0]` down the
-    /// recorded path until it rests at `offsets[depth - 1]`.
+    /// Commit the walk: move the element at `start` down the recorded
+    /// path until it rests at the final position, and return that
+    /// position, derived from the start and the recorded direction bits.
     ///
     /// # Safety
     ///
     /// The plan must be one drained from a recording of a real sift-down
     /// walk over a slice of the same length, and since then the slice
     /// must not have been modified at all.
-    ///
-    /// The plan must not be empty.
     #[inline]
-    pub(super) unsafe fn apply<T>(self, data: &mut [T]) {
-        debug_assert!(!self.offsets.is_empty());
-        let mut hole = unsafe { Hole::new(data, self.offsets[0]) };
-        for step in 1..self.depth {
-            unsafe { hole.move_to(self.offsets[step]) };
+    pub(super) unsafe fn apply<T>(self, data: &mut [T]) -> usize {
+        // We assume that memory accesses may be more costly, and computing from registers
+        // may be faster and more compact.
+        let mut pos = self.start;
+        let mut hole = unsafe { Hole::new(data, pos) };
+        let path = self.path;
+        let mut step = 0;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "the plan records a real walk, so every derived position is a valid index and the arithmetic cannot overflow, 
+            and the shift amount stays below usize::BITS"
+        )]
+        while step < self.depth {
+            pos = 2 * pos + 1 + ((path >> step) & 1);
+            // SAFETY: the plan is a real walk over `data`, so `pos` is
+            // in bounds and differs from the hole's current position.
+            unsafe { hole.move_to(pos) };
+            step += 1;
         }
+        pos
     }
 }
 

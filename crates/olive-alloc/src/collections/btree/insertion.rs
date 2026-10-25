@@ -37,7 +37,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     ///
     /// # Errors
     ///
-    /// Returns `Err((key, value, AllocError))` if memory allocation fails. 
+    /// Returns `Err((key, value, AllocError))` if memory allocation fails.
     /// The tree is left unmodified on failure.
     pub fn try_insert_give_back(
         &mut self,

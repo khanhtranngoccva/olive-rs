@@ -291,7 +291,7 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
         // Only step 1 can panic: `drop_in_place` over a fat slice runs every
         // `T` destructor in the hole, whereas step 2 (`ptr::copy`) is a pure
         // bitwise move that drops nothing and step 3 (`set_len`) just writes a
-        // field. The `drop_in_place` ensures elements do not leak even if a 
+        // field. The `drop_in_place` ensures elements do not leak even if a
         // panic occurs.
         //
         // Arming the guard *before* step 1 guarantees the

@@ -107,6 +107,12 @@ impl<T: ?Sized, A: Allocator> fmt::Pointer for Arc<T, A> {
     }
 }
 
+impl<T: ?Sized, A: Allocator> fmt::Pointer for Weak<T, A> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        fmt::Pointer::fmt(&self.as_ptr(), f)
+    }
+}
+
 impl<T: ?Sized, A: Allocator> AsRef<T> for Arc<T, A> {
     #[inline]
     fn as_ref(&self) -> &T {
@@ -440,5 +446,25 @@ mod tests {
             e,
             TryDefaultError::Other("allocator default failed")
         ));
+    }
+
+    #[test]
+    fn arc_pointer_fmt_prints_data_address() {
+        let arc = Arc::try_new(1).unwrap();
+        assert_eq!(
+            std::format!("{arc:p}"),
+            std::format!("{:p}", Arc::as_ptr(&arc))
+        );
+    }
+
+    #[test]
+    fn weak_pointer_fmt_prints_data_address() {
+        // Unlike std, our `Weak` also implements `Pointer`.
+        let arc = Arc::try_new(1).unwrap();
+        let weak = Arc::try_downgrade(&arc).unwrap();
+        assert_eq!(
+            std::format!("{weak:p}"),
+            std::format!("{:p}", weak.as_ptr())
+        );
     }
 }

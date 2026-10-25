@@ -110,112 +110,64 @@ impl<T, A: Allocator> Box<T, A> {
 // Any downcasting
 // ---------------------------------------------------------------------------
 
-// FIXME: downcast should be done over a macro
-
-impl<A: Allocator> Box<dyn Any, A> {
-    /// Attempts to downcast the box to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                // Casting the thin base address to `*mut T` reinterprets the
-                // same address bits as a pointer to `T`, which is sound
-                // because the allocation contains a valid `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
+/// Generates the `downcast` method for one of the six dynamic trait object
+/// flavors (`dyn Any`, `dyn Any + Send`, `dyn Any + Send + Sync`, and the
+/// same three over `dyn Error`). The bodies are otherwise identical, differing
+/// only in the bound imposed on the target type.
+macro_rules! impl_downcast {
+    ($dyn_ty:ty, $doc:literal, $($bound:tt)*) => {
+        impl<A: Allocator> Box<$dyn_ty, A> {
+            #[doc = $doc]
+            pub fn downcast<T: $($bound)*>(self) -> Result<Box<T, A>, Self> {
+                if self.is::<T>() {
+                    unsafe {
+                        // Extract the base address and allocator.
+                        let (base_addr, alloc) = Box::into_raw_with_allocator(self);
+                        // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
+                        // Casting the thin base address to `*mut T` reinterprets
+                        // the same address bits as a pointer to `T`, which is
+                        // sound because the allocation contains a valid `T`.
+                        let t_ptr: *mut T = base_addr.cast::<T>();
+                        Ok(Box::from_raw_in(t_ptr, alloc))
+                    }
+                } else {
+                    Err(self)
+                }
             }
-        } else {
-            Err(self)
         }
-    }
+    };
 }
 
-impl<A: Allocator> Box<dyn Any + Send, A> {
-    /// Attempts to downcast the box to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
-            }
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<A: Allocator> Box<dyn Any + Send + Sync, A> {
-    /// Attempts to downcast the box to a concrete type.
-    pub fn downcast<T: Any>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
-            }
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<A: Allocator> Box<dyn Error, A> {
-    /// Attempts to downcast the box to a concrete error type.
-    pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
-            }
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<A: Allocator> Box<dyn Error + Send, A> {
-    /// Attempts to downcast the box to a concrete error type.
-    pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
-            }
-        } else {
-            Err(self)
-        }
-    }
-}
-
-impl<A: Allocator> Box<dyn Error + Send + Sync, A> {
-    /// Attempts to downcast the box to a concrete error type.
-    pub fn downcast<T: Error + 'static>(self) -> Result<Box<T, A>, Self> {
-        if self.is::<T>() {
-            unsafe {
-                // Extract the base address and allocator.
-                let (base_addr, alloc) = Box::into_raw_with_allocator(self);
-                // SAFETY: `is::<T>()` confirmed the dynamic type is `T`.
-                let t_ptr: *mut T = base_addr.cast::<T>();
-                Ok(Box::from_raw_in(t_ptr, alloc))
-            }
-        } else {
-            Err(self)
-        }
-    }
-}
+impl_downcast!(
+    dyn Any,
+    "Attempts to downcast the box to a concrete type.",
+    Any
+);
+impl_downcast!(
+    dyn Any + Send,
+    "Attempts to downcast the box to a concrete type.",
+    Any
+);
+impl_downcast!(
+    dyn Any + Send + Sync,
+    "Attempts to downcast the box to a concrete type.",
+    Any
+);
+impl_downcast!(
+    dyn Error,
+    "Attempts to downcast the box to a concrete error type.",
+    Error + 'static
+);
+impl_downcast!(
+    dyn Error + Send,
+    "Attempts to downcast the box to a concrete error type.",
+    Error + 'static
+);
+impl_downcast!(
+    dyn Error + Send + Sync,
+    "Attempts to downcast the box to a concrete error type.",
+    Error + 'static
+);
 
 #[cfg(test)]
 mod tests {
@@ -356,5 +308,45 @@ mod tests {
         assert_eq!(recovered.0, 9);
     }
 
-    // FIXME: failure paths for error downcasting
+    #[derive(Debug)]
+    struct OtherErr;
+    impl fmt::Display for OtherErr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "other error")
+        }
+    }
+    impl Error for OtherErr {}
+
+    #[test]
+    fn test_box_error_downcast_wrong_type_preserves_box() {
+        // Box the concrete error and unsize-coerce through a raw fat pointer.
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(4)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut dyn Error = raw as *mut dyn Error;
+        let e: Box<dyn Error, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let e = e.downcast::<OtherErr>().unwrap_err();
+        // A failed downcast hands back the untouched original box, which can
+        // still be downcast to the real type.
+        assert_eq!(e.downcast::<MyErr>().unwrap().0, 4);
+    }
+
+    #[test]
+    fn test_box_error_send_downcast_wrong_type_preserves_box() {
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(7)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut (dyn Error + Send) = raw as *mut (dyn Error + Send);
+        let e: Box<dyn Error + Send, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let e = e.downcast::<OtherErr>().unwrap_err();
+        assert_eq!(e.downcast::<MyErr>().unwrap().0, 7);
+    }
+
+    #[test]
+    fn test_box_error_send_sync_downcast_wrong_type_preserves_box() {
+        let boxed: Box<MyErr, Global> = Box::try_new(MyErr(9)).unwrap();
+        let raw: *mut MyErr = Box::into_raw(boxed);
+        let fat: *mut (dyn Error + Send + Sync) = raw as *mut (dyn Error + Send + Sync);
+        let e: Box<dyn Error + Send + Sync, Global> = unsafe { Box::from_raw_in(fat, Global) };
+        let e = e.downcast::<OtherErr>().unwrap_err();
+        assert_eq!(e.downcast::<MyErr>().unwrap().0, 9);
+    }
 }

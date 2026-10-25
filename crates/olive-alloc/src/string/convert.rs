@@ -17,25 +17,6 @@ impl<A: Allocator> String<A> {
         self.buf
     }
 
-    /// Infallibly consumes the `String`, returning its contents as a `Box<str>`
-    /// on the same allocator.
-    ///
-    /// Unlike the fallible cousin [`Self::try_into_boxed_str`], this does not shrink
-    /// the string and may cause the string to hold more memory than needed.
-    // FIXME: This is actually unsound! If len < cap, then deallocation may encounter a smaller layout than 
-    // expected. Shrinking must be called first, and only return the box on reallocation success. 
-    // Other methods that naively assume `len` as the box parameter also runs into this error.
-    pub fn into_boxed_str(self) -> Box<str, A> {
-        let (ptr, len, _cap, alloc) = self.buf.into_raw_parts_with_allocator();
-        // SAFETY: `ptr` points to `len` bytes of valid UTF-8 allocated by
-        // `alloc`; reinterpreting the fat pointer as `str` preserves the
-        // invariant and keeps the same allocator for eventual deallocation.
-        unsafe {
-            let str_ptr: *mut str = ptr::slice_from_raw_parts_mut(ptr, len) as *mut str;
-            Box::from_raw_in(str_ptr, alloc)
-        }
-    }
-
     /// Shrinks and consumes the `String`, returning its contents as a `Box<str>` on the
     /// same allocator.
     ///
@@ -55,15 +36,24 @@ impl<A: Allocator> String<A> {
     ///
     /// Returns `(Self, TryReserveError)` if the shrink reallocation fails.
     pub fn try_into_boxed_str_give_back(mut self) -> Result<Box<str, A>, (Self, TryReserveError)> {
-        // Shrink-to-fit first so the boxed allocation can be exactly `len` bytes.
         match self.buf.try_shrink_to_fit() {
-            Ok(()) => Ok(self.into_boxed_str()),
+            Ok(()) => {
+                // SAFETY: after a successful shrink-to-fit, the buffer holds
+                // at least `len` bytes of valid UTF-8 allocated by `alloc`, so
+                // building the `Box<str>` from the `len`-derived fat pointer
+                // is valid because the box contains the valid deallocation layout.
+                let (ptr, len, _cap, alloc) = self.buf.into_raw_parts_with_allocator();
+                unsafe {
+                    let str_ptr: *mut str = ptr::slice_from_raw_parts_mut(ptr, len) as *mut str;
+                    Ok(Box::from_raw_in(str_ptr, alloc))
+                }
+            }
             Err(e) => Err((self, e)),
         }
     }
 }
 
-// We do not allow easy trivial conversions to a Box because it misses a shrinking 
+// We do not allow trivial conversions to a Box because it misses a shrinking
 // opportunity (or perhaps it can't because it's undefined behavior!).
 impl<A: Allocator> TryFrom<String<A>> for Box<str, A> {
     type Error = TryReserveError;
@@ -126,16 +116,9 @@ mod tests {
     }
 
     #[test]
-    fn into_boxed_str_preserves_contents() {
-        let s = mk("boxed ✓");
-        let b = s.into_boxed_str();
-        assert_eq!(&*b, "boxed ✓");
-    }
-
-    #[test]
-    fn into_boxed_str_empty() {
+    fn try_into_boxed_str_empty() {
         let s = String::new();
-        let b = s.into_boxed_str();
+        let b = s.try_into_boxed_str().unwrap();
         assert_eq!(&*b, "");
     }
 
