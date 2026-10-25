@@ -774,8 +774,8 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
         match self.force() {
             Leaf(leaf) => {
                 assert!(
-                    leaf.len() < CAPACITY,
-                    "leaf node has {} keys, expected < {}",
+                    leaf.len() <= CAPACITY,
+                    "leaf node has {} keys, expected <= {}",
                     leaf.len(),
                     CAPACITY
                 );
@@ -788,8 +788,8 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
             }
             Internal(internal) => {
                 assert!(
-                    internal.len() < CAPACITY,
-                    "internal node has {} keys, expected < {}",
+                    internal.len() <= CAPACITY,
+                    "internal node has {} keys, expected <= {}",
                     internal.len(),
                     CAPACITY
                 );
