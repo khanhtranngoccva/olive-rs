@@ -179,10 +179,18 @@ impl<K, V> fmt::Debug for Cursor<'_, K, V> {
 /// A cursor over a [`BTreeMap`] with exclusive access to the values, but
 /// without the ability to change the keys.
 ///
-/// A `CursorMut` points to a gap between two elements, and is able to freely
-/// navigate the map in either direction. It can also be used to look up the
-/// keys and values on either side of the gap, and to insert and remove
-/// elements adjacent to the gap.
+/// A `CursorMut` is like an iterator, except that it can freely seek
+/// back-and-forth, and can safely mutate the map during iteration. This is
+/// because the lifetime of its yielded references is tied to its own lifetime,
+/// instead of just the underlying map. This means cursors cannot yield
+/// multiple elements at once.
+///
+/// The keys are only ever exposed by shared reference; to modify the keys,
+/// convert the cursor with [`CursorMut::with_mutable_key`]
+/// into a [`CursorMutKey`].
+///
+/// Elements can be inserted into and removed from the gap; keys are passed
+/// by value, so this never exposes the keys of the map for modification.
 ///
 /// A `CursorMut` is obtained with [`BTreeMap::lower_bound_mut`] or
 /// [`BTreeMap::upper_bound_mut`].
@@ -191,52 +199,67 @@ pub struct CursorMut<'a, K: 'a, V: 'a, A: Allocator = Global> {
 }
 
 impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
-    /// Advances the cursor to the next gap, returning a mutable reference to
-    /// the key and value of the element that it moved over.
+    /// Advances the cursor to the next gap, returning a shared reference to
+    /// the key and a mutable reference to the value of the element that it
+    /// moved over.
     ///
     /// If the cursor is already at the end of the map then `None` is
     /// returned and the cursor is not moved. Otherwise, the cursor is moved
     /// to the gap on the other side of the element it returned.
     ///
-    /// The returned references can be used to modify the value.
+    /// Unlike [`Cursor::next`], the returned references are temporary.
+    /// The key is returned by shared reference only; the value can be
+    /// modified.
     #[allow(clippy::should_implement_trait, reason = "cursors are not iterators")]
-    pub fn next(&mut self) -> Option<(&K, &mut V)> {
+    pub fn next(&mut self) -> Option<(&'_ K, &'_ mut V)> {
         let (k, v) = self.inner.next()?;
         Some((&*k, v))
     }
 
-    /// Moves the cursor to the previous gap, returning a mutable reference to
-    /// the value of the element that it moved over.
+    /// Moves the cursor to the previous gap, returning a shared reference to
+    /// the key and a mutable reference to the value of the element that it
+    /// moved over.
     ///
     /// If the cursor is already at the start of the map then `None` is
     /// returned and the cursor is not moved. Otherwise, the cursor is moved
     /// to the gap on the other side of the element it returned.
     ///
-    /// The returned references can be used to modify the value.
-    pub fn prev(&mut self) -> Option<(&K, &mut V)> {
+    /// Unlike [`Cursor::prev`], the returned references are temporary.
+    /// The key is returned by shared reference only; the value can be
+    /// modified.
+    pub fn prev(&mut self) -> Option<(&'_ K, &'_ mut V)> {
         let (k, v) = self.inner.prev()?;
         Some((&*k, v))
     }
 
-    /// Returns a reference to the key and a mutable reference to the value of
-    /// the element that [`CursorMut::next`] would move over, without moving
-    /// the cursor.
-    pub fn peek_next(&mut self) -> Option<(&K, &mut V)> {
+    /// Returns a shared reference to the key and a mutable reference to the
+    /// value of the element that [`CursorMut::next`] would move over, without
+    /// moving the cursor.
+    ///
+    /// Like [`CursorMut::next`], the returned references are temporary.
+    /// The key is returned by shared reference only; the value can be modified.
+    pub fn peek_next(&mut self) -> Option<(&'_ K, &'_ mut V)> {
         let (k, v) = self.inner.peek_next()?;
         Some((&*k, v))
     }
 
-    /// Returns a reference to the key and a mutable reference to the value of
-    /// the element that [`CursorMut::prev`] would move over, without moving
-    /// the cursor.
-    pub fn peek_prev(&mut self) -> Option<(&K, &mut V)> {
+    /// Returns a shared reference to the key and a mutable reference to the
+    /// value of the element that [`CursorMut::prev`] would move over, without
+    /// moving the cursor.
+    ///
+    /// Like [`CursorMut::prev`], the returned references are temporary.
+    /// The key is returned by shared reference only; the value can be modified.
+    pub fn peek_prev(&mut self) -> Option<(&'_ K, &'_ mut V)> {
         let (k, v) = self.inner.peek_prev()?;
         Some((&*k, v))
     }
 
-    /// Converts the mutable cursor into an immutable cursor.
+    /// Returns a read-only cursor pointing to the same location as the
+    /// `CursorMut`.
     ///
-    /// This is useful for looking ahead without modifying the cursor itself.
+    /// The lifetime of the returned `Cursor` is bound to that of the
+    /// `CursorMut`, which means it cannot outlive the `CursorMut` and that
+    /// the `CursorMut` is frozen for the lifetime of the `Cursor`.
     pub fn as_cursor(&self) -> Cursor<'_, K, V> {
         self.inner.as_cursor()
     }
@@ -251,6 +274,102 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// key must be unique.
     pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, K, V, A> {
         self.inner
+    }
+}
+
+impl<K: Ord, V, A: Allocator> CursorMut<'_, K, V, A> {
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to, similar to [`insert_after`], but the key
+    /// and value are returned on error.
+    ///
+    /// # Errors
+    ///
+    /// If the key is not properly ordered relative to its neighbors, or on
+    /// out-of-memory conditions or length overflows, this operation returns
+    /// the key and value along with a [`TryBTreeMapCursorInsertError`] and
+    /// leaves both the map and the cursor unchanged.
+    ///
+    /// [`insert_after`]: Self::insert_after
+    pub fn insert_after_give_back(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<(), (K, V, TryBTreeMapCursorInsertError)> {
+        self.inner.insert_after_give_back(key, value)
+    }
+
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap before the
+    /// newly inserted element.
+    ///
+    /// The key is passed by value, so a `CursorMut` never exposes the keys of
+    /// the map for modification.
+    ///
+    /// # Errors
+    ///
+    /// If the key is not properly ordered relative to its neighbors, or if
+    /// the allocator cannot accommodate the insertion, the key and value are
+    /// dropped and the map and cursor are left unchanged, and the
+    /// [`TryBTreeMapCursorInsertError`] is returned.
+    pub fn insert_after(&mut self, key: K, value: V) -> Result<(), TryBTreeMapCursorInsertError> {
+        self.inner.insert_after(key, value)
+    }
+
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to, similar to [`insert_before`], but the key
+    /// and value are returned on error.
+    ///
+    /// # Errors
+    ///
+    /// If the key is not properly ordered relative to its neighbors, or on
+    /// out-of-memory conditions or length overflows, this operation returns
+    /// the key and value along with a [`TryBTreeMapCursorInsertError`] and
+    /// leaves both the map and the cursor unchanged.
+    ///
+    /// [`insert_before`]: Self::insert_before
+    pub fn insert_before_give_back(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<(), (K, V, TryBTreeMapCursorInsertError)> {
+        self.inner.insert_before_give_back(key, value)
+    }
+
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap after the
+    /// newly inserted element.
+    ///
+    /// The key is passed by value, so a `CursorMut` never exposes the keys of
+    /// the map for modification.
+    ///
+    /// # Errors
+    ///
+    /// If the key is not properly ordered relative to its neighbors, or if
+    /// the allocator cannot accommodate the insertion, the key and value are
+    /// dropped and the map and cursor are left unchanged, and the
+    /// [`TryBTreeMapCursorInsertError`] is returned.
+    pub fn insert_before(&mut self, key: K, value: V) -> Result<(), TryBTreeMapCursorInsertError> {
+        self.inner.insert_before(key, value)
+    }
+
+    /// Removes the key-value pair that the cursor would return by
+    /// [`next`](Self::next), if there is one.
+    ///
+    /// After the removal the cursor's position is unchanged.
+    pub fn remove_next(&mut self) -> Option<(K, V)> {
+        self.inner.remove_next()
+    }
+
+    /// Removes the key-value pair that the cursor would return by
+    /// [`prev`](Self::prev), if there is one.
+    ///
+    /// After the removal the cursor's position is unchanged.
+    pub fn remove_prev(&mut self) -> Option<(K, V)> {
+        self.inner.remove_prev()
     }
 }
 
@@ -953,6 +1072,205 @@ mod tests {
         }
         assert_eq!(map.get(&1), Some(&11));
         assert_eq!(map.get(&4), Some(&41));
+    }
+
+    #[test]
+    fn cursor_mut_temporary_references() {
+        let mut map = make_map();
+
+        // The references yielded by `next` bind to the borrow of the cursor,
+        // not the map: they end with the borrow, and the cursor can be used
+        // again afterwards. The value mutation persists in the map.
+        let mut cursor = map.lower_bound_mut(Bound::Unbounded);
+        {
+            let (k, v) = cursor.next().unwrap();
+            assert_eq!((*k, *v), (1, 10));
+            *v += 1;
+        }
+        {
+            let (k, v) = cursor.peek_next().unwrap();
+            assert_eq!((*k, *v), (2, 20));
+            *v += 1;
+        }
+        {
+            let (k, v) = cursor.next().unwrap();
+            assert_eq!((*k, *v), (2, 21));
+        }
+
+        // The cursor is at the gap before 3; stepping back yields the
+        // mutated 2 and then 1.
+        {
+            let (k, v) = cursor.prev().unwrap();
+            assert_eq!((*k, *v), (2, 21));
+        }
+        {
+            let (k, v) = cursor.prev().unwrap();
+            assert_eq!((*k, *v), (1, 11));
+        }
+
+        // The mutations made through the temporary references persist in the
+        // map once the cursor borrow has ended.
+        assert_eq!(map.get(&1), Some(&11));
+        assert_eq!(map.get(&2), Some(&21));
+
+        // By contrast, the immutable cursor's references live as long as the
+        // map, so two elements can be held at the same time.
+        let mut cursor = map.lower_bound(Bound::Unbounded);
+        let first = cursor.next();
+        let second = cursor.next();
+        assert_eq!(first.map(|(k, v)| (*k, *v)), Some((1, 11)));
+        assert_eq!(second.map(|(k, v)| (*k, *v)), Some((2, 21)));
+    }
+
+    #[test]
+    fn cursor_mut_insert_remove() {
+        let mut map = make_map();
+
+        // The cursor starts at the gap before 4.
+        let mut cursor = map.lower_bound_mut(Bound::Included(&4));
+
+        // Stepping forward moves the cursor to the gap after 4.
+        assert_eq!(cursor.next().map(|(k, _)| *k), Some(4));
+
+        // Insertion through the shell: `insert_after` places 5 in that gap
+        // and leaves the cursor at the gap before the new element.
+        cursor.insert_after(5, 50).unwrap();
+        assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(4));
+        assert_eq!(cursor.peek_next().map(|(k, _)| *k), Some(5));
+
+        // Removal leaves the cursor's position unchanged and yields the
+        // key and value by value.
+        assert_eq!(cursor.remove_next(), Some((5, 50)));
+        assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(4));
+        assert_eq!(cursor.peek_next(), None);
+
+        // `insert_before` from the end gap appends, leaving the cursor at
+        // the gap after the new element.
+        cursor.insert_before(6, 60).unwrap();
+        assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(6));
+        assert_eq!(cursor.peek_next(), None);
+
+        // Out-of-order keys are rejected and given back unchanged.
+        assert_eq!(
+            cursor.insert_before_give_back(3, 30),
+            Err((3, 30, TryBTreeMapCursorInsertError::Unordered))
+        );
+        assert_eq!(
+            cursor.insert_before(3, 30),
+            Err(TryBTreeMapCursorInsertError::Unordered)
+        );
+        assert_eq!(
+            cursor.insert_after_give_back(3, 30),
+            Err((3, 30, TryBTreeMapCursorInsertError::Unordered))
+        );
+        assert_eq!(
+            cursor.insert_after(3, 30),
+            Err(TryBTreeMapCursorInsertError::Unordered)
+        );
+
+        // `insert_after` from the end gap appends, leaving the cursor at the
+        // gap before the new element.
+        cursor.insert_after(7, 70).unwrap();
+        assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(6));
+        assert_eq!(cursor.peek_next().map(|(k, _)| *k), Some(7));
+
+        assert_eq!(cursor.remove_next(), Some((7, 70)));
+        assert_eq!(cursor.remove_prev(), Some((6, 60)));
+        assert_eq!(cursor.remove_next(), None);
+        assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(4));
+
+        // The mutations made through the shell are visible in the map.
+        for i in 1..=4 {
+            assert_eq!(map.get(&i), Some(&(10 * i as u32)));
+        }
+        assert_eq!(map.len(), 4);
+
+        // The map no longer holds the removed elements.
+        assert_eq!(map.get(&5), None);
+        assert_eq!(map.get(&6), None);
+        assert_eq!(map.get(&7), None);
+    }
+
+    #[test]
+    fn cursor_mut_insert_alloc_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the root leaf completely, so that the next insertion has to
+        // split it and therefore really allocates.
+        for i in 1..=11 {
+            map.try_insert(i, i as u32 * 10).unwrap();
+        }
+
+        {
+            let mut cursor = map.upper_bound_mut(Bound::Unbounded);
+            // Exhaust the budget so any further allocation fails. The key is
+            // properly ordered here, so the failure must be reported as an
+            // allocation error, not an ordering error.
+            alloc.drain();
+            assert_eq!(
+                cursor.insert_after(12, 120),
+                Err(TryBTreeMapCursorInsertError::Alloc(AllocError))
+            );
+            assert_eq!(
+                cursor.insert_before(12, 120),
+                Err(TryBTreeMapCursorInsertError::Alloc(AllocError))
+            );
+            // The cursor is left where it was, and the map is unchanged.
+            assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(11));
+        }
+        assert_eq!(map.len(), 11);
+
+        // After the budget is restored, the same insertion succeeds.
+        alloc.set_budget(1 << 20);
+        {
+            let mut cursor = map.upper_bound_mut(Bound::Unbounded);
+            cursor.insert_after(12, 120).unwrap();
+        }
+        assert_eq!(map.len(), 12);
+        assert_eq!(map.get(&12), Some(&120));
+    }
+
+    #[test]
+    fn cursor_mut_insert_give_back_alloc_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the root leaf completely, so that the next insertion has to
+        // split it and therefore really allocates.
+        for i in 1..=11 {
+            map.try_insert(i, i as u32 * 10).unwrap();
+        }
+
+        {
+            let mut cursor = map.upper_bound_mut(Bound::Unbounded);
+            // Exhaust the budget so any further allocation fails. The key is
+            // properly ordered here, so the failure must be reported as an
+            // allocation error, not an ordering error.
+            alloc.drain();
+            match cursor.insert_after_give_back(12, 120) {
+                Err((k, v, TryBTreeMapCursorInsertError::Alloc(AllocError))) => {
+                    assert_eq!((k, v), (12, 120));
+                }
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            match cursor.insert_before_give_back(12, 120) {
+                Err((k, v, TryBTreeMapCursorInsertError::Alloc(AllocError))) => {
+                    assert_eq!((k, v), (12, 120));
+                }
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // The cursor is left where it was, and the map is unchanged.
+            assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(11));
+        }
+        assert_eq!(map.len(), 11);
+
+        // After the budget is restored, the same insertion succeeds.
+        alloc.set_budget(1 << 20);
+        {
+            let mut cursor = map.upper_bound_mut(Bound::Unbounded);
+            cursor.insert_after_give_back(12, 120).unwrap();
+        }
+        assert_eq!(map.len(), 12);
+        assert_eq!(map.get(&12), Some(&120));
     }
 
     #[test]
