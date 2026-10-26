@@ -356,6 +356,109 @@ impl<K: Ord, V, A: Allocator> CursorMut<'_, K, V, A> {
         self.inner.insert_before(key, value)
     }
 
+    /// Similar to [`insert_after_unchecked`] but also returns the key and
+    /// value on error.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns the key and value along with an [`AllocError`] and
+    /// leaves both the map and the cursor unchanged.
+    ///
+    /// # Safety
+    ///
+    /// Please see [`insert_after_unchecked`] for the safety requirements.
+    ///
+    /// [`insert_after_unchecked`]: Self::insert_after_unchecked
+    pub unsafe fn insert_after_unchecked_give_back(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<(), (K, V, AllocError)> {
+        // SAFETY: precondition from the caller
+        unsafe { self.inner.insert_after_unchecked_give_back(key, value) }
+    }
+
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap before the
+    /// newly inserted element.
+    ///
+    /// This is faster than [`insert_after`](Self::insert_after), but does not
+    /// check that the key is properly ordered relative to its neighbors.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns an [`AllocError`] and leaves both the map and the
+    /// cursor unchanged. The key and value are dropped.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the `BTreeMap` invariants are maintained.
+    /// Specifically:
+    ///
+    /// * The key of the newly inserted element must be unique in the tree.
+    /// * All keys in the tree must remain in sorted order.
+    pub unsafe fn insert_after_unchecked(&mut self, key: K, value: V) -> Result<(), AllocError> {
+        // SAFETY: precondition from the caller
+        unsafe { self.inner.insert_after_unchecked(key, value) }
+    }
+
+    /// Similar to [`insert_before_unchecked`] but also returns the key and
+    /// value on error.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns the key and value along with an [`AllocError`] and
+    /// leaves both the map and the cursor unchanged.
+    ///
+    /// # Safety
+    ///
+    /// Please see [`insert_before_unchecked`] for the safety requirements.
+    ///
+    /// [`insert_before_unchecked`]: Self::insert_before_unchecked
+    pub unsafe fn insert_before_unchecked_give_back(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<(), (K, V, AllocError)> {
+        // SAFETY: precondition from the caller
+        unsafe { self.inner.insert_before_unchecked_give_back(key, value) }
+    }
+
+    /// Inserts a new key-value pair into the map in the gap that the cursor
+    /// is currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap after the
+    /// newly inserted element.
+    ///
+    /// The key is passed by value, so a `CursorMut` never exposes the keys of
+    /// the map for modification.
+    ///
+    /// This is faster than [`insert_before`](Self::insert_before), but does
+    /// not check that the key is properly ordered relative to its neighbors.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns an [`AllocError`] and leaves both the map and the
+    /// cursor unchanged. The key and value are dropped.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the `BTreeMap` invariants are maintained.
+    /// Specifically:
+    ///
+    /// * The key of the newly inserted element must be unique in the tree.
+    /// * All keys in the tree must remain in sorted order.
+    pub unsafe fn insert_before_unchecked(&mut self, key: K, value: V) -> Result<(), AllocError> {
+        // SAFETY: precondition from the caller
+        unsafe { self.inner.insert_before_unchecked(key, value) }
+    }
+
     /// Removes the key-value pair that the cursor would return by
     /// [`next`](Self::next), if there is one.
     ///
@@ -978,7 +1081,7 @@ mod tests {
     use olive_test_helpers::BudgetedAlloc;
 
     use super::super::map::BTreeMap;
-    use super::{Cursor, CursorMutKey, TryBTreeMapCursorInsertError};
+    use super::{Cursor, CursorMut, CursorMutKey, TryBTreeMapCursorInsertError};
     use crate::alloc::Global;
 
     fn make_map() -> BTreeMap<i32, u32, Global> {
@@ -1268,6 +1371,154 @@ mod tests {
         {
             let mut cursor = map.upper_bound_mut(Bound::Unbounded);
             cursor.insert_after_give_back(12, 120).unwrap();
+        }
+        assert_eq!(map.len(), 12);
+        assert_eq!(map.get(&12), Some(&120));
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_success() {
+        let mut map = BTreeMap::new_in(Global);
+
+        // Empty map: insertion at the very start.
+        {
+            let mut cursor = map.lower_bound_mut(Bound::Unbounded);
+            // SAFETY: Inserting into an empty map is always in order.
+            unsafe { cursor.insert_after_unchecked(2, 20) }.unwrap();
+            // The cursor now points at the gap before the new element.
+            assert_eq!(cursor.peek_prev(), None);
+            assert_eq!(cursor.peek_next(), Some((&2, &mut 20)));
+
+            // SAFETY: 1 is ordered before 2.
+            unsafe { cursor.insert_before_unchecked(1, 10) }.unwrap();
+            // The cursor now points at the gap after the new element.
+            assert_eq!(cursor.peek_prev(), Some((&1, &mut 10)));
+            assert_eq!(cursor.peek_next(), Some((&2, &mut 20)));
+
+            assert_eq!(cursor.next(), Some((&2, &mut 20)));
+            // SAFETY: 3 is ordered after 2.
+            unsafe { cursor.insert_after_unchecked(3, 30) }.unwrap();
+            assert_eq!(cursor.peek_prev(), Some((&2, &mut 20)));
+            assert_eq!(cursor.peek_next(), Some((&3, &mut 30)));
+        }
+        assert_eq!(map.len(), 3);
+        let collected: std::vec::Vec<_> = map.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(collected, std::vec![(1, 10), (2, 20), (3, 30)]);
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_give_back_success() {
+        let mut map = BTreeMap::new_in(Global);
+
+        // Empty map: insertion at the very start.
+        {
+            let mut cursor = map.lower_bound_mut(Bound::Unbounded);
+            // SAFETY: Inserting into an empty map is always in order.
+            unsafe { cursor.insert_after_unchecked_give_back(2, 20) }.unwrap();
+            // The cursor now points at the gap before the new element.
+            assert_eq!(cursor.peek_prev(), None);
+            assert_eq!(cursor.peek_next(), Some((&2, &mut 20)));
+
+            // SAFETY: 1 is ordered before 2.
+            unsafe { cursor.insert_before_unchecked_give_back(1, 10) }.unwrap();
+            // The cursor now points at the gap after the new element.
+            assert_eq!(cursor.peek_prev(), Some((&1, &mut 10)));
+            assert_eq!(cursor.peek_next(), Some((&2, &mut 20)));
+
+            assert_eq!(cursor.next(), Some((&2, &mut 20)));
+            // SAFETY: 3 is ordered after 2.
+            unsafe { cursor.insert_after_unchecked_give_back(3, 30) }.unwrap();
+            assert_eq!(cursor.peek_prev(), Some((&2, &mut 20)));
+            assert_eq!(cursor.peek_next(), Some((&3, &mut 30)));
+        }
+        assert_eq!(map.len(), 3);
+        let collected: std::vec::Vec<_> = map.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(collected, std::vec![(1, 10), (2, 20), (3, 30)]);
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_alloc_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the root leaf completely, so that the next insertion has to
+        // split it and therefore really allocates.
+        for i in 1..=11 {
+            map.try_insert(i, i as u32 * 10).unwrap();
+        }
+
+        {
+            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+                map.upper_bound_mut(Bound::Unbounded);
+            // Exhaust the budget so any further allocation fails.
+            alloc.drain();
+            // SAFETY: 12 is ordered after 11.
+            assert_eq!(
+                unsafe { cursor.insert_after_unchecked(12, 120) },
+                Err(AllocError)
+            );
+            // SAFETY: 12 is ordered after 11.
+            assert_eq!(
+                unsafe { cursor.insert_before_unchecked(12, 120) },
+                Err(AllocError)
+            );
+            // The cursor is left where it was, and the map is unchanged.
+            assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(11));
+        }
+        assert_eq!(map.len(), 11);
+
+        // After the budget is restored, the same insertion succeeds.
+        alloc.set_budget(1 << 20);
+        {
+            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+                map.upper_bound_mut(Bound::Unbounded);
+            // SAFETY: 12 is ordered after 11.
+            unsafe { cursor.insert_after_unchecked(12, 120) }.unwrap();
+        }
+        assert_eq!(map.len(), 12);
+        assert_eq!(map.get(&12), Some(&120));
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_give_back_alloc_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the root leaf completely, so that the next insertion has to
+        // split it and therefore really allocates.
+        for i in 1..=11 {
+            map.try_insert(i, i as u32 * 10).unwrap();
+        }
+
+        {
+            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+                map.upper_bound_mut(Bound::Unbounded);
+            // Exhaust the budget so any further allocation fails.
+            alloc.drain();
+            // SAFETY: 12 is ordered after 11.
+            match unsafe { cursor.insert_after_unchecked_give_back(12, 120) } {
+                Err((k, v, AllocError)) => {
+                    assert_eq!((k, v), (12, 120));
+                }
+                Ok(()) => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // SAFETY: 12 is ordered after 11.
+            match unsafe { cursor.insert_before_unchecked_give_back(12, 120) } {
+                Err((k, v, AllocError)) => {
+                    assert_eq!((k, v), (12, 120));
+                }
+                Ok(()) => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // The cursor is left where it was, and the map is unchanged.
+            assert_eq!(cursor.peek_prev().map(|(k, _)| *k), Some(11));
+        }
+        assert_eq!(map.len(), 11);
+
+        // After the budget is restored, the same insertion succeeds.
+        alloc.set_budget(1 << 20);
+        {
+            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+                map.upper_bound_mut(Bound::Unbounded);
+            // SAFETY: 12 is ordered after 11.
+            unsafe { cursor.insert_after_unchecked_give_back(12, 120) }.unwrap();
         }
         assert_eq!(map.len(), 12);
         assert_eq!(map.get(&12), Some(&120));
@@ -1578,7 +1829,6 @@ mod tests {
                 }
                 _ => panic!("insertion should fail when the budget is exhausted"),
             }
-            // The cursor is left where it was, and the map is unchanged.
             assert_eq!(cursor.peek_prev(), Some((&mut 11, &mut 110)));
         }
         assert_eq!(map.len(), 11);
