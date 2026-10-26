@@ -26,6 +26,12 @@ This is a non-exhaustive document/playbook to instruct LLM-based bugbots to sear
 ## Uninitialized fields
 - When initializing an uninitialized structure and (through a raw pointer or through `MaybeUninit`), it is tempting to call `assume_init_*` or dereference the pointer into a reference and write to that reference using as_mut(). This causes a `Drop` to be invoked on an uninitialized value.
 
+## Allocator layout bugs
+- Naively deriving length parameters for `Box` slice bootstrapping causes undefined behavior with the allocator. `len` for the unsized `Box` must be greater than the "most recent requested capacity" that the allocator sees. Deallocating or modifying with less than that size is undefined behavior.
+    - This is triggered, for example, when a `String`, `Vec`, `CString`, `OsString` or `PathBuf` length is directly used as the `Box` parameters without going through a successful shrink-to-fit first.
+    - This is because allocator rules stipulate that the layout passed to allocation methods must be *clamped* between the "most recent requested capacity" and the actual capacity.
+    - Ignoring `try_shrink_to_fit`'s failures do not work and will lead to UB.
+
 ## Trait implementation bugs
 - A structure or enum or item implements a trait that breaks its invariants. 
     - For example, there was a bug where `IntoChars` implemented `ExactSizeIterator` by mistake.

@@ -294,7 +294,6 @@ impl<T, A: Allocator> Rc<T, A> {
         let weak = Weak {
             ptr: inner,
             alloc,
-            _marker: PhantomData,
         };
 
         // Step 3: invoke the callback. It receives the Weak pinning the
@@ -380,7 +379,6 @@ impl<T: ?Sized> Weak<T, Global> {
         Weak {
             ptr: helpers::dangling_inner_ptr(),
             alloc: Global,
-            _marker: PhantomData,
         }
     }
 }
@@ -401,7 +399,6 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
         Weak {
             ptr: helpers::dangling_inner_ptr(),
             alloc,
-            _marker: PhantomData,
         }
     }
 }

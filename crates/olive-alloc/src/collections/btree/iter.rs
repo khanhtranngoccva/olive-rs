@@ -2,14 +2,18 @@
 
 use olive_core::try_traits::{TryClone, TryCloneError, TryDefault, TryDefaultError};
 
+use super::TryBTreeMapRangeError;
 use super::map::BTreeMap;
-use super::navigate::LazyLeafRange;
+use super::navigate::{LazyLeafRange, LeafRange};
 use super::node::marker;
 use super::node::{Handle, NodeRef};
 use crate::alloc::{Allocator, AllocatorTryDefault, Global};
+use core::borrow::Borrow;
 use core::fmt;
 use core::iter::{DoubleEndedIterator, FusedIterator, Iterator};
+use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
+use core::ops::RangeBounds;
 
 // ── Iter ─────────────────────────────────────────────────────────────────────
 
@@ -749,6 +753,112 @@ impl<K, V, A: AllocatorTryDefault> TryDefault for IntoValues<K, V, A> {
     }
 }
 
+// ── Range ────────────────────────────────────────────────────────────────────
+
+/// An iterator over a sub-range of the key-value pairs of a `BTreeMap`, in
+/// ascending key order.
+///
+/// Returned by [`BTreeMap::try_range`].
+pub struct Range<'a, K: 'a, V: 'a> {
+    range: LeafRange<marker::Immut<'a>, K, V>,
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for Range<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a V)> {
+        self.range.next_checked()
+    }
+
+    fn last(mut self) -> Option<(&'a K, &'a V)> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<(&'a K, &'a V)>
+    where
+        (&'a K, &'a V): Ord,
+    {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a V)>
+    where
+        (&'a K, &'a V): Ord,
+    {
+        self.next_back()
+    }
+}
+
+impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Range<'a, K, V> {
+    fn next_back(&mut self) -> Option<(&'a K, &'a V)> {
+        self.range.next_back_checked()
+    }
+}
+
+impl<K, V> FusedIterator for Range<'_, K, V> {}
+
+impl<'a, K: 'a, V: 'a> Clone for Range<'a, K, V> {
+    fn clone(&self) -> Self {
+        Range {
+            range: self.range.clone(),
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> TryClone for Range<'a, K, V> {
+    fn try_clone(&self) -> Result<Self, TryCloneError> {
+        // Cloning is trivial.
+        Ok(self.clone())
+    }
+}
+
+// ── RangeMut ─────────────────────────────────────────────────────────────────
+
+/// A mutable iterator over a sub-range of the key-value pairs of a
+/// `BTreeMap`, in ascending key order.
+///
+/// Returned by [`BTreeMap::try_range_mut`].
+pub struct RangeMut<'a, K: 'a, V: 'a> {
+    range: LeafRange<marker::ValMut<'a>, K, V>,
+
+    // Be invariant in `K` and `V`, like std's `RangeMut`.
+    _marker: PhantomData<&'a mut (K, V)>,
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for RangeMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a mut V)> {
+        self.range.next_checked()
+    }
+
+    fn last(mut self) -> Option<(&'a K, &'a mut V)> {
+        self.next_back()
+    }
+
+    fn min(mut self) -> Option<(&'a K, &'a mut V)>
+    where
+        (&'a K, &'a mut V): Ord,
+    {
+        self.next()
+    }
+
+    fn max(mut self) -> Option<(&'a K, &'a mut V)>
+    where
+        (&'a K, &'a mut V): Ord,
+    {
+        self.next_back()
+    }
+}
+
+impl<'a, K: 'a, V: 'a> DoubleEndedIterator for RangeMut<'a, K, V> {
+    fn next_back(&mut self) -> Option<(&'a K, &'a mut V)> {
+        self.range.next_back_checked()
+    }
+}
+
+impl<K, V> FusedIterator for RangeMut<'_, K, V> {}
+
 // ── BTreeMap methods ─────────────────────────────────────────────────────────
 
 impl<K, V, A: Allocator> BTreeMap<K, V, A> {
@@ -806,6 +916,58 @@ impl<K, V, A: Allocator> BTreeMap<K, V, A> {
             iter: self.into_iter(),
         }
     }
+
+    /// Returns an iterator over a sub-range of the key-value pairs in
+    /// ascending key order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryBTreeMapRangeError`] instead of panicking when the range
+    /// start is greater than the range end, or when the range start equals
+    /// the range end and both bounds are `Excluded`.
+    pub fn try_range<T, R>(&self, range: R) -> Result<Range<'_, K, V>, TryBTreeMapRangeError>
+    where
+        T: ?Sized + Ord,
+        K: Borrow<T> + Ord,
+        R: RangeBounds<T>,
+    {
+        super::search::validate_range_bounds::<T, R>(&range)?;
+        let range = match &self.root {
+            // FIXME: the check is performed twice
+            Some(root) => root.reborrow().range_search(range),
+            None => LeafRange::none(),
+        };
+        Ok(Range { range })
+    }
+
+    /// Returns a mutable iterator over a sub-range of the key-value pairs in
+    /// ascending key order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryBTreeMapRangeError`] when the range start is greater than
+    /// the range end, or when the range start equals the range end and both
+    /// bounds are `Excluded`.
+    pub fn try_range_mut<T, R>(
+        &mut self,
+        range: R,
+    ) -> Result<RangeMut<'_, K, V>, TryBTreeMapRangeError>
+    where
+        T: ?Sized + Ord,
+        K: Borrow<T> + Ord,
+        R: RangeBounds<T>,
+    {
+        super::search::validate_range_bounds::<T, R>(&range)?;
+        let range = match &mut self.root {
+            // FIXME: the check is performed twice
+            Some(root) => root.borrow_valmut().range_search(range),
+            None => LeafRange::none(),
+        };
+        Ok(RangeMut {
+            range,
+            _marker: PhantomData,
+        })
+    }
 }
 
 impl<K, V, A: Allocator> IntoIterator for BTreeMap<K, V, A> {
@@ -856,10 +1018,12 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::alloc::Global;
+    use crate::string::String;
     use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_core::try_traits::try_default::TryDefault;
     use olive_test_helpers::{FailDefaultAlloc, Ledger, TrackedItem};
     use std::sync::Arc;
+    use std::vec::Vec;
 
     /// A simple comparable wrapper around a fixed-size array, used in place of
     /// `String` (which is fallible in this crate) to exercise non-Copy keys.
@@ -1796,5 +1960,162 @@ mod tests {
         assert_sync::<IntoIter<i32, i32>>();
         assert_unwind_safe::<IntoIter<i32, i32>>();
         assert_ref_unwind_safe::<IntoIter<i32, i32>>();
+    }
+
+    fn build_tree(n: i32) -> BTreeMap<i32, i32> {
+        let mut map = BTreeMap::new();
+        for i in 0..n {
+            map.try_insert(i, i * 10).unwrap();
+        }
+        map
+    }
+
+    #[test]
+    fn range_yields_exclusive_end() {
+        let map = build_tree(10);
+        let got: Vec<_> = map.try_range(3..7).unwrap().map(|(k, _)| *k).collect();
+        assert_eq!(got, [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn range_yields_inclusive_end() {
+        let map = build_tree(10);
+        let got: Vec<_> = map.try_range(3..=7).unwrap().map(|(k, _)| *k).collect();
+        assert_eq!(got, [3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn range_single_sided_bounds() {
+        let map = build_tree(10);
+        let front: Vec<_> = map.try_range(..4).unwrap().map(|(k, _)| *k).collect();
+        assert_eq!(front, [0, 1, 2, 3]);
+        let front: Vec<_> = map.try_range(..=4).unwrap().map(|(k, _)| *k).collect();
+        assert_eq!(front, [0, 1, 2, 3, 4]);
+        let back: Vec<_> = map.try_range(7..).unwrap().map(|(k, _)| *k).collect();
+        assert_eq!(back, [7, 8, 9]);
+    }
+
+    #[test]
+    fn range_unbounded_matches_iter() {
+        let map = build_tree(10);
+        let got: Vec<_> = map.try_range(..).unwrap().map(|(k, _)| *k).collect();
+        let expected: Vec<_> = map.iter().map(|(k, _)| *k).collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn try_range_reports_crossing_bounds_as_error() {
+        let map = build_tree(10);
+        #[allow(clippy::reversed_empty_ranges)]
+        {
+            assert!(matches!(
+                map.try_range(7..3),
+                Err(TryBTreeMapRangeError::StartGreaterThanEnd)
+            ));
+        }
+    }
+
+    #[test]
+    fn try_range_reports_equal_excluded_bounds_as_error() {
+        use core::ops::Bound::Excluded;
+        let map = build_tree(10);
+        assert!(matches!(
+            map.try_range((Excluded(4), Excluded(4))),
+            Err(TryBTreeMapRangeError::EqualExcludedBounds)
+        ));
+    }
+
+    #[test]
+    fn range_try_clone_shares_no_state() {
+        let map = build_tree(10);
+        let mut it = map.try_range(2..8).unwrap();
+        assert_eq!(it.next(), Some((&2, &20)));
+        let snapshot = it.try_clone().unwrap();
+        assert_eq!(it.next(), Some((&3, &30)));
+        let got: Vec<_> = snapshot.map(|(k, _)| *k).collect();
+        assert_eq!(got, [3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn range_is_double_ended_and_fused() {
+        let map = build_tree(10);
+        let mut it = map.try_range(2..8).unwrap();
+        assert_eq!(it.next(), Some((&2, &20)));
+        assert_eq!(it.next_back(), Some((&7, &70)));
+        assert_eq!(it.next(), Some((&3, &30)));
+        // Clone shares no state with the original.
+        let mut snapshot = it.clone();
+        assert_eq!(it.next(), Some((&4, &40)));
+        let got: Vec<_> = snapshot.by_ref().map(|(k, _)| *k).collect();
+        assert_eq!(got, [4, 5, 6]);
+        assert!(snapshot.next().is_none());
+    }
+
+    #[test]
+    fn range_on_keys_outside_tree_is_empty() {
+        let map = build_tree(10);
+        assert_eq!(map.try_range(100..200).unwrap().count(), 0);
+        assert_eq!(map.try_range(-5..-1).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn range_mut_yields_mutable_values() {
+        let mut map = build_tree(10);
+        for (_, v) in map.try_range_mut(3..6).unwrap() {
+            *v *= 100;
+        }
+        assert_eq!(map.get(&3), Some(&3000));
+        assert_eq!(map.get(&5), Some(&5000));
+        assert_eq!(map.get(&2), Some(&20));
+        assert_eq!(map.get(&6), Some(&60));
+    }
+
+    #[test]
+    fn range_mut_is_double_ended() {
+        let mut map = build_tree(10);
+        let mut it = map.try_range_mut(2..8).unwrap();
+        assert_eq!(it.next(), Some((&2, &mut 20)));
+        assert_eq!(it.next_back(), Some((&7, &mut 70)));
+        let got: Vec<_> = it.map(|(k, _)| *k).collect();
+        assert_eq!(got, [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn try_range_mut_reports_invalid_bounds_as_error() {
+        use core::ops::Bound::Excluded;
+        let mut map = build_tree(10);
+        #[allow(clippy::reversed_empty_ranges)]
+        {
+            assert!(matches!(
+                map.try_range_mut(7..3),
+                Err(TryBTreeMapRangeError::StartGreaterThanEnd)
+            ));
+        }
+        assert!(matches!(
+            map.try_range_mut((Excluded(4), Excluded(4))),
+            Err(TryBTreeMapRangeError::EqualExcludedBounds)
+        ));
+    }
+
+    #[test]
+    fn range_on_empty_map_is_empty() {
+        let map: BTreeMap<i32, i32> = BTreeMap::new();
+        assert_eq!(map.try_range(..).unwrap().count(), 0);
+        assert_eq!(map.try_range(0..5).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn range_works_with_borrowed_keys() {
+        let mut map = BTreeMap::new();
+        map.try_insert(String::try_from("a").unwrap(), 1).unwrap();
+        map.try_insert(String::try_from("bb").unwrap(), 2).unwrap();
+        map.try_insert(String::try_from("cc").unwrap(), 3).unwrap();
+        use core::ops::Bound::Included;
+        let got: Vec<_> = map
+            .try_range::<str, _>((Included("b"), Included("cc")))
+            .unwrap()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(got, ["bb", "cc"]);
     }
 }

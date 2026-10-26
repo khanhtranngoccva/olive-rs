@@ -31,7 +31,9 @@ mod traits;
 
 pub use entry::Entry;
 pub use extract_if::ExtractIf;
-pub use iter::{IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Values, ValuesMut};
+pub use iter::{
+    IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Range, RangeMut, Values, ValuesMut,
+};
 pub use map::BTreeMap;
 pub use set::{
     BTreeSet, Difference as BTreeSetDifference, Entry as BTreeSetEntry,
@@ -306,3 +308,45 @@ impl From<AllocError> for TryBTreeMapUniqueError {
         Self::Alloc(err)
     }
 }
+
+/// Error returned by [`BTreeMap::try_range`] and [`BTreeMap::try_range_mut`]
+/// when the supplied bounds are impossible for an ordered map.
+///
+/// Bounds of this kind can never match any key, since a `BTreeMap` is
+/// ordered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TryBTreeMapRangeError {
+    /// The range start is greater than the range end.
+    StartGreaterThanEnd,
+    /// The range start and end are equal and both `Excluded`, so no key
+    /// could ever satisfy the range.
+    EqualExcludedBounds,
+}
+
+impl fmt::Debug for TryBTreeMapRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartGreaterThanEnd => f
+                .debug_tuple("TryBTreeMapRangeError::StartGreaterThanEnd")
+                .finish(),
+            Self::EqualExcludedBounds => f
+                .debug_tuple("TryBTreeMapRangeError::EqualExcludedBounds")
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Display for TryBTreeMapRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartGreaterThanEnd => {
+                write!(f, "range start is greater than range end in BTree*")
+            }
+            Self::EqualExcludedBounds => {
+                write!(f, "range start and end are equal and excluded in BTree*")
+            }
+        }
+    }
+}
+
+impl core::error::Error for TryBTreeMapRangeError {}

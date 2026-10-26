@@ -102,7 +102,6 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         let _fake_weak = Weak::<T, &A> {
             ptr: this.ptr,
             alloc: &this.alloc,
-            _marker: PhantomData,
         };
 
         // SAFETY: the value is still present in the block (we are inside the
@@ -127,7 +126,6 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
 pub struct Weak<T: ?Sized, A: Allocator = Global> {
     ptr: NonNull<RcInner<T>>,
     alloc: A,
-    _marker: PhantomData<RcInner<T>>,
 }
 
 impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {

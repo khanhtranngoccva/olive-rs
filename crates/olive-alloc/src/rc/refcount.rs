@@ -283,7 +283,6 @@ impl<T: ?Sized, A: AllocatorTryClone> Rc<T, A> {
         Ok(Weak {
             ptr: this.ptr,
             alloc,
-            _marker: PhantomData,
         })
     }
 }
@@ -347,7 +346,6 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
             return Ok(Weak {
                 ptr: self.ptr,
                 alloc,
-                _marker: PhantomData,
             });
         }
         unsafe {
@@ -359,7 +357,6 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
         Ok(Weak {
             ptr: self.ptr,
             alloc,
-            _marker: PhantomData,
         })
     }
 }

@@ -2,6 +2,7 @@ use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::ops::{Bound, RangeBounds};
 
+use super::TryBTreeMapRangeError;
 use SearchBound::*;
 use SearchResult::*;
 
@@ -43,6 +44,28 @@ pub(super) enum SearchResult<BorrowType, K, V, FoundType, GoDownType> {
 pub(super) enum IndexResult {
     KV(usize),
     Edge(usize),
+}
+
+/// Fallible counterpart to the bounds check inside
+/// [`NodeRef::search_tree_for_bifurcation`]: rejects exactly the conditions
+/// that check panics on.
+pub(super) fn validate_range_bounds<Q, R>(range: &R) -> Result<(), TryBTreeMapRangeError>
+where
+    Q: ?Sized + Ord,
+    R: RangeBounds<Q>,
+{
+    let (start, end) = (range.start_bound(), range.end_bound());
+    match (start, end) {
+        (Bound::Excluded(s), Bound::Excluded(e)) if s == e => {
+            Err(TryBTreeMapRangeError::EqualExcludedBounds)
+        }
+        (Bound::Included(s) | Bound::Excluded(s), Bound::Included(e) | Bound::Excluded(e))
+            if s > e =>
+        {
+            Err(TryBTreeMapRangeError::StartGreaterThanEnd)
+        }
+        _ => Ok(()),
+    }
 }
 
 impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::LeafOrInternal> {

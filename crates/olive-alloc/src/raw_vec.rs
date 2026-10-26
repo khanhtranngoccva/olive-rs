@@ -457,13 +457,14 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// The total `len` + 1 may look like a capacity, but the actually requested
     /// capacity (when requesting from the allocator) may be higher than this total.
     ///
-    /// herefore, this naive total cannot be used as a lower length bound for
+    /// Therefore, this naive total cannot be used as a lower length bound for
     /// [`Self::into_box`]. (but `self.capacity()` can)
     ///
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the new capacity overflows or the
-    /// allocation fails.
+    /// allocation fails. This also errors with an overflow on ZSTs, since 
+    /// len == self.capacity.
     ///
     /// # Safety
     ///

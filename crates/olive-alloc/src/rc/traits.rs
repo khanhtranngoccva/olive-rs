@@ -137,6 +137,8 @@ mod tests {
     assert_not_impl_any!(Weak<i32>: Send, Sync);
     assert_not_impl_any!(Weak<String>: Send, Sync);
     assert_not_impl_any!(Weak<&'static ()>: Send, Sync);
+    assert_not_impl_any!(Weak<core::cell::Cell<i32>>: Send, Sync);
+    assert_not_impl_any!(Rc<core::cell::Cell<i32>>: Send, Sync);
 
     #[test]
     fn as_ref_and_borrow_work() {

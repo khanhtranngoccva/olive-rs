@@ -155,7 +155,6 @@ impl<T: ?Sized> Weak<T, Global> {
             Weak {
                 ptr: NonNull::new_unchecked(inner),
                 alloc: Global,
-                _marker: PhantomData,
             }
         }
     }
@@ -210,7 +209,6 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
             Weak {
                 ptr: NonNull::new_unchecked(inner),
                 alloc,
-                _marker: PhantomData,
             }
         }
     }

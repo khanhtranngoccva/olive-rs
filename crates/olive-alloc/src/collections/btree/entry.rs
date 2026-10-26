@@ -141,7 +141,6 @@ impl<'a, K: Ord, V, A: Allocator> Entry<'a, K, V, A> {
     /// Returns `Err(e)` if the closure `f` returns an error.
     pub fn and_try_modify<E, F>(mut self, f: F) -> Result<Self, E>
     where
-        E: core::error::Error,
         F: FnOnce(&mut V) -> Result<(), E>,
     {
         if let Entry::Occupied(oe) = &mut self {

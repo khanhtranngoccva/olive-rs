@@ -527,6 +527,7 @@ mod tests {
     use super::*;
     use crate::alloc::Global;
     use crate::vec::Vec;
+    use olive_test_helpers::FailAlloc;
     use std::format;
 
     fn vec_u8(bytes: &[u8]) -> Vec<u8> {
@@ -693,7 +694,47 @@ mod tests {
         assert_eq!(&*s, "\u{FFFD}");
     }
 
-    // FIXME: Need OOM test for all the functions with the try_from_*_in suffix covered
+    // Out-of-memory behavior of the try_from_*_in family: with an allocator
+    // that refuses every allocation, each function must surface the failure
+    // instead of panicking or silently truncating.
+
+    #[test]
+    fn try_from_utf16_in_oom() {
+        let err = String::try_from_utf16_in(&[0x61, 0x62], FailAlloc).unwrap_err();
+        assert!(matches!(err.kind, TryFromUtf16ErrorKind::Reserve(e) if e.is_alloc()));
+    }
+
+    #[test]
+    fn try_from_utf16le_in_oom() {
+        let err = String::try_from_utf16le_in(&[0x61, 0x00, 0x62, 0x00], FailAlloc).unwrap_err();
+        assert!(matches!(err.kind, TryFromUtf16ErrorKind::Reserve(e) if e.is_alloc()));
+    }
+
+    #[test]
+    fn try_from_utf16be_in_oom() {
+        let err = String::try_from_utf16be_in(&[0x00, 0x61, 0x00, 0x62], FailAlloc).unwrap_err();
+        assert!(matches!(err.kind, TryFromUtf16ErrorKind::Reserve(e) if e.is_alloc()));
+    }
+
+    #[test]
+    fn try_from_utf16_lossy_in_oom() {
+        let err = String::try_from_utf16_lossy_in(&[0x61, 0x62], FailAlloc).unwrap_err();
+        assert!(err.is_alloc());
+    }
+
+    #[test]
+    fn try_from_utf16le_lossy_in_oom() {
+        let err =
+            String::try_from_utf16le_lossy_in(&[0x61, 0x00, 0x62, 0x00], FailAlloc).unwrap_err();
+        assert!(err.is_alloc());
+    }
+
+    #[test]
+    fn try_from_utf16be_lossy_in_oom() {
+        let err =
+            String::try_from_utf16be_lossy_in(&[0x00, 0x61, 0x00, 0x62], FailAlloc).unwrap_err();
+        assert!(err.is_alloc());
+    }
 
     #[test]
     fn convert_slice_to_u16_le_iter_odd_bytes_replaced() {

@@ -7,9 +7,10 @@ pub mod vec_deque;
 /// A fallible port of `alloc::collections::BTreeMap`.
 pub mod btree_map {
     pub use super::btree::{
-        BTreeMap, Entry, ExtractIf, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys,
-        TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError, TryBTreeMapUniqueError,
-        TryBTreeMapWithCloneError, Values, ValuesMut,
+        BTreeMap, Entry, ExtractIf, IntoIter, IntoKeys, IntoValues, Iter, IterMut, Keys, Range,
+        RangeMut, TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError,
+        TryBTreeMapRangeError, TryBTreeMapUniqueError, TryBTreeMapWithCloneError, Values,
+        ValuesMut,
     };
 }
 

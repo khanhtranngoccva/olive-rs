@@ -42,7 +42,6 @@ impl<T, A: Allocator> Rc<T, A> {
             let _dummy_weak = Weak::<T, A> {
                 ptr: me.ptr,
                 alloc,
-                _marker: PhantomData,
             };
             Ok(val)
         } else {
