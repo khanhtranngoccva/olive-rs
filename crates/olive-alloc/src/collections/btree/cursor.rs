@@ -270,6 +270,14 @@ impl<K, V, A: Allocator> fmt::Debug for CursorMut<'_, K, V, A> {
 /// the keys of the map, which can break the sort order of the map.
 ///
 /// A `CursorMutKey` is obtained from [`CursorMut::with_mutable_key`].
+///
+/// # Safety
+///
+/// You must ensure that the `BTreeMap` invariants are maintained.
+/// Specifically:
+///
+/// * The key of the newly inserted element must be unique in the tree.
+/// * All keys in the tree must remain in sorted order.
 pub struct CursorMutKey<'a, K: 'a, V: 'a, A: Allocator = Global> {
     // If current is None then it means the tree has not been allocated yet.
     current: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
@@ -284,7 +292,7 @@ impl<K, V, A: Allocator> fmt::Debug for CursorMutKey<'_, K, V, A> {
     }
 }
 
-impl<'a, K, V, A: Allocator> CursorMutKey<'a, K, V, A> {
+impl<K, V, A: Allocator> CursorMutKey<'_, K, V, A> {
     /// Advances the cursor to the next gap, returning a mutable reference to
     /// the key and value of the element that it moved over.
     ///
@@ -292,7 +300,7 @@ impl<'a, K, V, A: Allocator> CursorMutKey<'a, K, V, A> {
     /// returned and the cursor is not moved. Otherwise, the cursor is moved
     /// to the gap on the other side of the element it returned.
     #[allow(clippy::should_implement_trait, reason = "cursors are not iterators")]
-    pub fn next(&mut self) -> Option<(&'a mut K, &'a mut V)> {
+    pub fn next(&mut self) -> Option<(&mut K, &mut V)> {
         let current = self.current.take()?;
         match current.next_kv() {
             Ok(mut kv) => {
@@ -317,7 +325,7 @@ impl<'a, K, V, A: Allocator> CursorMutKey<'a, K, V, A> {
     /// If the cursor is already at the start of the map then `None` is
     /// returned and the cursor is not moved. Otherwise, the cursor is moved
     /// to the gap on the other side of the element it returned.
-    pub fn prev(&mut self) -> Option<(&'a mut K, &'a mut V)> {
+    pub fn prev(&mut self) -> Option<(&mut K, &mut V)> {
         let current = self.current.take()?;
         match current.next_back_kv() {
             Ok(mut kv) => {
