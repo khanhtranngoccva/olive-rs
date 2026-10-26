@@ -463,7 +463,7 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// # Errors
     ///
     /// Returns [`TryReserveError`] if the new capacity overflows or the
-    /// allocation fails. This also errors with an overflow on ZSTs, since 
+    /// allocation fails. This also errors with an overflow on ZSTs, since
     /// len == self.capacity.
     ///
     /// # Safety

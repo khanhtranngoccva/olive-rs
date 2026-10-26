@@ -7,6 +7,7 @@ use olive_core::try_traits::try_default::TryDefaultError;
 
 mod borrow;
 mod construction;
+mod cursor;
 mod entry;
 mod extract_if;
 mod fix;
@@ -29,6 +30,7 @@ mod set_val;
 mod split;
 mod traits;
 
+pub use cursor::{Cursor, CursorMut, CursorMutKey, TryBTreeMapCursorInsertError};
 pub use entry::Entry;
 pub use extract_if::ExtractIf;
 pub use iter::{

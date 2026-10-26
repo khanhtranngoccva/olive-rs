@@ -291,10 +291,7 @@ impl<T, A: Allocator> Rc<T, A> {
         // From this point on, any failure or panic drops the Weak, bringing
         // weak to zero and freeing the block. The payload is still uninit,
         // so the block contains nothing that needs destructing.
-        let weak = Weak {
-            ptr: inner,
-            alloc,
-        };
+        let weak = Weak { ptr: inner, alloc };
 
         // Step 3: invoke the callback. It receives the Weak pinning the
         // (payload-uninit) block and returns the constructed value.

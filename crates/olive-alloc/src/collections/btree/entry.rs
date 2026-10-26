@@ -26,7 +26,7 @@ use olive_core::try_traits::try_default::TryDefault;
 
 use super::borrow::DormantMutRef;
 use super::map::BTreeMap;
-use super::node::{CAPACITY, Handle, NodeRef, marker};
+use super::node::{Handle, NodeRef, marker};
 use super::search::SearchResult;
 use super::{TryBTreeMapEntryWithDefaultError, TryBTreeMapEntryWithError};
 
@@ -379,41 +379,25 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
         mut self,
         value: V,
     ) -> Result<OccupiedEntry<'a, K, V, A>, (K, V, AllocError)> {
+        let reborrowed = unsafe { self.dormant_map.reborrow() };
         // This guard is in place because overflowing is a possibility on ZSTs
-        if unsafe { self.dormant_map.reborrow() }.length == usize::MAX {
+        if reborrowed.length == usize::MAX {
             return Err((self.key, value, AllocError));
         }
-        let leaf_kv_handle = match self.handle {
-            None => {
-                // SAFETY: There is no tree yet so no reference to it exists.
-                let map = unsafe { self.dormant_map.reborrow() };
-                let node_ref = match NodeRef::new_leaf(&*map.alloc) {
-                    Ok(a) => a,
-                    Err(e) => return Err((self.key, value, e)),
-                };
-                let root = map.root.insert(node_ref.forget_type());
-                // SAFETY: We *just* created the root as a leaf, and we're
-                // stacking the new handle on the original borrow lifetime.
-                unsafe {
-                    let mut leaf = root.borrow_mut().cast_to_leaf_unchecked();
-                    leaf.push_with_handle(self.key, value)
-                }
-            }
-            Some(handle) => {
-                // Special case - no need for the two phase routine
-                if handle.node.len() < CAPACITY {
-                    unsafe { handle.insert_fit(self.key, value) }
-                } else {
-                    do_two_phase(&mut self.dormant_map, handle, self.key, value)?
-                }
-            }
-        };
 
-        // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
-        #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
-        unsafe {
-            self.dormant_map.reborrow().length += 1
-        };
+        let (_r, mut dormant_root) = DormantMutRef::new(&mut reborrowed.root);
+        let leaf_kv_handle = unsafe {
+            do_two_phase(
+                self.handle,
+                &mut dormant_root,
+                self.key,
+                value,
+                &*reborrowed.alloc,
+                &mut reborrowed.length,
+            )
+        }
+        .map_err(|(k, v, e, _)| (k, v, e))?;
+
         Ok(OccupiedEntry {
             handle: leaf_kv_handle.forget_node_type(),
             dormant_map: self.dormant_map,
@@ -506,43 +490,91 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_
 
 // ── Two-phase insertion (reserve + commit) ─────────────────────────────────
 
-/// Performs a reserve-and-commit insertion at a full leaf.
+/// Performs a reserve-and-commit insertion.
 ///
-/// Phase 1 (probe + reserve): allocates a fresh leaf plus one internal node per full
-/// ancestor (plus one more if the root itself splits). On any allocation
+/// Phase 1 (probe + reserve): allocates a possible fresh leaf plus one internal
+/// node per full ancestor (plus one more if the root itself splits). On any allocation
 /// failure the reserved nodes are dropped and the untouched tree is returned
-/// unchanged.
+/// unchanged. If the edge already has space, then no allocation is needed.
 ///
 /// Phase 2 (commit): performs the splits bottom-up using only the reserved
 /// nodes, then splices the resulting subtree back into the map's root. Because
-/// every allocation succeeded, this phase cannot fail.
+/// every allocation succeeded, this phase cannot fail or panic.
+///
+/// On failure the untouched edge handle (if one was passed in) is returned
+/// alongside the key and value so that callers holding cursors can restore
+/// their position.
+///
+/// # Safety
+///
+/// - The parameters must come from a valid map.
+/// - The map must have fewer than usize::MAX items.
+///
+// FIXME: `handle` should probably be a location instead.
+// On (allocator) panic (???), the location is restored with the old handle.
+// Although allocators are not supposed to panic because the panic machinery
+// relies on the allocator to function, and panics in deallocating path of this very type
+// abort the program, so implementing this may not be necessary.
 #[allow(
     clippy::type_complexity,
     reason = "this type declaration is inherently complex"
 )]
-fn do_two_phase<'a, K, V, A: Allocator>(
-    map: &mut DormantMutRef<'a, BTreeMap<K, V, A>>,
-    handle: Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>,
+pub(super) unsafe fn do_two_phase<'a, K, V, A: Allocator>(
+    handle: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+    root: &mut DormantMutRef<'a, Option<NodeRef<marker::Owned, K, V, marker::LeafOrInternal>>>,
     key: K,
     value: V,
-) -> Result<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>, (K, V, AllocError)> {
-    let immut_reborrow = handle.reborrow();
-    // Reserve phase: allocate all needed nodes with a borrowed allocator reference.
-    // Zero allocator clones are performed. On any allocation failure the partially
-    // allocated nodes are dropped and the untouched tree is returned unchanged.
-    let map_ref = unsafe { map.reborrow() };
-    let mut nodes = match scratch::reserve_for_insertion(immut_reborrow, &*map_ref.alloc) {
-        Ok(nodes) => nodes,
-        Err(e) => return Err((key, value, e)),
+    alloc: &A,
+    length: &mut usize,
+) -> Result<
+    Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>,
+    (
+        K,
+        V,
+        AllocError,
+        Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+    ),
+> {
+    let leaf_kv_handle = match handle {
+        None => {
+            // SAFETY: There is no tree yet so no reference to it exists.
+            let node_ref = match NodeRef::new_leaf(&alloc) {
+                Ok(a) => a,
+                Err(e) => return Err((key, value, e, None)),
+            };
+            let root = unsafe { root.reborrow() }.insert(node_ref.forget_type());
+            // SAFETY: We *just* created the root as a leaf, and we're
+            // stacking the new handle on the original borrow lifetime.
+            unsafe {
+                let mut leaf = root.borrow_mut().cast_to_leaf_unchecked();
+                leaf.push_with_handle(key, value)
+            }
+        }
+        Some(current) => {
+            let immut_reborrow = current.reborrow();
+            // Reserve phase: allocate all needed nodes with a borrowed allocator reference.
+            // Zero allocator clones are performed. On any allocation failure the partially
+            // allocated nodes are dropped and the untouched tree is returned unchanged.
+            let mut nodes = match scratch::reserve_for_insertion(immut_reborrow, alloc) {
+                Ok(nodes) => nodes,
+                Err(e) => return Err((key, value, e, Some(current))),
+            };
+            // Commit phase: perform the splits bottom-up using the reserved nodes. This phase cannot panic.
+            current.insert_recursing(key, value, &mut nodes, |ins, new_node| {
+                // Already borrowed above, do not need a second borrow.
+                let root = unsafe { root.reborrow() }.as_mut().unwrap(); // same as ins.left
+                root.push_internal_level(new_node)
+                    .push(ins.kv.0, ins.kv.1, ins.right)
+            })
+        }
     };
-    // Commit phase: perform the splits bottom-up using the reserved nodes.
-    let new_handle = handle.insert_recursing(key, value, &mut nodes, |ins, new_node| {
-        // Already borrowed above, do not need a second borrow.
-        let root = map_ref.root.as_mut().unwrap(); // same as ins.left
-        root.push_internal_level(new_node)
-            .push(ins.kv.0, ins.kv.1, ins.right)
-    });
-    Ok(new_handle)
+
+    // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
+    #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
+    {
+        *length += 1
+    }
+    Ok(leaf_kv_handle)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

@@ -60,4 +60,17 @@ impl<'a, T> DormantMutRef<'a, T> {
         // SAFETY: our own safety conditions imply this reference is again unique.
         unsafe { &mut *self.ptr.as_ptr() }
     }
+
+    /// Borrows a new shared reference from the unique borrow initially captured.
+    ///
+    /// # Safety
+    ///
+    /// The shared reference must not be used (directly or indirectly) to
+    /// mutate the value, and all references derived from it must not
+    /// coexist with any mutable use of the original reference.
+    pub(super) unsafe fn reborrow_shared(&self) -> &'a T {
+        // SAFETY: our own safety conditions imply no mutable use of the value
+        // coexists with this shared reference.
+        unsafe { &*self.ptr.as_ptr() }
+    }
 }

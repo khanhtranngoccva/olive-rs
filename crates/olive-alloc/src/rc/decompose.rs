@@ -39,10 +39,7 @@ impl<T, A: Allocator> Rc<T, A> {
             // Drop a throwaway `Weak` standing in for this `Rc`'s implicit
             // weak reference. With other weaks alive this only decrements
             // the count; when none remain it frees the block.
-            let _dummy_weak = Weak::<T, A> {
-                ptr: me.ptr,
-                alloc,
-            };
+            let _dummy_weak = Weak::<T, A> { ptr: me.ptr, alloc };
             Ok(val)
         } else {
             Err(this)

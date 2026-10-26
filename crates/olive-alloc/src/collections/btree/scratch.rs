@@ -243,6 +243,11 @@ pub(super) fn reserve_for_insertion<'a, K, V, A: Allocator>(
     handle: Handle<NodeRef<Immut<'_>, K, V, Leaf>, Edge>,
     alloc: &'a A,
 ) -> Result<Nodes<'a, K, V, A>, AllocError> {
+    // If the item can be inserted without allocating, then we return an empty nodes object.
+    if handle.node.len() < CAPACITY {
+        return Ok(Nodes::with_alloc(alloc));
+    }
+
     // Count how many internal nodes will be needed.
     let mut current = handle.node.ascend().ok();
     let mut internals_needed = 0usize;
