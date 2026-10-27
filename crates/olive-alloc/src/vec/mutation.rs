@@ -166,6 +166,10 @@ impl<T, A: Allocator> Vec<T, A> {
     ///
     /// * `new_len <= capacity()`
     /// * All slots in `[0..new_len)` must contain valid `T` values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the length-within-capacity condition is not met.
     pub unsafe fn set_len(&mut self, new_len: usize) {
         assert!(
             new_len <= self.capacity(),
@@ -299,13 +303,6 @@ impl<T, A: Allocator> Vec<T, A> {
     where
         F: FnMut(&mut T) -> bool,
     {
-        let original_len = self.len();
-
-        if original_len == 0 {
-            // Empty case: explicit return allows better optimization, vs letting compiler infer it
-            return;
-        }
-
         // Vec: [Kept, Kept, Hole, Hole, Hole, Hole, Unchecked, Unchecked]
         //      |            ^- write                ^- read             |
         //      |<-              original_len                          ->|
@@ -355,6 +352,13 @@ impl<T, A: Allocator> Vec<T, A> {
                     self.v.set_len(self.write + remaining);
                 }
             }
+        }
+
+        let original_len = self.len();
+
+        if original_len == 0 {
+            // Empty case: explicit return allows better optimization, vs letting compiler infer it
+            return;
         }
 
         let mut read = 0;
@@ -460,43 +464,6 @@ impl<T, A: Allocator> Vec<T, A> {
     where
         F: FnMut(&mut T, &mut T) -> bool,
     {
-        let len = self.len();
-        if len <= 1 {
-            return;
-        }
-
-        // Check if we ever want to remove anything.
-        // This allows to use copy_non_overlapping in next cycle.
-        // And avoids any memory writes if we don't need to remove anything.
-        let mut first_duplicate_idx: usize = 1;
-        let start = self.as_mut_ptr();
-        while first_duplicate_idx != len {
-            let found_duplicate = unsafe {
-                // SAFETY: first_duplicate always in range [1..len)
-                // Note that we start iteration from 1 so we never overflow.
-                let prev = start.add(first_duplicate_idx.wrapping_sub(1));
-                let current = start.add(first_duplicate_idx);
-                // We explicitly say in docs that references are reversed.
-                same_bucket(&mut *current, &mut *prev)
-            };
-            if found_duplicate {
-                break;
-            }
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "asserted in loop that first_duplicate_idx != len and 
-                first_duplicate_idx starts with 0 => first_duplicate_idx < len"
-            )]
-            {
-                first_duplicate_idx += 1;
-            }
-        }
-        // Don't need to remove anything.
-        // We cannot get bigger than len.
-        if first_duplicate_idx == len {
-            return;
-        }
-
         /* INVARIANT: vec.len() >= read > write > write-1 >= 0 */
         struct FillGapOnDrop<'a, T, A: Allocator> {
             /* Offset of the element we want to check if it is duplicate */
@@ -551,6 +518,43 @@ impl<T, A: Allocator> Vec<T, A> {
                     self.vec.set_len(len - dropped);
                 }
             }
+        }
+
+        let len = self.len();
+        if len <= 1 {
+            return;
+        }
+
+        // Check if we ever want to remove anything.
+        // This allows to use copy_non_overlapping in next cycle.
+        // And avoids any memory writes if we don't need to remove anything.
+        let mut first_duplicate_idx: usize = 1;
+        let start = self.as_mut_ptr();
+        while first_duplicate_idx != len {
+            let found_duplicate = unsafe {
+                // SAFETY: first_duplicate always in range [1..len)
+                // Note that we start iteration from 1 so we never overflow.
+                let prev = start.add(first_duplicate_idx.wrapping_sub(1));
+                let current = start.add(first_duplicate_idx);
+                // We explicitly say in docs that references are reversed.
+                same_bucket(&mut *current, &mut *prev)
+            };
+            if found_duplicate {
+                break;
+            }
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted in loop that first_duplicate_idx != len and 
+                first_duplicate_idx starts with 0 => first_duplicate_idx < len"
+            )]
+            {
+                first_duplicate_idx += 1;
+            }
+        }
+        // Don't need to remove anything.
+        // We cannot get bigger than len.
+        if first_duplicate_idx == len {
+            return;
         }
 
         /* Drop items while going through Vec, it should be more efficient than
@@ -797,9 +801,7 @@ mod tests {
     /// drop (double-free) those elements again.
     #[test]
     fn truncate_panicking_drop_is_safe() {
-        let ledger = Arc::new(Ledger::new());
-        let armer = Arc::new(PanicArmer::new());
-
+        // FIXME: use a PanickyDrop
         /// Panics exactly once, the first time it runs while armed; records its id.
         struct PanicDrop {
             id: u32,
@@ -812,6 +814,9 @@ mod tests {
                 assert!(!self.armer.fetch_and_disarm(), "forced panic in drop");
             }
         }
+
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
 
         armer.arm();
 

@@ -230,12 +230,13 @@ mod tests {
     /// Previously, panicking leaves a stale length.
     #[test]
     fn clear_panic_in_destructor_leaves_map_consistent() {
-        let armer = Arc::new(PanicArmer::new());
-        let ledger = Arc::new(Ledger::new());
-
         // 80 values give a multi-level tree, so the panic lands after several
         // payloads and nodes are already torn down.
         const N: u32 = 80;
+
+        let armer = Arc::new(PanicArmer::new());
+        let ledger = Arc::new(Ledger::new());
+
         let mut map: BTreeMap<u32, TrackedItem<PanickyDrop>> = BTreeMap::new_in(Global);
         for i in 0..N {
             let guard = TrackedItem::construct(&ledger, PanickyDrop::new(armer.clone()));
@@ -770,7 +771,10 @@ mod tests {
                 check_ascending_keys(&map);
             }
         }
-        let initial_height = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
+        let initial_height = map
+            .root
+            .as_ref()
+            .map_or(0, super::super::node::NodeRef::height);
         assert!(initial_height >= 1, "expected multi-level tree");
 
         for i in 0..N {
@@ -889,7 +893,10 @@ mod tests {
         for i in 0..80u32 {
             map.try_insert(i, i).unwrap();
         }
-        let initial_height = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
+        let initial_height = map
+            .root
+            .as_ref()
+            .map_or(0, super::super::node::NodeRef::height);
         assert!(initial_height >= 1, "expected multi-level tree");
 
         // Remove all elements one by one, checking invariant each step.

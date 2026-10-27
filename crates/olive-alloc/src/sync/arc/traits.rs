@@ -77,7 +77,9 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
                 _marker: core::marker::PhantomData,
             });
         }
-        let Some(inner) = self.inner() else { unreachable!("non-dangling weak must have a valid inner allocation") };
+        let Some(inner) = self.inner() else {
+            unreachable!("non-dangling weak must have a valid inner allocation")
+        };
         inner
             .weak
             .fetch_update(
@@ -151,6 +153,7 @@ impl<T: TryDefault, A: AllocatorTryDefault> TryDefault for Arc<T, A> {
 }
 
 /// Converts a [`TryCloneError`] into a [`TryDefaultError`].
+#[allow(clippy::needless_pass_by_value)]
 fn try_clone_error_to_default(e: TryCloneError) -> TryDefaultError {
     match e {
         TryCloneError::Reserve(r) => TryDefaultError::Reserve(r),

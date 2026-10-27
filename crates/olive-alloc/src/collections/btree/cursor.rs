@@ -144,13 +144,15 @@ impl<'a, K, V> Cursor<'a, K, V> {
 
     /// Returns the key and value of the element that [`Cursor::next`] would
     /// move over, without moving the cursor.
-    #[must_use] pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
+    #[must_use]
+    pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
         self.clone().next()
     }
 
     /// Returns the key and value of the element that [`Cursor::prev`] would
     /// move over, without moving the cursor.
-    #[must_use] pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
+    #[must_use]
+    pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
         self.clone().prev()
     }
 }
@@ -260,7 +262,8 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// The lifetime of the returned `Cursor` is bound to that of the
     /// `CursorMut`, which means it cannot outlive the `CursorMut` and that
     /// the `CursorMut` is frozen for the lifetime of the `Cursor`.
-    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, K, V> {
+    #[must_use]
+    pub fn as_cursor(&self) -> Cursor<'_, K, V> {
         self.inner.as_cursor()
     }
 
@@ -272,7 +275,8 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// The caller must ensure that the tree stays in a sorted state after
     /// having modified a key through the returned cursor, and the new
     /// key must be unique.
-    #[must_use] pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, K, V, A> {
+    #[must_use]
+    pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, K, V, A> {
         self.inner
     }
 }
@@ -591,7 +595,8 @@ impl<K, V, A: Allocator> CursorMutKey<'_, K, V, A> {
     /// Converts the mutable cursor into an immutable cursor.
     ///
     /// This is useful for looking ahead without modifying the cursor itself.
-    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, K, V> {
+    #[must_use]
+    pub fn as_cursor(&self) -> Cursor<'_, K, V> {
         Cursor {
             // SAFETY: The tree is immutable while the cursor exists.
             root: unsafe { self.root.reborrow_shared().as_ref() },
@@ -855,6 +860,10 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
     /// [`next`](Self::next), if there is one.
     ///
     /// After the removal the cursor's position is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Should not panic for a cursor from a valid map.
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "length is at least 1 if there is a next element"
@@ -886,6 +895,10 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
     /// [`prev`](Self::prev), if there is one.
     ///
     /// After the removal the cursor's position is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Should not panic for a cursor from a valid map.
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "length is at least 1 if there is a previous element"

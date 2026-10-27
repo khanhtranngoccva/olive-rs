@@ -515,7 +515,7 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_
 /// - The map must have fewer than `usize::MAX` items.
 ///
 // FIXME: `handle` should probably be a location instead.
-// On (allocator) panic (???), the location is restored with the old handle.
+// On (allocator) panic (???), the location should be restored with the old handle.
 // Although allocators are not supposed to panic because the panic machinery
 // relies on the allocator to function, and panics in deallocating path of this very type
 // abort the program, so implementing this may not be necessary.

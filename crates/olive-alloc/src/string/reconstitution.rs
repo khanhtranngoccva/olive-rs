@@ -32,7 +32,8 @@ impl String {
     ///
     /// The first `length` bytes are valid UTF-8.
     #[inline]
-    #[must_use] pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
+    #[must_use]
+    pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
         self.buf.into_raw_parts()
     }
 }
@@ -73,6 +74,10 @@ impl<A: Allocator> String<A> {
     /// The underlying bytes remain valid UTF-8.
     ///
     /// This method does not try to shrink the underlying allocation.
+    /// 
+    /// # Panics
+    /// 
+    /// This method should not panic for any valid strings.
     pub fn leak<'a>(self) -> &'a mut str
     where
         // Unlike the original String implementation, this implementation allows arbitrary
@@ -88,14 +93,13 @@ impl<A: Allocator> String<A> {
         // invariant and keeps the same allocator for eventual deallocation.
         unsafe {
             let str_ptr: *mut str = ptr::slice_from_raw_parts_mut(ptr, len) as *mut str;
-            str_ptr.as_mut().expect("pointer is non-nul l")
+            str_ptr.as_mut().expect("pointer is non-null")
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    
 
     use super::*;
     use crate::alloc::CountingAllocator;
