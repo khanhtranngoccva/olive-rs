@@ -572,11 +572,110 @@ mod tests {
         check_ascending_keys(&set.map);
     }
 
-    // FIXME: try_replace success changes the ID (identity) of the TrackedItem value in the set
+    #[test]
+    fn try_replace_success_changes_value_identity() {
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
 
-    // FIXME: try_replace OOM drops value
+        // Seed the set with an initial item.
+        set.try_replace(TrackedItem::construct(&ledger, 7)).unwrap();
+        let old_id = set.get(&7).unwrap().id();
 
-    // FIXME: try_replace_give_back success changes the ID (identity) of the TrackedItem value in the set
+        // A successful replace must swap in a *new* item: after the call the
+        // set holds the replacement (new id), and the old item — returned to
+        // the caller, as a non-give-back replace would drop internally —
+        // dies exactly once.
+        let new_item = TrackedItem::construct(&ledger, 7);
+        let new_id = new_item.id();
+        let returned = set
+            .try_replace(new_item)
+            .unwrap()
+            .expect("existing value must be replaced");
+        assert_eq!(returned.id(), old_id);
+        drop(returned);
+        assert_eq!(set.get(&7).unwrap().id(), new_id);
+        assert_eq!(ledger.live_ids(), [new_id]);
+        assert_eq!(ledger.drop_count(old_id), 1);
+
+        drop(set);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_oom_drops_value() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: BTreeSet<TrackedItem<u32>, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        // Fill the sole leaf to CAPACITY (11) so that inserting an absent
+        // value forces a split, and thus an allocation.
+        for i in 1..=11u32 {
+            set.try_insert(TrackedItem::construct(&ledger, i)).unwrap();
+        }
+        alloc.drain();
+
+        let probed = TrackedItem::construct(&ledger, 12);
+        let probed_id = probed.id();
+        // 12 is absent: the forced split needs an allocation, so
+        // `try_replace` must fail — and drop the probed value instead of
+        // handing it back.
+        assert!(matches!(set.try_replace(probed), Err(AllocError)));
+        assert_eq!(set.len(), 11);
+        assert!(!set.contains(&12));
+        // The probed id was dropped exactly once and is not leaked; the
+        // eleven stored items are still alive.
+        assert_eq!(ledger.drop_count(probed_id), 1);
+        let live = ledger.live_ids();
+        assert_eq!(live.len(), 11);
+        assert!(!live.contains(&probed_id));
+
+        drop(set);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_give_back_success_changes_value_identity() {
+        let ledger = std::sync::Arc::new(Ledger::new());
+        let mut set: BTreeSet<TrackedItem<u32>> = BTreeSet::new();
+
+        // Seed the set with an initial item.
+        set.try_replace_give_back(TrackedItem::construct(&ledger, 7))
+            .unwrap();
+        let old_id = set.get(&7).unwrap().id();
+
+        let new_item = TrackedItem::construct(&ledger, 7);
+        let new_id = new_item.id();
+        let returned = set
+            .try_replace_give_back(new_item)
+            .unwrap()
+            .expect("existing value must be replaced");
+        // The set already holds the replacement; the old item is out of the
+        // set but still alive in the caller's hands — both ids are live
+        // until the caller drops the returned one.
+        assert_eq!(set.get(&7).unwrap().id(), new_id);
+        assert_eq!(returned.id(), old_id);
+        assert_eq!(ledger.live_ids(), [old_id, new_id]);
+        drop(returned);
+        assert_eq!(ledger.live_ids(), [new_id]);
+        assert_eq!(ledger.drop_count(old_id), 1);
+
+        drop(set);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
 
     #[test]
     fn try_replace_give_back_on_oom() {

@@ -861,11 +861,161 @@ mod tests {
         check_ascending_keys(&m);
     }
 
-    // FIXME: try_replace success changes the ID (identity) of the TrackedItem value in the set
+    #[test]
+    fn try_replace_give_back_success_swaps_pair_identity() {
+        let ledger = Arc::new(Ledger::new());
+        let mut m: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
 
-    // FIXME: try_replace OOM drops value
+        // Seed the map with an initial pair.
+        let old_key = TrackedItem::construct(&ledger, 1);
+        let old_value = TrackedItem::construct(&ledger, 100);
+        let old_key_id = old_key.id();
+        let old_value_id = old_value.id();
+        m.try_replace_give_back(old_key, old_value).unwrap();
+        assert_eq!(m.get_key_value(&1).unwrap().0.id(), old_key_id);
+        assert_eq!(m.get(&1).unwrap().id(), old_value_id);
 
-    // FIXME: try_replace_give_back success changes the ID (identity) of the TrackedItem value in the set
+        // A successful replace must swap in a *new* key and a *new* value:
+        // equal keys may still be distinct items, so the stored key is
+        // swapped too. After the call the map holds the replacements (new
+        // ids), and the old pair — handed back to the caller, whose drop is
+        // what a non-give-back replace would do internally — dies exactly
+        // once.
+        let new_key = TrackedItem::construct(&ledger, 1);
+        let new_value = TrackedItem::construct(&ledger, 100);
+        let new_key_id = new_key.id();
+        let new_value_id = new_value.id();
+        let returned = m
+            .try_replace_give_back(new_key, new_value)
+            .unwrap()
+            .expect("existing pair must be replaced");
+        assert_eq!(returned.0.id(), old_key_id);
+        assert_eq!(returned.1.id(), old_value_id);
+        drop(returned);
+        assert_eq!(m.get_key_value(&1).unwrap().0.id(), new_key_id);
+        assert_eq!(m.get(&1).unwrap().id(), new_value_id);
+        assert_eq!(ledger.live_ids(), [new_key_id, new_value_id]);
+        assert_eq!(ledger.drop_count(old_key_id), 1);
+        assert_eq!(ledger.drop_count(old_value_id), 1);
+
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+        drop(m);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_give_back_oom_drops_probed_pair() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let ledger = Arc::new(Ledger::new());
+        let mut m: BTreeMap<TrackedItem<u32>, TrackedItem<u32>, BudgetedAlloc> =
+            BTreeMap::new_in(alloc.clone());
+        // Fill the sole leaf to CAPACITY (11) so that inserting an absent
+        // key forces a split, and thus an allocation.
+        for i in 1..=11u32 {
+            m.try_insert(
+                TrackedItem::construct(&ledger, i),
+                TrackedItem::construct(&ledger, i * 10),
+            )
+            .unwrap();
+        }
+        alloc.drain();
+        // The stored keys must keep their identity through the failed probe.
+        let seed_key_id = m.get_key_value(&1).unwrap().0.id();
+
+        // 12 is absent: the forced split needs an allocation, so the replace
+        // must fail. The give-back variant hands the probed pair back to the
+        // caller; dropping it is what a non-give-back replace would do.
+        let probed_key = TrackedItem::construct(&ledger, 12);
+        let probed_value = TrackedItem::construct(&ledger, 120);
+        let probed_key_id = probed_key.id();
+        let probed_value_id = probed_value.id();
+        let probed_pair = match m.try_replace_give_back(probed_key, probed_value) {
+            Err((k, v, e)) => {
+                assert_eq!(k.id(), probed_key_id);
+                assert_eq!(v.id(), probed_value_id);
+                assert!(matches!(e, AllocError));
+                (k, v)
+            }
+            Ok(_) => panic!("expected allocation failure on the vacant path"),
+        };
+        drop(probed_pair);
+
+        // Both probed ids were dropped exactly once and are not leaked; the
+        // eleven stored pairs are still alive and the tree is unmodified,
+        // with the stored keys' identities untouched.
+        assert_eq!(m.len(), 11);
+        assert_eq!(m.get(&12), None);
+        assert_eq!(ledger.drop_count(probed_key_id), 1);
+        assert_eq!(ledger.drop_count(probed_value_id), 1);
+        assert_eq!(m.get_key_value(&1).unwrap().0.id(), seed_key_id);
+        let live = ledger.live_ids();
+        assert_eq!(live.len(), 22);
+        assert!(!live.contains(&probed_key_id));
+        assert!(!live.contains(&probed_value_id));
+
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+        drop(m);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_give_back_success_returns_old_pair_alive() {
+        let ledger = Arc::new(Ledger::new());
+        let mut m: BTreeMap<TrackedItem<u32>, TrackedItem<u32>> = BTreeMap::new_in(Global);
+
+        // Seed the map with an initial pair.
+        let old_key = TrackedItem::construct(&ledger, 1);
+        let old_value = TrackedItem::construct(&ledger, 100);
+        let old_key_id = old_key.id();
+        let old_value_id = old_value.id();
+        m.try_replace_give_back(old_key, old_value).unwrap();
+
+        let new_key = TrackedItem::construct(&ledger, 1);
+        let new_value = TrackedItem::construct(&ledger, 100);
+        let new_key_id = new_key.id();
+        let new_value_id = new_value.id();
+        let returned = m
+            .try_replace_give_back(new_key, new_value)
+            .unwrap()
+            .expect("existing pair must be replaced");
+        // The map already holds the replacements; the old pair is out of the
+        // map but still alive in the caller's hands — all four ids are live
+        // until the caller drops the returned one.
+        assert_eq!(m.get_key_value(&1).unwrap().0.id(), new_key_id);
+        assert_eq!(m.get(&1).unwrap().id(), new_value_id);
+        assert_eq!(returned.0.id(), old_key_id);
+        assert_eq!(returned.1.id(), old_value_id);
+        assert_eq!(
+            ledger.live_ids(),
+            [old_key_id, old_value_id, new_key_id, new_value_id]
+        );
+        drop(returned);
+        assert_eq!(ledger.live_ids(), [new_key_id, new_value_id]);
+        assert_eq!(ledger.drop_count(old_key_id), 1);
+        assert_eq!(ledger.drop_count(old_value_id), 1);
+
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+        drop(m);
+        assert!(
+            ledger.leaked_ids().is_empty(),
+            "leaked: {:?}",
+            ledger.leaked_ids()
+        );
+        assert!(ledger.double_dropped().is_empty());
+    }
 
     #[test]
     fn try_replace_give_back_on_oom() {
