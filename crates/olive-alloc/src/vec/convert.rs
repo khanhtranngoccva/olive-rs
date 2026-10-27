@@ -409,7 +409,9 @@ mod tests {
                 assert_eq!(expected, 4);
                 assert_eq!(actual, 2);
             }
-            other => panic!("expected LengthMismatch, got {other:?}"),
+            other @ TryVecIntoArrayError::Shrink(_) => {
+                panic!("expected LengthMismatch, got {other:?}")
+            }
         }
     }
 
@@ -425,7 +427,7 @@ mod tests {
                 assert_eq!(expected, 3);
                 assert_eq!(actual, 6);
             }
-            other => panic!("expected LengthMismatch, got {other:?}"),
+            other @ TryVecIntoArrayError::Shrink(_) => panic!("expected LengthMismatch, got {other:?}"),
         }
     }
 
@@ -460,7 +462,7 @@ mod tests {
                 assert_eq!(expected, 5);
                 assert_eq!(actual, 1);
             }
-            other => panic!("expected LengthMismatch, got {other:?}"),
+            other @ TryVecIntoArrayError::Shrink(_) => panic!("expected LengthMismatch, got {other:?}"),
         }
     }
 
@@ -489,7 +491,7 @@ mod tests {
         let (vec_back, e) = v.try_into_array_give_back::<3>().unwrap_err();
         match e {
             TryVecIntoArrayError::Shrink(r) => assert!(r.is_alloc()),
-            other => panic!("expected Shrink, got {other:?}"),
+            other @ TryVecIntoArrayError::LengthMismatch{ .. } => panic!("expected Shrink, got {other:?}"),
         }
         assert_eq!(vec_back.as_slice(), &[0, 1, 2]);
     }
@@ -638,7 +640,7 @@ mod tests {
         let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_slice_in(src, FailAlloc);
         match res.expect_err("reservation should fail") {
             TryVecWithCloneError::Reserve(r) => assert!(r.is_alloc()),
-            other => panic!("expected a reserve failure, got {other:?}"),
+            other @ TryVecWithCloneError::Clone(_) => panic!("expected a reserve failure, got {other:?}"),
         }
     }
 
@@ -659,7 +661,7 @@ mod tests {
             TryVecWithCloneError::Reserve(r) => {
                 assert!(r.is_alloc());
             }
-            other => panic!("expected a reserve failure, got {other:?}"),
+            other @ TryVecWithCloneError::Clone(_) => panic!("expected a reserve failure, got {other:?}"),
         }
     }
 

@@ -239,7 +239,7 @@ mod tests {
                 let value = ve.into_value();
                 assert_eq!(value, 42);
             }
-            _ => panic!("expected vacant"),
+            Entry::Occupied(_) => panic!("expected vacant"),
         }
         assert!(set.is_empty());
     }
@@ -304,7 +304,7 @@ mod tests {
                 let v = oe.remove();
                 assert_eq!(v, 1);
             }
-            _ => panic!("expected occupied"),
+            Entry::Vacant(_) => panic!("expected occupied"),
         }
         assert!(!set.contains(&1));
         assert!(set.contains(&2));
@@ -438,7 +438,7 @@ mod tests {
 
         let vacant = match entry {
             Entry::Vacant(v) => v,
-            _ => panic!("expected vacant"),
+            Entry::Occupied(_) => panic!("expected vacant"),
         };
         match vacant.try_insert() {
             Err(e) => assert!(matches!(e, AllocError)),
@@ -461,10 +461,7 @@ mod tests {
         let entry = set.entry(item);
         alloc.drain();
 
-        let vacant = match entry {
-            Entry::Vacant(v) => v,
-            _ => panic!("expected vacant"),
-        };
+        let Entry::Vacant(vacant) = entry else { panic!("expected vacant") };
         match vacant.try_insert_give_back() {
             Err((returned, e)) => {
                 assert!(matches!(e, AllocError));

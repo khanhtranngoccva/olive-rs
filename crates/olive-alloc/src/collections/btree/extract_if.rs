@@ -636,8 +636,8 @@ mod tests {
     /// must hold while the tree is being pruned, and afterwards.
     #[test]
     fn extract_if_multilevel_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 2).unwrap();
         }
@@ -669,8 +669,8 @@ mod tests {
     /// mutable borrow.)
     #[test]
     fn extract_if_drain_one_by_one_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i).unwrap();
         }
@@ -695,8 +695,8 @@ mod tests {
     /// allow.
     #[test]
     fn extract_if_repeated_partial_drains_preserve_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 2).unwrap();
         }
@@ -734,12 +734,13 @@ mod tests {
     /// invariant and exact survivor set afterward.
     #[test]
     fn extract_if_random_subsets_preserve_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 150;
+
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 7).unwrap();
         }
-        let mut rng = TestRng::new(0xE7CABEEFCAFED00D);
+        let mut rng = TestRng::new(0xE7CA_BEEF_CAFE_D00D);
         let mut expected: std::collections::BTreeSet<u32> = (0..N).collect();
         for round in 0..10u32 {
             // A deterministic hash-derived predicate computed outside the
@@ -803,8 +804,8 @@ mod tests {
 
     #[test]
     fn retain_scrambled_schedule_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 120;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i).unwrap();
         }
@@ -1052,8 +1053,8 @@ mod tests {
 
     #[test]
     fn extract_if_range_multilevel_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 2).unwrap();
         }

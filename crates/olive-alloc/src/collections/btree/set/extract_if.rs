@@ -365,8 +365,9 @@ mod tests {
     /// Partial extraction from a multi-level tree
     #[test]
     fn extract_if_multilevel_preserves_invariant() {
-        let mut set = BTreeSet::new();
         const N: u32 = 200;
+
+        let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
         }
@@ -392,8 +393,9 @@ mod tests {
     /// Drains a multi-level tree through `extract_if` one element at a time
     #[test]
     fn extract_if_drain_one_by_one_preserves_invariant() {
-        let mut set = BTreeSet::new();
         const N: u32 = 200;
+
+        let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
         }
@@ -418,12 +420,14 @@ mod tests {
     /// the invariant and exact survivor set afterward.
     #[test]
     fn extract_if_random_subsets_preserve_invariant() {
-        let mut set = BTreeSet::new();
         const N: u32 = 150;
+
+        let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
         }
-        let mut rng = TestRng::new(0xE7CABEEFCAFED00D);
+
+        let mut rng = TestRng::new(0xE7CA_BEEF_CAFE_D00D);
         let mut expected: std::collections::BTreeSet<u32> = (0..N).collect();
         for round in 0..10u32 {
             // A deterministic hash-derived predicate computed outside the
@@ -665,8 +669,9 @@ mod tests {
 
     #[test]
     fn extract_if_range_multilevel_preserves_invariant() {
-        let mut set = BTreeSet::new();
         const N: u32 = 200;
+
+        let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
         }

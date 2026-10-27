@@ -123,6 +123,10 @@ pub enum Entry<'a, K: 'a, V: 'a, A: Allocator = Global> {
 impl<'a, K: Ord, V, A: Allocator> Entry<'a, K, V, A> {
     /// Applies `f` to the value in the entry if it exists, returning the entry.
     /// Does nothing if the entry is vacant.
+    #[allow(
+        clippy::return_self_not_must_use,
+        reason = "and_modify alone is a valid use case"
+    )]
     pub fn and_modify<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut V),
@@ -1044,7 +1048,7 @@ mod tests {
                 assert_eq!(v.key(), &7);
                 assert_eq!(v.into_key(), 7);
             }
-            _ => panic!("expected vacant entry"),
+            Entry::Occupied(_) => panic!("expected vacant entry"),
         }
         assert!(map.is_empty());
     }

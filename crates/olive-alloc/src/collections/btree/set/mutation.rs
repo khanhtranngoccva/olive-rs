@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn remove_scrambled_preserves_invariant() {
-        let rng = TestRng::new(0xC0FFEE);
+        let rng = TestRng::new(0x00C0_FFEE);
         let mut set = BTreeSet::new();
         let n = 60u32;
         for i in 0..n {
@@ -569,7 +569,7 @@ mod tests {
         }
         // Deterministic scrambled order: stride 31 is coprime to 80, hitting
         // interior keys alongside the extremes across all levels.
-        let rng = TestRng::new(0xC0FFEE);
+        let rng = TestRng::new(0x00C0_FFEE);
         let order: std::vec::Vec<u32> = rng.permuted(0..80u32).collect();
         let mut seen = [false; 80];
         for &k in &order {
@@ -655,8 +655,9 @@ mod tests {
 
     #[test]
     fn retain_scrambled_schedule_preserves_invariant() {
-        let mut set = BTreeSet::new();
         const N: u32 = 120;
+        
+        let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
         }

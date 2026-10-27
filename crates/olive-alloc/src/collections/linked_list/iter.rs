@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn into_iter_default_and_try_default_are_empty() {
-        let empty: IntoIter<u32> = Default::default();
+        let empty: IntoIter<u32> = IntoIter::default();
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);

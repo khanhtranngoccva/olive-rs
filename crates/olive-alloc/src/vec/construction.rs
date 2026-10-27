@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn default_matches_new() {
-        let v: Vec<i32> = Default::default();
+        let v: Vec<i32> = Vec::default();
         assert!(v.is_empty());
     }
 

@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn default_matches_new() {
-        let d: LinkedList<i32> = Default::default();
+        let d: LinkedList<i32> = LinkedList::default();
         assert!(d.is_empty());
         assert_eq!(d.len(), 0);
     }

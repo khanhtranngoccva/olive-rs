@@ -37,8 +37,8 @@ impl<T> Default for Iter<'_, T> {
     /// Creates an empty `vec_deque::Iter`.
     fn default() -> Self {
         Iter {
-            i1: Default::default(),
-            i2: Default::default(),
+            i1: slice::Iter::default(),
+            i2: slice::Iter::default(),
         }
     }
 }
@@ -178,8 +178,8 @@ impl<T> Default for IterMut<'_, T> {
     /// Creates an empty `vec_deque::IterMut`.
     fn default() -> Self {
         IterMut {
-            i1: Default::default(),
-            i2: Default::default(),
+            i1: slice::IterMut::default(),
+            i2: slice::IterMut::default(),
         }
     }
 }
@@ -441,10 +441,7 @@ mod tests {
     fn try_range_out_of_bounds_rejects() {
         let dq = wrapped_deque();
         // len == 5, so ending at index 7 exceeds the bound.
-        let err = match dq.try_range(0..7) {
-            Err(e) => e,
-            Ok(_) => panic!("expected out-of-bounds error"),
-        };
+        let Err(err) = dq.try_range(0..7) else { panic!("expected out-of-bounds error") };
         assert!(matches!(err, TrySliceRangeError::EndExceedsBound { .. }));
     }
 
@@ -455,10 +452,7 @@ mod tests {
             clippy::reversed_empty_ranges,
             reason = "we are deliberately testing error scenario"
         )]
-        let err = match dq.try_range(3..1) {
-            Err(e) => e,
-            Ok(_) => panic!("expected reversed-range error"),
-        };
+        let Err(err) = dq.try_range(3..1) else { panic!("expected reversed-range error") };
         assert!(matches!(err, TrySliceRangeError::StartExceedsEnd { .. }));
     }
 
@@ -547,7 +541,7 @@ mod tests {
 
     #[test]
     fn iter_try_default_is_empty() {
-        let iter: Iter<'_, i32> = Default::default();
+        let iter: Iter<'_, i32> = Iter::default();
         assert!(collect(iter).is_empty());
         let iter: Iter<'_, i32> = TryDefault::try_default().unwrap();
         assert!(collect(iter).is_empty());
@@ -555,7 +549,7 @@ mod tests {
 
     #[test]
     fn iter_mut_try_default_is_empty() {
-        let iter: IterMut<'_, i32> = Default::default();
+        let iter: IterMut<'_, i32> = IterMut::default();
         assert_eq!(iter.count(), 0);
         let iter: IterMut<'_, i32> = TryDefault::try_default().unwrap();
         assert_eq!(iter.count(), 0);

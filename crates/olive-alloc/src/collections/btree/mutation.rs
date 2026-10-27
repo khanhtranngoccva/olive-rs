@@ -30,7 +30,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     pub fn pop_first(&mut self) -> Option<(K, V)> {
         match self.first_entry()? {
             Entry::Occupied(occupied) => Some(occupied.remove_entry()),
-            _ => None,
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -40,7 +40,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     pub fn pop_last(&mut self) -> Option<(K, V)> {
         match self.last_entry()? {
             Entry::Occupied(occupied) => Some(occupied.remove_entry()),
-            _ => None,
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -61,7 +61,7 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     {
         match self.entry_ref(key)? {
             Entry::Occupied(occupied) => Some(occupied.remove_entry()),
-            _ => None,
+            Entry::Vacant(_) => None,
         }
     }
 
@@ -761,8 +761,8 @@ mod tests {
     /// returned and the tree collapses to empty.
     #[test]
     fn remove_ascending_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 2).unwrap();
             check_tree_invariant(&map);
@@ -788,8 +788,8 @@ mod tests {
     /// rightmost leaf), checking the invariant after every removal.
     #[test]
     fn remove_descending_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 2).unwrap();
             check_tree_invariant(&map);
@@ -818,8 +818,8 @@ mod tests {
     /// paths and interior deletions simultaneously.
     #[test]
     fn remove_scrambled_preserves_invariant() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 300;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i).unwrap();
         }
@@ -839,8 +839,8 @@ mod tests {
     /// verifies the invariant plus functional correctness of survivors.
     #[test]
     fn remove_half_preserves_invariant_and_values() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 100;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 10).unwrap();
         }
@@ -906,8 +906,8 @@ mod tests {
 
     #[test]
     fn remove_all_keys_reverse_order() {
-        let mut map = BTreeMap::new_in(Global);
         const N: u32 = 200;
+        let mut map = BTreeMap::new_in(Global);
         for i in 0..N {
             map.try_insert(i, i * 7).unwrap();
         }

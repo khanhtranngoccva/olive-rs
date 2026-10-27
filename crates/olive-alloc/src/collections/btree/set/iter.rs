@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn iter_default_is_empty() {
-        let s: Iter<'static, u32> = Default::default();
+        let s: Iter<'static, u32> = Iter::default();
         assert_eq!(s.count(), 0);
     }
 

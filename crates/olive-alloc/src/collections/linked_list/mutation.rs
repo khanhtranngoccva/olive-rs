@@ -240,9 +240,6 @@ mod tests {
 
     #[test]
     fn clearing_with_a_panicking_element_still_empties_the_list() {
-        let ledger = Arc::new(Ledger::new());
-        let armer = Arc::new(PanicArmer::new());
-
         struct PanicDrop {
             armer: Arc<PanicArmer>,
         }
@@ -255,6 +252,9 @@ mod tests {
                 }
             }
         }
+
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
 
         let mut l = LinkedList::new();
         for _ in 0..4 {

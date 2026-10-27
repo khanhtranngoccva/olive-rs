@@ -831,12 +831,14 @@ mod tests {
 
     #[test]
     fn intersection_debug_impl() {
-        let a = build(&[1, 2, 3]);
-        let b = build(&[2, 3, 4]);
-        let inter = a.intersection(&b);
-        // Debug must not panic and must produce non-empty output.
         use crate::string::String;
         use std::fmt::Write;
+
+        let a = build(&[1, 2, 3]);
+        let b = build(&[2, 3, 4]);
+
+        let inter = a.intersection(&b);
+        // Debug must not panic and must produce non-empty output.
         let mut buf = String::new();
         write!(&mut buf, "{:?}", inter.inner).unwrap();
         assert!(!buf.is_empty());

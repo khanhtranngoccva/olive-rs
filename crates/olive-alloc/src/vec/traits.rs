@@ -925,14 +925,6 @@ mod tests {
 
     #[test]
     fn extend_from_slice_with_rollback_is_panic_safe() {
-        let ledger = Arc::new(Ledger::new());
-        let armer = Arc::new(PanicArmer::new());
-
-        // One ticket: the first source clone succeeds, the second fails, so
-        // the rollback has exactly one transient to drop — and that drop is
-        // the one that panics.
-        let budget = CloneBudget::new(1);
-
         /// A tracked payload whose clone shares the armer and whose drop
         /// panics exactly once while armed.
         struct RollbackPanicPayload {
@@ -978,9 +970,20 @@ mod tests {
         impl Drop for RollbackPanicPayload {
             fn drop(&mut self) {
                 self.ledger.unregister(self.id);
-                assert!(!self.armer.fetch_and_disarm(), "forced panic in rollback drop");
+                assert!(
+                    !self.armer.fetch_and_disarm(),
+                    "forced panic in rollback drop"
+                );
             }
         }
+
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
+
+        // One ticket: the first source clone succeeds, the second fails, so
+        // the rollback has exactly one transient to drop — and that drop is
+        // the one that panics.
+        let budget = CloneBudget::new(1);
 
         let mut v: Vec<RollbackPanicPayload> = Vec::new();
         v.try_push(RollbackPanicPayload::construct(&ledger, &armer, &budget))

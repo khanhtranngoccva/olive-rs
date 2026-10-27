@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn default_and_try_default_are_empty() {
-        let ic: IntoChars = Default::default();
+        let ic: IntoChars = IntoChars::default();
         assert_eq!(ic.count(), 0);
         let ic: IntoChars = TryDefault::try_default().unwrap();
         assert_eq!(ic.count(), 0);

@@ -133,7 +133,6 @@ impl<T: Display + ?Sized> TryToString for T {}
 #[cfg(test)]
 mod tests {
     use core::fmt::{self, Display};
-    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -183,17 +182,18 @@ mod tests {
     /// — not just `String` — can render itself into an owned Olive string.
     #[test]
     fn try_to_string_blanket_for_non_string_display() {
-        // Primitives implement `Display` via std; our trait follows.
-        let n: i32 = -42;
-        assert_eq!(&*n.try_to_string().unwrap(), "-42");
-
-        // A custom `Display` type renders through its own formatter.
         struct Pair(i32, i32);
         impl Display for Pair {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "({},{})", self.0, self.1)
             }
         }
+
+        // Primitives implement `Display` via std; our trait follows.
+        let n: i32 = -42;
+        assert_eq!(&*n.try_to_string().unwrap(), "-42");
+
+        // A custom `Display` type renders through its own formatter.
         let p = Pair(7, 8);
         assert_eq!(&*p.try_to_string().unwrap(), "(7,8)");
     }

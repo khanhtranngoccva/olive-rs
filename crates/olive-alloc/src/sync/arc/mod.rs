@@ -274,10 +274,7 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
     fn drop(&mut self) {
         // A dangling weak (from `Weak::new`) owns no allocation, so there is
         // nothing to decrement or free — return immediately.
-        let inner = match self.inner() {
-            Some(inner) => inner,
-            None => return,
-        };
+        let Some(inner) = self.inner() else { return };
 
         // If we find out that we were the last weak pointer, then its time to
         // deallocate the data entirely. See the discussion in Arc::drop() about

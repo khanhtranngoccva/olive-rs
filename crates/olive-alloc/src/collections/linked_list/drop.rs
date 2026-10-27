@@ -79,9 +79,6 @@ mod tests {
 
     #[test]
     fn dropping_with_a_panicking_element_still_empties_the_list() {
-        let ledger = Arc::new(Ledger::new());
-        let armer = Arc::new(PanicArmer::new());
-
         /// Simple panicking payload: panics exactly once, the first time it
         /// drops while armed. Registration is handled by the wrapping
         /// [`TrackedItem`].
@@ -97,6 +94,9 @@ mod tests {
                 }
             }
         }
+
+        let ledger = Arc::new(Ledger::new());
+        let armer = Arc::new(PanicArmer::new());
 
         let result = catch_unwind(AssertUnwindSafe(|| {
             let mut l = LinkedList::new();

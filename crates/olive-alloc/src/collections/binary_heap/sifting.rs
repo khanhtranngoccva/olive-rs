@@ -269,13 +269,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             return;
         }
 
-        #[allow(
-            clippy::arithmetic_side_effects,
-            reason = "guarded: start < self.len(), so the decrement cannot underflow"
-        )]
-        let tail_len = self.len() - start;
-
-        #[inline(always)]
+        #[inline]
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "leading_zeros is at most usize::BITS, and it equals usize::BITS only for x == 0, which the caller's tail_len >= 1 excludes"
@@ -283,6 +277,12 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
         fn log2_fast(x: usize) -> usize {
             (usize::BITS - x.leading_zeros() - 1) as usize
         }
+
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "guarded: start < self.len(), so the decrement cannot underflow"
+        )]
+        let tail_len = self.len() - start;
 
         // From std: `rebuild` takes O(self.len()) operations
         // and about 2 * self.len() comparisons in the worst case

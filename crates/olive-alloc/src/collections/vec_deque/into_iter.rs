@@ -147,10 +147,10 @@ mod tests {
     use olive_test_helpers::{BudgetedAlloc, CloneBudget, FailDefaultAlloc, FlakyCloneAlloc};
     use std::sync::Arc;
 
-    fn build(n: usize) -> VecDeque<i32> {
+    fn build(n: i32) -> VecDeque<i32> {
         let mut dq = VecDeque::new();
         for i in 0..n {
-            dq.try_push_back(i as i32).unwrap();
+            dq.try_push_back(i).unwrap();
         }
         dq
     }
@@ -186,7 +186,10 @@ mod tests {
         let last = dq.into_iter().last();
         // `last` yields the back element (id 3) and leaves the rest to the
         // deque's Drop, which destroys the three front elements.
-        assert_eq!(last.as_ref().map(olive_test_helpers::TrackedItem::id), Some(3));
+        assert_eq!(
+            last.as_ref().map(olive_test_helpers::TrackedItem::id),
+            Some(3)
+        );
         assert_eq!(ledger.live_ids(), std::vec![3]);
         assert!(ledger.double_dropped().is_empty());
         drop(last);
@@ -253,7 +256,7 @@ mod tests {
 
     #[test]
     fn into_iter_default_and_try_default_are_empty() {
-        let empty: IntoIter<u32> = Default::default();
+        let empty: IntoIter<u32> = IntoIter::default();
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);

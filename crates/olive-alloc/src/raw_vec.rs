@@ -544,10 +544,7 @@ impl<A: Allocator> RawVecInner<A> {
     ) -> Result<Self, TryReserveError> {
         // We avoid `unwrap_or_else` here because it bloats the amount of
         // LLVM IR generated.
-        let layout = match layout_array(capacity, elem_layout) {
-            Ok(layout) => layout,
-            Err(_) => return Err(CapacityOverflow.into()),
-        };
+        let Ok(layout) = layout_array(capacity, elem_layout) else { return Err(CapacityOverflow.into()) };
 
         // Don't allocate here because `Drop` will not deallocate when `capacity` is 0.
         if layout.size() == 0 {
@@ -756,9 +753,7 @@ impl<A: Allocator> RawVecInner<A> {
         cap: usize,
         elem_layout: Layout,
     ) -> Result<(), TryReserveError> {
-        let (ptr, layout) = if let Some(mem) = unsafe { self.current_memory(elem_layout) } {
-            mem
-        } else {
+        let Some((ptr, layout)) = (unsafe { self.current_memory(elem_layout) }) else {
             return Ok(());
         };
 
@@ -1048,10 +1043,7 @@ mod tests {
         // Prove an allocation failure surfaces as an AllocError-kind
         // `TryReserveError` (distinct from CapacityOverflow), mirroring the
         // sibling `try_with_capacity_in` OOM test.
-        let err = match RawVec::<i32, FailAlloc>::try_with_capacity_zeroed_in(8, FailAlloc) {
-            Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
-        };
+        let Err(err) = RawVec::<i32, FailAlloc>::try_with_capacity_zeroed_in(8, FailAlloc) else { panic!("expected allocation failure") };
         assert!(err.is_alloc());
         assert!(!err.is_capacity_overflow());
     }
@@ -1061,10 +1053,7 @@ mod tests {
         // A capacity whose byte size overflows must be reported as a capacity
         // overflow, not an allocation error. (`RawVec` is not `Debug`, so we
         // match rather than use `expect_err`.)
-        let err = match RawVec::<u8, Global>::try_with_capacity_zeroed_in(usize::MAX, Global) {
-            Err(e) => e,
-            Ok(_) => panic!("expected capacity overflow"),
-        };
+        let Err(err) = RawVec::<u8, Global>::try_with_capacity_zeroed_in(usize::MAX, Global) else { panic!("expected capacity overflow") };
         assert!(err.is_capacity_overflow());
     }
 
@@ -1116,10 +1105,7 @@ mod tests {
     fn oom_returns_alloc_error_kind() {
         // Use a custom allocator that always fails to prove the error kind is
         // AllocError (not CapacityOverflow).
-        let err = match RawVec::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) {
-            Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
-        };
+        let Err(err) = RawVec::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) else { panic!("expected allocation failure") };
         assert!(err.is_alloc());
         let msg = format!("{err}");
         assert!(msg.contains("allocation"));

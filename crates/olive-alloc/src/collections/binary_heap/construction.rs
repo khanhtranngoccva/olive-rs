@@ -183,10 +183,7 @@ mod tests {
     fn try_with_capacity_overflow_returns_capacity_overflow() {
         // A capacity whose byte size overflows must be reported as a capacity
         // overflow, not an allocation error.
-        let err = match BinaryHeap::<u8>::try_with_capacity(usize::MAX) {
-            Err(e) => e,
-            Ok(_) => panic!("expected capacity overflow error"),
-        };
+        let Err(err) = BinaryHeap::<u8>::try_with_capacity(usize::MAX) else { panic!("expected capacity overflow error") };
         assert!(err.is_capacity_overflow());
     }
 
@@ -194,10 +191,7 @@ mod tests {
     fn try_with_capacity_oom_returns_alloc_error_kind() {
         // Prove an allocation failure surfaces as an AllocError-kind
         // `TryReserveError` (distinct from CapacityOverflow).
-        let err = match BinaryHeap::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) {
-            Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
-        };
+        let Err(err) = BinaryHeap::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) else { panic!("expected allocation failure") };
         assert!(err.is_alloc());
         assert!(!err.is_capacity_overflow());
     }
@@ -217,7 +211,7 @@ mod tests {
 
     #[test]
     fn default_matches_new() {
-        let d: BinaryHeap<i32> = Default::default();
+        let d: BinaryHeap<i32> = BinaryHeap::default();
         let n: BinaryHeap<i32> = BinaryHeap::new();
         assert_eq!(d.len(), n.len());
         assert_eq!(d.capacity(), n.capacity());

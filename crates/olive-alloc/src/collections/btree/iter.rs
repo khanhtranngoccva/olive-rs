@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn iter_default_is_empty() {
-        let m: Iter<'static, u32, u32> = Default::default();
+        let m: Iter<'static, u32, u32> = Iter::default();
         assert_eq!(m.count(), 0);
     }
 
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn iter_mut_default_is_empty() {
-        let m: IterMut<'static, u32, u32> = Default::default();
+        let m: IterMut<'static, u32, u32> = IterMut::default();
         assert_eq!(m.count(), 0);
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
 
     #[test]
     fn keys_default_is_empty() {
-        let k: Keys<'static, u32, u32> = Default::default();
+        let k: Keys<'static, u32, u32> = Keys::default();
         assert_eq!(k.count(), 0);
     }
 
@@ -1626,7 +1626,7 @@ mod tests {
 
     #[test]
     fn values_default_is_empty() {
-        let v: Values<'static, u32, u32> = Default::default();
+        let v: Values<'static, u32, u32> = Values::default();
         assert_eq!(v.count(), 0);
     }
 
@@ -1706,7 +1706,7 @@ mod tests {
 
     #[test]
     fn values_mut_default_is_empty() {
-        let v: ValuesMut<'static, u32, u32> = Default::default();
+        let v: ValuesMut<'static, u32, u32> = ValuesMut::default();
         assert_eq!(v.count(), 0);
     }
 
@@ -1808,7 +1808,7 @@ mod tests {
 
     #[test]
     fn into_keys_default_is_empty() {
-        let m: IntoKeys<u32, u32> = Default::default();
+        let m: IntoKeys<u32, u32> = IntoKeys::default();
         assert_eq!(m.count(), 0);
     }
 
@@ -1906,7 +1906,7 @@ mod tests {
 
     #[test]
     fn into_values_default_is_empty() {
-        let m: IntoValues<u32, u32> = Default::default();
+        let m: IntoValues<u32, u32> = IntoValues::default();
         assert_eq!(m.count(), 0);
     }
 
@@ -2123,11 +2123,11 @@ mod tests {
 
     #[test]
     fn range_works_with_borrowed_keys() {
+        use core::ops::Bound::Included;
         let mut map = BTreeMap::new();
         map.try_insert(String::try_from("a").unwrap(), 1).unwrap();
         map.try_insert(String::try_from("bb").unwrap(), 2).unwrap();
         map.try_insert(String::try_from("cc").unwrap(), 3).unwrap();
-        use core::ops::Bound::Included;
         let got: Vec<_> = map
             .try_range::<str, _>((Included("b"), Included("cc")))
             .unwrap()

@@ -139,19 +139,22 @@ impl<T, A: Allocator> Drain<'_, T, A> {
 
     /// Returns the number of elements still held by this iterator.
     #[inline]
-    #[must_use] pub const fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.remaining()
     }
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
-    #[must_use] pub const fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.remaining() == 0
     }
 
     /// Views the remaining (not-yet-yielded) elements as a slice.
     #[inline]
-    #[must_use] pub fn as_slice(&self) -> &[T] {
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
         // The computed front pointer is invalid only when it lands one-past-the-
         // end of the buffer: `front_offset() == original_len`. When that case happens,
         // the fallback must be used. This fallback behavior is triggered sparingly
@@ -773,9 +776,6 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        // Single-threaded local sink that records drop.
-        let sink: Rc<RefCell<std::vec::Vec<u32>>> = Rc::new(RefCell::new(std::vec::Vec::new()));
-
         struct Rec(u32, Option<Rc<RefCell<std::vec::Vec<u32>>>>);
 
         impl Rec {
@@ -794,6 +794,9 @@ mod tests {
                 }
             }
         }
+
+        // Single-threaded local sink that records drop.
+        let sink: Rc<RefCell<std::vec::Vec<u32>>> = Rc::new(RefCell::new(std::vec::Vec::new()));
 
         let mut v: Vec<Rec> = Vec::new();
         for i in 0..6u32 {
@@ -879,9 +882,6 @@ mod tests {
     // unless a guard is in place.
     #[test]
     fn drain_panic_in_destructor_still_compacts() {
-        let armer = Arc::new(PanicArmer::new());
-        let counter = Arc::new(Counter::new());
-
         #[allow(dead_code)]
         struct Panicky(u32, Arc<PanicArmer>, Arc<Counter>);
         impl Drop for Panicky {
@@ -890,6 +890,9 @@ mod tests {
                 assert!(!(self.1.is_armed() && self.0 == 2), "boom");
             }
         }
+
+        let armer = Arc::new(PanicArmer::new());
+        let counter = Arc::new(Counter::new());
 
         let mut v: Vec<Panicky> = Vec::new();
         for i in 0..6u32 {

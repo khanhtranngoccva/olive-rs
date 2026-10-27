@@ -565,15 +565,17 @@ mod tests {
 
     #[test]
     fn hash_equal_maps_produce_equal_hashes() {
+        use std::hash::Hasher;
+
         let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         for i in 0..20 {
             a.try_insert(i, i * 10).unwrap();
             b.try_insert(i, i * 10).unwrap();
         }
+        
         let mut ha = std::collections::hash_map::DefaultHasher::default();
         let mut hb = std::collections::hash_map::DefaultHasher::default();
-        use std::hash::Hasher;
         a.hash(&mut ha);
         b.hash(&mut hb);
         assert_eq!(ha.finish(), hb.finish());
@@ -581,13 +583,15 @@ mod tests {
 
     #[test]
     fn hash_different_maps_produce_different_hashes() {
+        use std::hash::Hasher;
+
         let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         a.try_insert(1, 10).unwrap();
         b.try_insert(1, 20).unwrap();
+
         let mut ha = std::collections::hash_map::DefaultHasher::default();
         let mut hb = std::collections::hash_map::DefaultHasher::default();
-        use std::hash::Hasher;
         a.hash(&mut ha);
         b.hash(&mut hb);
         // Extremely unlikely to collide for different values.

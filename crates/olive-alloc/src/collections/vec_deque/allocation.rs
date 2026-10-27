@@ -676,12 +676,20 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // capacity before we return. This mirrors std's drop-guard +
         // `abort_shrink` pair (std #123369): the guard fires exactly when the
         // shrink did not complete.
+        #[allow(
+            clippy::items_after_statements,
+            reason = "this item is coupled with the reallocation segment"
+        )]
         struct Guard<'a, T, A: Allocator> {
             deque: &'a mut VecDeque<T, A>,
             old_head: usize,
             target_cap: usize,
         }
 
+        #[allow(
+            clippy::items_after_statements,
+            reason = "this item is coupled with the reallocation segment"
+        )]
         impl<T, A: Allocator> Drop for Guard<'_, T, A> {
             #[cold]
             fn drop(&mut self) {
@@ -896,9 +904,9 @@ mod tests {
 
     /// Concatenate the two halves of a deque into a fixed-size array for
     /// comparison. Returns `None` if the combined length exceeds `N`.
-    fn collect_into_array<const N: usize>(dq: &VecDeque<i32>) -> Option<[i32; N]> {
+    fn collect_into_array<T: Default + Copy, const N: usize>(dq: &VecDeque<T>) -> Option<[T; N]> {
         let (a, b) = dq.as_slices();
-        let mut out: [i32; N] = [0; N];
+        let mut out: [T; N] = [T::default(); N];
         if a.len() + b.len() > N {
             return None;
         }
@@ -960,9 +968,8 @@ mod tests {
     #[test]
     fn reserve_overflow_returns_capacity_overflow() {
         let mut dq: VecDeque<u8> = VecDeque::new();
-        let err = match dq.try_reserve(usize::MAX) {
-            Err(e) => e,
-            Ok(()) => panic!("expected capacity overflow"),
+        let Err(err) = dq.try_reserve(usize::MAX) else {
+            panic!("expected capacity overflow")
         };
         assert!(err.is_capacity_overflow());
         // The deque survived the failed reservation.
@@ -972,9 +979,8 @@ mod tests {
     #[test]
     fn reserve_exact_overflow_returns_capacity_overflow() {
         let mut dq: VecDeque<u8> = VecDeque::new();
-        let err = match dq.try_reserve_exact(usize::MAX) {
-            Err(e) => e,
-            Ok(()) => panic!("expected capacity overflow"),
+        let Err(err) = dq.try_reserve_exact(usize::MAX) else {
+            panic!("expected capacity overflow")
         };
         assert!(err.is_capacity_overflow());
         assert!(dq.is_empty());
@@ -1006,15 +1012,14 @@ mod tests {
         assert_eq!(dq.try_reserve(5), Ok(()));
         assert!(dq.capacity() > 5);
         // All five elements must survive in order.
-        assert_eq!(collect_into_array::<5>(&dq), Some([50, 40, 10, 20, 30]));
+        assert_eq!(collect_into_array::<_, 5>(&dq), Some([50, 40, 10, 20, 30]));
     }
 
     #[test]
     fn reserve_oom_returns_alloc_error_kind() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let err = match dq.try_reserve(4) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_reserve(4) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert!(!err.is_capacity_overflow());
@@ -1045,7 +1050,7 @@ mod tests {
         assert_eq!(dq.try_shrink_to(3), Ok(()));
         assert!(dq.capacity() < 8);
         assert!(dq.capacity() >= 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1060,7 +1065,7 @@ mod tests {
         assert_eq!(dq.len(), 3);
         assert!(dq.capacity() < 8);
         assert!(dq.capacity() >= 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1077,7 +1082,7 @@ mod tests {
         // target = max(4, 2) = 4 == capacity → no-op.
         assert_eq!(dq.try_shrink_to(2), Ok(()));
         assert_eq!(dq.capacity(), 4);
-        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([1, 2, 3, 4]));
     }
 
     #[test]
@@ -1121,7 +1126,7 @@ mod tests {
         // allocator granularity, but must be well under the original 8).
         assert!(dq.capacity() < 8);
         assert!(dq.capacity() >= 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1148,7 +1153,7 @@ mod tests {
         assert_eq!(dq.try_shrink_to_fit(), Ok(()));
         assert!(dq.capacity() < 16);
         assert!(dq.capacity() >= 2);
-        assert_eq!(collect_into_array::<2>(&dq), Some([7, 8]));
+        assert_eq!(collect_into_array::<_, 2>(&dq), Some([7, 8]));
     }
 
     #[test]
@@ -1174,9 +1179,8 @@ mod tests {
         for v in [1, 2, 3] {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
-        let err = match dq.try_shrink_to(2) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_shrink_to(2) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         // Elements intact, length unchanged, and the buffer kept its old size.
@@ -1199,7 +1203,7 @@ mod tests {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
         assert_eq!(dq.len(), 7);
-        assert_eq!(collect_into_array::<7>(&dq), Some([1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(collect_into_array::<_, 7>(&dq), Some([1, 2, 3, 4, 5, 6, 7]));
     }
 
     #[test]
@@ -1228,9 +1232,8 @@ mod tests {
         // Shrinking to 3 (== len) forces compaction of the wrapped element
         // into the front of the buffer *before* the (failing) reallocation.
         // The drop guard must undo that compaction against the original buffer.
-        let err = match dq.try_shrink_to(3) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_shrink_to(3) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
 
@@ -1254,7 +1257,7 @@ mod tests {
         assert_eq!(dq.try_push_back(3), Ok(()));
         assert!(dq.capacity() > 2);
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1268,9 +1271,8 @@ mod tests {
     #[test]
     fn push_back_oom_leaves_deque_unchanged() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let err = match dq.try_push_back(1) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_push_back(1) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1280,9 +1282,8 @@ mod tests {
     #[test]
     fn push_back_give_back_recovers_value_on_failure() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let (returned, err) = match dq.try_push_back_give_back(42) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err((returned, err)) = dq.try_push_back_give_back(42) else {
+            panic!("expected allocation failure")
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1304,7 +1305,7 @@ mod tests {
         // Buffer full; give_back must grow internally and still succeed.
         assert_eq!(dq.try_push_back_give_back(3), Ok(()));
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     // --- try_push_front / give_back --------------------------------------------
@@ -1318,15 +1319,14 @@ mod tests {
         assert_eq!(dq.try_push_front(0), Ok(()));
         assert!(dq.capacity() > 2);
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([0, 1, 2]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([0, 1, 2]));
     }
 
     #[test]
     fn push_front_oom_leaves_deque_unchanged() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let err = match dq.try_push_front(1) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_push_front(1) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1335,9 +1335,8 @@ mod tests {
     #[test]
     fn push_front_give_back_recovers_value_on_failure() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let (returned, err) = match dq.try_push_front_give_back(42) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err((returned, err)) = dq.try_push_front_give_back(42) else {
+            panic!("expected allocation failure")
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1359,7 +1358,7 @@ mod tests {
         // Buffer full; give_back must grow internally and still succeed.
         assert_eq!(dq.try_push_front_give_back(0), Ok(()));
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([0, 2, 1]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([0, 2, 1]));
     }
 
     // --- try_push_back_mut / try_push_front_mut ------------------------------------
@@ -1372,12 +1371,11 @@ mod tests {
         }
         // Append a new element and mutate it through the returned reference;
         // the pre-existing elements must be untouched.
-        let slot = match dq.try_push_back_mut(99) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_back_mut(99) else {
+            panic!("expected success")
         };
         *slot *= 2;
-        assert_eq!(collect_into_array::<4>(&dq), Some([10, 20, 30, 198]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([10, 20, 30, 198]));
     }
 
     #[test]
@@ -1388,12 +1386,11 @@ mod tests {
         }
         // Prepend a new element and mutate it through the returned reference;
         // the pre-existing elements must be untouched.
-        let slot = match dq.try_push_front_mut(-5) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_front_mut(-5) else {
+            panic!("expected success")
         };
         *slot *= 3;
-        assert_eq!(collect_into_array::<4>(&dq), Some([-15, 10, 20, 30]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([-15, 10, 20, 30]));
     }
 
     #[test]
@@ -1405,7 +1402,7 @@ mod tests {
         assert_eq!(dq.try_push_back_mut(3), Ok(&mut 3));
         assert!(dq.capacity() > 2);
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1417,15 +1414,14 @@ mod tests {
         assert_eq!(dq.try_push_front_mut(0), Ok(&mut 0));
         assert!(dq.capacity() > 2);
         assert_eq!(dq.len(), 3);
-        assert_eq!(collect_into_array::<3>(&dq), Some([0, 1, 2]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([0, 1, 2]));
     }
 
     #[test]
     fn push_back_mut_oom_leaves_deque_unchanged() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let err = match dq.try_push_back_mut(1) {
-            Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_push_back_mut(1) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1435,9 +1431,8 @@ mod tests {
     #[test]
     fn push_back_mut_give_back_recovers_value_on_failure() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let (returned, err) = match dq.try_push_back_mut_give_back(42) {
-            Err(pair) => pair,
-            Ok(_) => panic!("expected allocation failure"),
+        let Err((returned, err)) = dq.try_push_back_mut_give_back(42) else {
+            panic!("expected allocation failure")
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1447,9 +1442,8 @@ mod tests {
     #[test]
     fn push_front_mut_oom_leaves_deque_unchanged() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let err = match dq.try_push_front_mut(1) {
-            Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+        let Err(err) = dq.try_push_front_mut(1) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1458,9 +1452,8 @@ mod tests {
     #[test]
     fn push_front_mut_give_back_recovers_value_on_failure() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let (returned, err) = match dq.try_push_front_mut_give_back(42) {
-            Err(pair) => pair,
-            Ok(_) => panic!("expected allocation failure"),
+        let Err((returned, err)) = dq.try_push_front_mut_give_back(42) else {
+            panic!("expected allocation failure")
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1481,20 +1474,18 @@ mod tests {
         // elements are still wrapped across the buffer boundary. Mutate each
         // new element through its returned reference; the four pre-existing
         // elements must be untouched.
-        let back_slot = match dq.try_push_back_mut(9) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(back_slot) = dq.try_push_back_mut(9) else {
+            panic!("expected success")
         };
         *back_slot += 1;
         // Drop the mutable borrow before growing again from the front.
-        let front_slot = match dq.try_push_front_mut(8) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(front_slot) = dq.try_push_front_mut(8) else {
+            panic!("expected success")
         };
         *front_slot -= 1;
         assert!(dq.capacity() > 4);
         assert_eq!(dq.len(), 6);
-        assert_eq!(collect_into_array::<6>(&dq), Some([7, 4, 1, 2, 3, 10]));
+        assert_eq!(collect_into_array::<_, 6>(&dq), Some([7, 4, 1, 2, 3, 10]));
     }
 
     // --- Mixed sequences ---------------------------------------------------------
@@ -1521,7 +1512,10 @@ mod tests {
         assert_eq!(dq.try_push_back(8), Ok(()));
         assert_eq!(dq.try_push_front(1), Ok(()));
         assert_eq!(dq.len(), 8);
-        assert_eq!(collect_into_array::<8>(&dq), Some([1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(
+            collect_into_array::<_, 8>(&dq),
+            Some([1, 2, 3, 4, 5, 6, 7, 8])
+        );
     }
 
     #[test]
@@ -1587,7 +1581,7 @@ mod tests {
         assert_eq!(dq.try_push_back(2), Ok(()));
         // Inserting at index == len should behave like push_back.
         assert_eq!(dq.try_insert(2, 3), Ok(()));
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1597,7 +1591,7 @@ mod tests {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
         assert_eq!(dq.try_insert(2, 99), Ok(()));
-        assert_eq!(collect_into_array::<5>(&dq), Some([1, 2, 99, 3, 4]));
+        assert_eq!(collect_into_array::<_, 5>(&dq), Some([1, 2, 99, 3, 4]));
     }
 
     #[test]
@@ -1607,16 +1601,15 @@ mod tests {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
         assert_eq!(dq.try_insert(0, 0), Ok(()));
-        assert_eq!(collect_into_array::<4>(&dq), Some([0, 1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([0, 1, 2, 3]));
     }
 
     #[test]
     fn insert_out_of_bounds_returns_error() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_insert(5, 99) {
-            Err(e) => e,
-            Ok(()) => panic!("expected out-of-bounds error"),
+        let Err(err) = dq.try_insert(5, 99) else {
+            panic!("expected out-of-bounds error")
         };
         assert_eq!(err, TryVecDequeInsertError::OutOfBounds);
         assert_eq!(dq.len(), 1);
@@ -1626,9 +1619,8 @@ mod tests {
     #[test]
     fn insert_give_back_recovers_value_on_oom() {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
-        let (returned, err) = match dq.try_insert_give_back(0, 42) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err((returned, err)) = dq.try_insert_give_back(0, 42) else {
+            panic!("expected allocation failure")
         };
         assert_eq!(returned, 42);
         assert!(matches!(err, TryVecDequeInsertError::Reserve(_)));
@@ -1643,12 +1635,11 @@ mod tests {
         }
         // Insert in the middle and mutate through the returned reference; the
         // surrounding elements must be untouched.
-        let slot = match dq.try_insert_mut(1, 2) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_insert_mut(1, 2) else {
+            panic!("expected success")
         };
         *slot += 10;
-        assert_eq!(collect_into_array::<4>(&dq), Some([1, 12, 3, 5]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([1, 12, 3, 5]));
     }
 
     #[test]
@@ -1659,7 +1650,7 @@ mod tests {
         // Full; inserting in the middle must grow and still work.
         assert_eq!(dq.try_insert_mut(1, 2), Ok(&mut 2));
         assert!(dq.capacity() > 2);
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1674,7 +1665,7 @@ mod tests {
         // Grow by inserting in the middle (forces reserve).
         assert_eq!(dq.try_insert(2, 99), Ok(()));
         assert_eq!(dq.len(), 5);
-        assert_eq!(collect_into_array::<5>(&dq), Some([4, 1, 99, 2, 3]));
+        assert_eq!(collect_into_array::<_, 5>(&dq), Some([4, 1, 99, 2, 3]));
     }
 
     #[test]
@@ -1697,7 +1688,7 @@ mod tests {
         assert_eq!(b.try_push_back(3), Ok(()));
         assert_eq!(b.try_push_back(4), Ok(()));
         assert_eq!(a.try_append(&mut b), Ok(()));
-        assert_eq!(collect_into_array::<4>(&a), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&a), Some([1, 2, 3, 4]));
         assert!(b.is_empty());
     }
 
@@ -1707,7 +1698,7 @@ mod tests {
         let mut b: VecDeque<i32> = VecDeque::new();
         assert_eq!(a.try_push_back(1), Ok(()));
         assert_eq!(a.try_append(&mut b), Ok(()));
-        assert_eq!(collect_into_array::<1>(&a), Some([1]));
+        assert_eq!(collect_into_array::<_, 1>(&a), Some([1]));
     }
 
     #[test]
@@ -1721,7 +1712,7 @@ mod tests {
         }
         assert_eq!(a.try_append(&mut b), Ok(()));
         assert!(a.capacity() >= 5);
-        assert_eq!(collect_into_array::<5>(&a), Some([1, 2, 3, 4, 5]));
+        assert_eq!(collect_into_array::<_, 5>(&a), Some([1, 2, 3, 4, 5]));
         assert!(b.is_empty());
     }
 
@@ -1736,7 +1727,7 @@ mod tests {
         assert_eq!(b.try_push_back(4), Ok(()));
         assert_eq!(a.try_append(&mut b), Ok(()));
         assert!(a.capacity() >= 4);
-        assert_eq!(collect_into_array::<4>(&a), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&a), Some([1, 2, 3, 4]));
         assert!(b.is_empty());
     }
 
@@ -1749,7 +1740,7 @@ mod tests {
         assert_eq!(b.try_push_back(1), Ok(()));
         assert_eq!(b.try_push_back(2), Ok(()));
         assert_eq!(a.try_prepend(&mut b), Ok(()));
-        assert_eq!(collect_into_array::<4>(&a), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&a), Some([1, 2, 3, 4]));
         assert!(b.is_empty());
     }
 
@@ -1762,7 +1753,7 @@ mod tests {
         assert_eq!(b.try_push_back(2), Ok(()));
         assert_eq!(b.try_push_back(3), Ok(()));
         assert_eq!(a.try_prepend(&mut b), Ok(()));
-        assert_eq!(collect_into_array::<4>(&a), Some([1, 2, 3, 10]));
+        assert_eq!(collect_into_array::<_, 4>(&a), Some([1, 2, 3, 10]));
     }
 
     #[test]
@@ -1776,7 +1767,7 @@ mod tests {
         }
         assert_eq!(a.try_prepend(&mut b), Ok(()));
         assert!(a.capacity() >= 5);
-        assert_eq!(collect_into_array::<5>(&a), Some([1, 2, 5, 3, 4]));
+        assert_eq!(collect_into_array::<_, 5>(&a), Some([1, 2, 5, 3, 4]));
         assert!(b.is_empty());
     }
 
@@ -1791,7 +1782,7 @@ mod tests {
         assert_eq!(b.try_push_back(2), Ok(()));
         assert_eq!(a.try_prepend(&mut b), Ok(()));
         assert!(a.capacity() >= 4);
-        assert_eq!(collect_into_array::<4>(&a), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&a), Some([1, 2, 3, 4]));
         assert!(b.is_empty());
     }
 
@@ -1810,9 +1801,8 @@ mod tests {
         // must fail before any element moves.
         let mut a = oom_deque(1); // [1, 2]
         let mut b = oom_deque(3); // [3, 4]
-        let err = match a.try_append(&mut b) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = a.try_append(&mut b) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         // Neither deque may have been touched on failure.
@@ -1824,9 +1814,8 @@ mod tests {
     fn prepend_oom_leaves_both_deques_unchanged() {
         let mut a = oom_deque(1); // [1, 2]
         let mut b = oom_deque(3); // [3, 4]
-        let err = match a.try_prepend(&mut b) {
-            Err(e) => e,
-            Ok(()) => panic!("expected allocation failure"),
+        let Err(err) = a.try_prepend(&mut b) else {
+            panic!("expected allocation failure")
         };
         assert!(err.is_alloc());
         assert_eq!(collect_any::<2, BudgetedAlloc>(&a), Some([1, 2]));
@@ -1848,7 +1837,7 @@ mod tests {
         assert_eq!(b.try_push_back(7), Ok(()));
         assert_eq!(b.try_push_front(5), Ok(()));
         assert_eq!(a.try_append(&mut b), Ok(()));
-        assert_eq!(collect_into_array::<6>(&a), Some([3, 1, 2, 5, 6, 7]));
+        assert_eq!(collect_into_array::<_, 6>(&a), Some([3, 1, 2, 5, 6, 7]));
         assert!(b.is_empty());
     }
 
@@ -1866,7 +1855,7 @@ mod tests {
         assert_eq!(b.try_push_front(5), Ok(()));
         assert_eq!(a.try_prepend(&mut b), Ok(()));
         // b's front (5) lands adjacent to a's old front (3).
-        assert_eq!(collect_into_array::<6>(&a), Some([5, 6, 7, 3, 1, 2]));
+        assert_eq!(collect_into_array::<_, 6>(&a), Some([5, 6, 7, 3, 1, 2]));
         assert!(b.is_empty());
     }
 
@@ -1897,7 +1886,7 @@ mod tests {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
         assert_eq!(dq.try_resize(3, &99), Ok(()));
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
         assert_eq!(dq.len(), 3);
     }
 
@@ -1908,7 +1897,7 @@ mod tests {
             assert_eq!(dq.try_push_back(v), Ok(()));
         }
         assert_eq!(dq.try_resize(3, &99), Ok(()));
-        assert_eq!(collect_into_array::<3>(&dq), Some([1, 2, 3]));
+        assert_eq!(collect_into_array::<_, 3>(&dq), Some([1, 2, 3]));
     }
 
     #[test]
@@ -1917,14 +1906,14 @@ mod tests {
         assert_eq!(dq.try_push_back(1), Ok(()));
         assert_eq!(dq.try_push_back(2), Ok(()));
         assert_eq!(dq.try_resize(5, &42), Ok(()));
-        assert_eq!(collect_into_array::<5>(&dq), Some([1, 2, 42, 42, 42]));
+        assert_eq!(collect_into_array::<_, 5>(&dq), Some([1, 2, 42, 42, 42]));
     }
 
     #[test]
     fn try_resize_grow_from_empty() {
         let mut dq: VecDeque<i32> = VecDeque::new();
         assert_eq!(dq.try_resize(4, &7), Ok(()));
-        assert_eq!(collect_into_array::<4>(&dq), Some([7, 7, 7, 7]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([7, 7, 7, 7]));
     }
 
     #[test]
@@ -1979,7 +1968,7 @@ mod tests {
         });
         assert_eq!(res, Ok(()));
         assert_eq!(calls, 0, "closure must not run when shrinking");
-        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+        assert_eq!(collect_into_array::<_, 2>(&dq), Some([1, 2]));
     }
 
     #[test]
@@ -1993,7 +1982,7 @@ mod tests {
         });
         assert_eq!(res, Ok(()));
         // New slots are filled in order: 2, 3, 4.
-        assert_eq!(collect_into_array::<4>(&dq), Some([1, 2, 3, 4]));
+        assert_eq!(collect_into_array::<_, 4>(&dq), Some([1, 2, 3, 4]));
     }
 
     #[test]
@@ -2010,22 +1999,18 @@ mod tests {
 
     #[test]
     fn try_resize_with_closure_error_rolls_back() {
-        let mut dq = VecDeque::<i32>::try_with_capacity(8).expect("allocation ok");
+        let mut dq = VecDeque::<usize>::try_with_capacity(8).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
         assert_eq!(dq.try_push_back(2), Ok(()));
         let mut seen = 0usize;
         let res = dq.try_resize_with(5, || {
             seen += 1;
-            if seen == 2 {
-                Err("boom")
-            } else {
-                Ok(seen as i32)
-            }
+            if seen == 2 { Err("boom") } else { Ok(seen) }
         });
         assert!(matches!(res, Err(TryVecDequeWithClosureError::Closure(_))));
         // Rolled back to the original length of 2.
         assert_eq!(dq.len(), 2);
-        assert_eq!(collect_into_array::<2>(&dq), Some([1, 2]));
+        assert_eq!(collect_into_array::<_, 2>(&dq), Some([1, 2]));
     }
 
     #[test]

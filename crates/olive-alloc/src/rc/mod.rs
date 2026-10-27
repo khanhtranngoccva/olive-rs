@@ -134,10 +134,7 @@ impl<T: ?Sized, A: Allocator> Drop for Weak<T, A> {
         // A dangling weak (from `Weak::new`) owns no allocation, so there is
         // nothing to decrement or free — return immediately. `inner()` folds
         // the sentinel check into one call.
-        let inner = match self.inner() {
-            Some(i) => i,
-            None => return,
-        };
+        let Some(inner) = self.inner() else { return };
 
         // Decrement the weak count. If this was the last reference of any kind
         // (strong already zero, and now weak hits zero), free the allocation.

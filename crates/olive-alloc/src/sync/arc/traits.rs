@@ -77,10 +77,7 @@ impl<T: ?Sized, A: AllocatorTryClone> TryClone for Weak<T, A> {
                 _marker: core::marker::PhantomData,
             });
         }
-        let inner = match self.inner() {
-            Some(i) => i,
-            None => unreachable!("non-dangling weak must have a valid inner allocation"),
-        };
+        let Some(inner) = self.inner() else { unreachable!("non-dangling weak must have a valid inner allocation") };
         inner
             .weak
             .fetch_update(
@@ -427,7 +424,7 @@ mod tests {
 
     #[test]
     fn weak_default_is_dangling() {
-        let w: Weak<i32, Global> = Default::default();
+        let w: Weak<i32, Global> = Weak::default();
         assert!(pointers::is_dangling_weak(w.ptr.as_ptr()));
         assert!(w.inner().is_none());
     }

@@ -893,7 +893,7 @@ mod tests {
         assert_eq!(val, 42);
         match err {
             TryVecInsertError::Reserve(_) => {}
-            other => panic!("expected Reserve, got {other:?}"),
+            other @ TryVecInsertError::OutOfBounds => panic!("expected Reserve, got {other:?}"),
         }
     }
 

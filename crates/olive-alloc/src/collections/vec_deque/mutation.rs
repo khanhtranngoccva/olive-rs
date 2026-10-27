@@ -1421,7 +1421,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// # Panics
     ///
-    /// This method should not panic on any VecDeque instances.
+    /// This method should not panic on any [`VecDeque`] instances.
     pub fn try_swap_remove_front(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
         let len = self.len;
         if index >= len {
@@ -1484,7 +1484,28 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// length, nothing happens.
     ///
     /// Truncation never allocates, so this cannot fail.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the [`Drop`] implementation of the elements panic.
+    /// It does not affect the deque's invariants in any way.
     pub fn truncate(&mut self, new_len: usize) {
+        // Panic guard for the second run: if dropping the first run panics,
+        // this guard ensures the second run is still cleaned up during unwind
+        // rather than leaked. On the happy path the guard simply drops `b`
+        // when it goes out of scope after `a` has been dropped.
+        struct SecondRunGuard<'a, T> {
+            ptr: *mut [T],
+            _marker: core::marker::PhantomData<&'a mut [T]>,
+        }
+        impl<T> Drop for SecondRunGuard<'_, T> {
+            fn drop(&mut self) {
+                // SAFETY: the pointer was built from `buffer_range` over
+                // initialized, in-bounds slots and has not been consumed yet.
+                unsafe { ptr::drop_in_place(&mut *self.ptr) };
+            }
+        }
+
         // Truncating to a length >= current length is a no-op (matches std).
         if new_len >= self.len {
             return;
@@ -1506,21 +1527,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // dropped tail and cannot double-free it. (A second panic during unwind
         // aborts, per Rust's rules.)
         self.len = new_len;
-        // Panic guard for the second run: if dropping the first run panics,
-        // this guard ensures the second run is still cleaned up during unwind
-        // rather than leaked. On the happy path the guard simply drops `b`
-        // when it goes out of scope after `a` has been dropped.
-        struct SecondRunGuard<'a, T> {
-            ptr: *mut [T],
-            _marker: core::marker::PhantomData<&'a mut [T]>,
-        }
-        impl<T> Drop for SecondRunGuard<'_, T> {
-            fn drop(&mut self) {
-                // SAFETY: the pointer was built from `buffer_range` over
-                // initialized, in-bounds slots and has not been consumed yet.
-                unsafe { ptr::drop_in_place(&mut *self.ptr) };
-            }
-        }
+
         let _guard = SecondRunGuard {
             ptr: b_slice,
             _marker: core::marker::PhantomData,
@@ -1538,7 +1545,28 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// If `keep` is greater than or equal to the current length, nothing
     /// happens. Trimming never allocates, so this cannot fail.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the [`Drop`] implementation of the elements panic.
+    /// It does not affect the deque's invariants in any way.
     pub fn retain_back(&mut self, keep: usize) {
+        // Panic guard for the second run: if dropping the first run panics,
+        // this guard ensures the second run is still cleaned up during unwind
+        // rather than leaked. On the happy path the guard simply drops `b`
+        // when it goes out of scope after `a` has been dropped.
+        struct SecondRunGuard<'a, T> {
+            ptr: *mut [T],
+            _marker: core::marker::PhantomData<&'a mut [T]>,
+        }
+        impl<T> Drop for SecondRunGuard<'_, T> {
+            fn drop(&mut self) {
+                // SAFETY: the pointer was built from `buffer_range` over
+                // initialized, in-bounds slots and has not been consumed yet.
+                unsafe { ptr::drop_in_place(&mut *self.ptr) };
+            }
+        }
+
         // Keeping at least everything we have is a no-op (mirrors `truncate`).
         if keep >= self.len {
             return;
@@ -1577,21 +1605,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         // `removed` stays within bounds.
         self.head = unsafe { self.wrap_add(self.head, removed) };
         self.len = keep;
-        // Panic guard for the second run: if dropping the first run panics,
-        // this guard ensures the second run is still cleaned up during unwind
-        // rather than leaked. On the happy path the guard simply drops `b`
-        // when it goes out of scope after `a` has been dropped.
-        struct SecondRunGuard<'a, T> {
-            ptr: *mut [T],
-            _marker: core::marker::PhantomData<&'a mut [T]>,
-        }
-        impl<T> Drop for SecondRunGuard<'_, T> {
-            fn drop(&mut self) {
-                // SAFETY: the pointer was built from `buffer_range` over
-                // initialized, in-bounds slots and has not been consumed yet.
-                unsafe { ptr::drop_in_place(&mut *self.ptr) };
-            }
-        }
+
         let _guard = SecondRunGuard {
             ptr: b_slice,
             _marker: core::marker::PhantomData,
@@ -1756,15 +1770,13 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let err = match dq.try_push_back_within_capacity(3) {
-            Err(e) => e,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_push_back_within_capacity(3) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err.len, 2);
         // Same from the front.
-        let err = match dq.try_push_front_within_capacity(0) {
-            Err(e) => e,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_push_front_within_capacity(0) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err.len, 2);
         // The rejected values were not inserted and the deque is unchanged.
@@ -1777,9 +1789,8 @@ mod tests {
     #[test]
     fn zero_capacity_rejects_immediately() {
         let mut dq: VecDeque<i32> = VecDeque::new();
-        let err = match dq.try_push_back_within_capacity(1) {
-            Err(e) => e,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_push_back_within_capacity(1) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err.len, 0);
         assert!(dq.is_empty());
@@ -1814,9 +1825,8 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let (returned, err) = match dq.try_push_back_within_capacity_give_back(3) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err((returned, err)) = dq.try_push_back_within_capacity_give_back(3) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(returned, 3);
         assert_eq!(err.len, 2);
@@ -1830,9 +1840,8 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let (returned, err) = match dq.try_push_front_within_capacity_give_back(0) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err((returned, err)) = dq.try_push_front_within_capacity_give_back(0) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(returned, 0);
         assert_eq!(err.len, 2);
@@ -1859,9 +1868,8 @@ mod tests {
         }
         // Push a new element at the back and mutate it through the returned
         // reference; the pre-existing elements must be untouched.
-        let slot = match dq.try_push_back_mut_within_capacity(99) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_back_mut_within_capacity(99) else {
+            panic!("expected success")
         };
         *slot *= 2;
         assert_eq!(collect_into_array::<4>(&dq), Some([10, 20, 30, 198]));
@@ -1875,9 +1883,8 @@ mod tests {
         }
         // Prepend a new element and mutate it through the returned reference;
         // the pre-existing elements must be untouched.
-        let slot = match dq.try_push_front_mut_within_capacity(-5) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_front_mut_within_capacity(-5) else {
+            panic!("expected success")
         };
         *slot *= 3;
         assert_eq!(collect_into_array::<4>(&dq), Some([-15, 10, 20, 30]));
@@ -1888,9 +1895,8 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let (returned, err) = match dq.try_push_back_mut_within_capacity_give_back(3) {
-            Err(pair) => pair,
-            Ok(_) => panic!("expected full-buffer error"),
+        let Err((returned, err)) = dq.try_push_back_mut_within_capacity_give_back(3) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(returned, 3);
         assert_eq!(err.len, 2);
@@ -1904,9 +1910,8 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let (returned, err) = match dq.try_push_front_mut_within_capacity_give_back(0) {
-            Err(pair) => pair,
-            Ok(_) => panic!("expected full-buffer error"),
+        let Err((returned, err)) = dq.try_push_front_mut_within_capacity_give_back(0) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(returned, 0);
         assert_eq!(err.len, 2);
@@ -1934,9 +1939,8 @@ mod tests {
             Ok(())
         );
         // Buffer is full; the plain (non-give-back) variant drops the rejected value.
-        let err = match dq.try_push_back_mut_within_capacity(Tracked(counter.clone())) {
-            Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_push_back_mut_within_capacity(Tracked(counter.clone())) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err.len, 1);
         assert_eq!(counter.get(), 1);
@@ -1951,9 +1955,8 @@ mod tests {
             Ok(())
         );
         // Buffer is full; the plain (non-give-back) variant drops the rejected value.
-        let err = match dq.try_push_front_mut_within_capacity(Tracked(counter.clone())) {
-            Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_push_front_mut_within_capacity(Tracked(counter.clone())) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err.len, 1);
         assert_eq!(counter.get(), 1);
@@ -1979,9 +1982,8 @@ mod tests {
         assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
         // One spare slot remains; push back through the returned reference and
         // verify the five pre-existing elements are untouched.
-        let slot = match dq.try_push_back_mut_within_capacity(7) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_back_mut_within_capacity(7) else {
+            panic!("expected success")
         };
         *slot *= 10;
         assert_eq!(collect_into_array::<6>(&dq), Some([5, 4, 1, 2, 3, 70]));
@@ -1998,9 +2000,8 @@ mod tests {
         assert_eq!(dq.try_push_front_within_capacity(5), Ok(()));
         // One spare slot remains; prepend through the returned reference and
         // verify the five pre-existing elements are untouched.
-        let slot = match dq.try_push_front_mut_within_capacity(-7) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_push_front_mut_within_capacity(-7) else {
+            panic!("expected success")
         };
         *slot *= 10;
         assert_eq!(collect_into_array::<6>(&dq), Some([-70, 5, 4, 1, 2, 3]));
@@ -2052,9 +2053,8 @@ mod tests {
     fn insert_within_capacity_out_of_bounds() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
-        let err = match dq.try_insert_within_capacity(5, 99) {
-            Err(e) => e,
-            Ok(()) => panic!("expected out-of-bounds error"),
+        let Err(err) = dq.try_insert_within_capacity(5, 99) else {
+            panic!("expected out-of-bounds error")
         };
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
         assert_eq!(dq.len(), 1);
@@ -2066,9 +2066,8 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
         // Full; inserting anywhere must fail with Full.
-        let err = match dq.try_insert_within_capacity(0, 99) {
-            Err(e) => e,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err(err) = dq.try_insert_within_capacity(0, 99) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
         // Deque unchanged.
@@ -2081,9 +2080,8 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(2).expect("allocation ok");
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
-        let (returned, err) = match dq.try_insert_within_capacity_give_back(0, 99) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected full-buffer error"),
+        let Err((returned, err)) = dq.try_insert_within_capacity_give_back(0, 99) else {
+            panic!("expected full-buffer error")
         };
         assert_eq!(returned, 99);
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
@@ -2093,9 +2091,8 @@ mod tests {
     #[test]
     fn insert_within_capacity_give_back_recovers_value_on_oob() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
-        let (returned, err) = match dq.try_insert_within_capacity_give_back(5, 42) {
-            Err(pair) => pair,
-            Ok(()) => panic!("expected out-of-bounds error"),
+        let Err((returned, err)) = dq.try_insert_within_capacity_give_back(5, 42) else {
+            panic!("expected out-of-bounds error")
         };
         assert_eq!(returned, 42);
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
@@ -2110,9 +2107,8 @@ mod tests {
         }
         // Insert in the middle and mutate through the returned reference; the
         // surrounding elements must be untouched.
-        let slot = match dq.try_insert_mut_within_capacity(1, 2) {
-            Ok(r) => r,
-            Err(_) => panic!("expected success"),
+        let Ok(slot) = dq.try_insert_mut_within_capacity(1, 2) else {
+            panic!("expected success")
         };
         *slot += 10;
         assert_eq!(collect_into_array::<4>(&dq), Some([1, 12, 3, 5]));
@@ -2779,9 +2775,8 @@ mod tests {
     fn try_remove_out_of_bounds_reports_len() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_remove(5) {
-            Err(e) => e,
-            Ok(_) => panic!("expected out-of-bounds"),
+        let Err(err) = dq.try_remove(5) else {
+            panic!("expected out-of-bounds")
         };
         assert_eq!(err.index, 5);
         assert_eq!(err.len, 1);
@@ -2793,9 +2788,8 @@ mod tests {
     #[test]
     fn try_remove_on_empty_is_out_of_bounds() {
         let mut dq: VecDeque<i32> = VecDeque::new();
-        let err = match dq.try_remove(0) {
-            Err(e) => e,
-            Ok(_) => panic!("expected out-of-bounds"),
+        let Err(err) = dq.try_remove(0) else {
+            panic!("expected out-of-bounds")
         };
         assert_eq!(err.index, 0);
         assert_eq!(err.len, 0);
@@ -2918,9 +2912,8 @@ mod tests {
     fn try_swap_out_of_bounds_first_index() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_swap(5, 0) {
-            Err(e) => e,
-            Ok(()) => panic!("expected error"),
+        let Err(err) = dq.try_swap(5, 0) else {
+            panic!("expected error")
         };
         assert_eq!(err.i, 5);
         assert_eq!(err.j, 0);
@@ -2931,9 +2924,8 @@ mod tests {
     fn try_swap_out_of_bounds_second_index() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_swap(0, 3) {
-            Err(e) => e,
-            Ok(()) => panic!("expected error"),
+        let Err(err) = dq.try_swap(0, 3) else {
+            panic!("expected error")
         };
         assert_eq!(err.i, 0);
         assert_eq!(err.j, 3);
@@ -2943,9 +2935,8 @@ mod tests {
     #[test]
     fn try_swap_on_empty_fails() {
         let mut dq: VecDeque<i32> = VecDeque::new();
-        let err = match dq.try_swap(0, 0) {
-            Err(e) => e,
-            Ok(()) => panic!("expected error"),
+        let Err(err) = dq.try_swap(0, 0) else {
+            panic!("expected error")
         };
         assert_eq!(err.len, 0);
     }
@@ -3003,9 +2994,8 @@ mod tests {
     fn try_swap_remove_back_out_of_bounds() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_swap_remove_back(3) {
-            Err(e) => e,
-            Ok(_) => panic!("expected error"),
+        let Err(err) = dq.try_swap_remove_back(3) else {
+            panic!("expected error")
         };
         assert_eq!(err.index, 3);
         assert_eq!(err.len, 1);
@@ -3065,12 +3055,11 @@ mod tests {
     fn try_swap_remove_front_out_of_bounds() {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         assert_eq!(dq.try_push_back(1), Ok(()));
-        let err = match dq.try_swap_remove_front(5) {
-            Err(e) => e,
-            Ok(_) => panic!("expected error"),
+        let Err(e) = dq.try_swap_remove_front(5) else {
+            panic!("expected error")
         };
-        assert_eq!(err.index, 5);
-        assert_eq!(err.len, 1);
+        assert_eq!(e.index, 5);
+        assert_eq!(e.len, 1);
     }
 
     #[test]
