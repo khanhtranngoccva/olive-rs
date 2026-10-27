@@ -801,43 +801,21 @@ mod tests {
     /// drop (double-free) those elements again.
     #[test]
     fn truncate_panicking_drop_is_safe() {
-
-
-        /// Panics exactly once, the first time it runs while armed; records its id.
-        struct PanicDrop {
-            id: u32,
-            ledger: Arc<Ledger>,
-            armer: Arc<PanicArmer>,
-        }
-        // FIXME: use a PanickyDrop
-        impl Drop for PanicDrop {
-            fn drop(&mut self) {
-                self.ledger.unregister(self.id);
-                assert!(!self.armer.fetch_and_disarm(), "forced panic in drop");
-            }
-        }
-
         let ledger = Arc::new(Ledger::new());
         let armer = Arc::new(PanicArmer::new());
-
-        armer.arm();
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
             let l = ledger.clone();
             let a = armer.clone();
             move || {
                 let mut v = Vec::new();
-                for i in 0..4u32 {
-                    l.register(i);
-                    v.try_push(PanicDrop {
-                        id: i,
-                        ledger: l.clone(),
-                        armer: a.clone(),
-                    })
-                    .unwrap();
+                for _ in 0..4u32 {
+                    v.try_push(TrackedItem::construct(&l, PanickyDrop::new(a.clone())))
+                        .unwrap();
                 }
-                // Truncate off the last two (ids 2 and 3); the first one dropped
-                // (id 3) panics, which disarms the armer for any later drops.
+                armer.arm();
+                // Truncate off the last two; the first one dropped panics, which
+                // disarms the armer for any later drops.
                 v.truncate(2);
             }
         }));

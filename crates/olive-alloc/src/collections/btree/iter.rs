@@ -962,8 +962,9 @@ impl<K, V, A: Allocator> BTreeMap<K, V, A> {
     {
         super::search::validate_range_bounds::<T, R>(&range)?;
         let range = match &self.root {
-            // FIXME: the check is performed twice
-            Some(root) => root.reborrow().range_search(range),
+            // The bounds have already been validated above, so the search can
+            // skip the diagnostic checks inside `range_search`.
+            Some(root) => root.reborrow().range_search(range, false),
             None => LeafRange::none(),
         };
         Ok(Range { range })
@@ -988,8 +989,9 @@ impl<K, V, A: Allocator> BTreeMap<K, V, A> {
     {
         super::search::validate_range_bounds::<T, R>(&range)?;
         let range = match &mut self.root {
-            // FIXME: the check is performed twice
-            Some(root) => root.borrow_valmut().range_search(range),
+            // The bounds have already been validated above, so the search can
+            // skip the diagnostic checks inside `range_search`.
+            Some(root) => root.borrow_valmut().range_search(range, false),
             None => LeafRange::none(),
         };
         Ok(RangeMut {

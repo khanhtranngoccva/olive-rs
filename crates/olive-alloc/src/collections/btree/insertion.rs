@@ -4,11 +4,10 @@
 //! insertion logic lives in [`entry`](super::entry) and
 //! [`node`](super::node).
 
-use crate::alloc::{AllocError, Allocator};
-
 use super::TryBTreeMapUniqueError;
-use super::entry::Entry;
+use super::entry::{Entry, EntryWithKey};
 use super::map::BTreeMap;
+use crate::alloc::{AllocError, Allocator};
 
 impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     /// Inserts a key-value pair into the map, attempting allocation as needed.
@@ -47,6 +46,43 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
         match self.entry(key) {
             Entry::Occupied(mut occ) => Ok(Some(occ.insert(value))),
             Entry::Vacant(vac) => match vac.try_insert_entry(value) {
+                Ok(_) => Ok(None),
+                Err((k, v, e)) => Err((k, v, e)),
+            },
+        }
+    }
+
+    /// Replaces the key and value at `key` with the given ones if the key is
+    /// already present, otherwise inserts the pair, returning the key and
+    /// value back on allocation failure so the caller can retry or salvage
+    /// them.
+    ///
+    /// An existing pair is replaced *in place* — equal keys may still be
+    /// distinct values, so the stored key is swapped too — and that path
+    /// performs no allocation, so it cannot fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err((key, value, AllocError))` if memory allocation fails
+    /// during insertion of a previously-absent key. The tree is left
+    /// unmodified on failure.
+    pub(crate) fn try_replace_give_back(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Result<Option<(K, V)>, (K, V, AllocError)> {
+        // Single descent: either we get a fillable vacant slot back, or the
+        // probed key arrives with an occupied entry.
+        match self.entry_with_key(key) {
+            // Collision: replace the key and value.
+            EntryWithKey::Occupied(mut e, k) => {
+                let old_k = unsafe { e.replace_key_unchecked(k) };
+                let old_v = e.insert(value);
+                Ok(Some((old_k, old_v)))
+            }
+            // Absent: fill the slot; on allocation failure the stranded pair
+            // is returned separately from the error.
+            EntryWithKey::Vacant(vac) => match vac.try_insert_entry(value) {
                 Ok(_) => Ok(None),
                 Err((k, v, e)) => Err((k, v, e)),
             },
@@ -96,12 +132,12 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
     ) -> Result<(), (K, V, TryBTreeMapUniqueError)> {
         // Single descent: either we get a fillable vacant slot back, or the
         // probed key comes straight back because it was already present.
-        match super::entry::VacantEntry::vacant_entry_give_back(self, key) {
+        match self.entry_with_key(key) {
             // Collision: hand the probed pair back alongside KeyExists.
-            Err(k) => Err((k, value, TryBTreeMapUniqueError::KeyExists)),
+            EntryWithKey::Occupied(_e, k) => Err((k, value, TryBTreeMapUniqueError::KeyExists)),
             // Absent: fill the slot; on allocation failure the stranded pair
             // is returned separately from the error.
-            Ok(vac) => match vac.try_insert_entry(value) {
+            EntryWithKey::Vacant(vac) => match vac.try_insert_entry(value) {
                 Ok(_) => Ok(()),
                 Err((k, v, e)) => Err((k, v, TryBTreeMapUniqueError::Alloc(e))),
             },
@@ -183,11 +219,13 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
 mod tests {
     extern crate std;
     use super::super::map::BTreeMap;
+    use crate::alloc::AllocError;
     use crate::alloc::Global;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
     use olive_test_helpers::{BudgetedAlloc, Ledger, TrackedItem};
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::vec::Vec;
 
     #[test]
     fn insert_and_get_single() {
@@ -231,7 +269,10 @@ mod tests {
                 }
             }
         }
-        let h = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
+        let h = map
+            .root
+            .as_ref()
+            .map_or(0, super::super::node::NodeRef::height);
         assert_eq!(
             missing_count, 0,
             "Missing {missing_count} keys after leaf split, first missing={first_missing}, height={h}"
@@ -250,7 +291,10 @@ mod tests {
         }
         assert_eq!(map.len(), 95);
         // Root growth means the tree is now at least two levels deep.
-        let h = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
+        let h = map
+            .root
+            .as_ref()
+            .map_or(0, super::super::node::NodeRef::height);
         assert!(
             h >= 2,
             "expected multi-level tree (root grew), got height {h}"
@@ -787,5 +831,67 @@ mod tests {
             ledger.leaked_ids()
         );
         assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_replaces_in_place_and_inserts_when_absent() {
+        let mut m = BTreeMap::new_in(Global);
+
+        // Empty map: replace must fall back to insertion.
+        assert_eq!(m.try_replace_give_back(1, "one"), Ok(None));
+        assert_eq!(m.get(&1), Some(&"one"));
+
+        // Populated map: plain insertion also goes through the entry path.
+        assert_eq!(m.try_insert(2, "two"), Ok(None));
+        // Existing key: the whole pair is swapped in place, and the old pair
+        // comes back.
+        assert_eq!(m.try_replace_give_back(2, "TWO"), Ok(Some((2, "two"))));
+        assert_eq!(m.get(&2), Some(&"TWO"));
+        // The key swap must be visible through the ordering machinery.
+        let got: Vec<i32> = m.keys().copied().collect();
+        assert_eq!(got.as_slice(), [1, 2]);
+        assert_eq!(m.len(), 2);
+
+        // Absent key: plain insertion again.
+        assert_eq!(m.try_replace_give_back(3, "three"), Ok(None));
+        assert_eq!(m.get(&3), Some(&"three"));
+        assert_eq!(m.len(), 3);
+
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+    }
+
+    // FIXME: try_replace success changes the ID (identity) of the TrackedItem value in the set
+
+    // FIXME: try_replace OOM drops value
+
+    // FIXME: try_replace_give_back success changes the ID (identity) of the TrackedItem value in the set
+
+    #[test]
+    fn try_replace_give_back_on_oom() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut m: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        // Fill the sole leaf to CAPACITY (11) so that inserting an absent
+        // key forces a split, and thus an allocation.
+        for i in 1..=11u32 {
+            m.try_insert(i, i * 10).unwrap();
+        }
+        alloc.drain();
+
+        // Existing key: replacement is in place and must succeed even with
+        // the budget fully drained, since it performs no allocation.
+        assert_eq!(m.try_replace_give_back(2, 200), Ok(Some((2, 20))));
+        assert_eq!(m.get(&2), Some(&200));
+        assert_eq!(m.len(), 11);
+
+        // Absent key: insertion needs an allocation (the split), so it must
+        // fail and return the probed pair.
+        assert_eq!(m.try_replace_give_back(12, 120), Err((12, 120, AllocError)));
+        assert_eq!(m.get(&12), None);
+        assert_eq!(m.len(), 11);
+        check_tree_invariant(&m);
+        check_ascending_keys(&m);
+
+        drop(m);
     }
 }

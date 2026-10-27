@@ -109,10 +109,15 @@ impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Lea
     /// As a diagnostic service, panics if the range specifies impossible bounds.
     ///
     /// The result is meaningful only if the tree is ordered by key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `with_bounds_check` is true and the range mismatches.
     #[allow(clippy::type_complexity, reason = "std uses this type declaration")]
     pub(super) fn search_tree_for_bifurcation<Q, R>(
-        mut self,
+        self,
         range: &R,
+        with_bounds_check: bool,
     ) -> Result<
         (
             NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
@@ -131,17 +136,45 @@ impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Lea
         // Inlining these variables should be avoided. We assume the bounds reported by `range`
         // remain the same, but an adversarial implementation could change between calls (#81138).
         let (start, end) = (range.start_bound(), range.end_bound());
-        match (start, end) {
-            (Bound::Excluded(s), Bound::Excluded(e)) if s == e => {
-                panic!("range start and end are equal and excluded in BTree*")
+        if with_bounds_check {
+            match (start, end) {
+                (Bound::Excluded(s), Bound::Excluded(e)) if s == e => {
+                    panic!("range start and end are equal and excluded in BTree*")
+                }
+                (
+                    Bound::Included(s) | Bound::Excluded(s),
+                    Bound::Included(e) | Bound::Excluded(e),
+                ) if s > e => {
+                    panic!("range start is greater than range end in BTree*")
+                }
+                _ => {}
             }
-            (Bound::Included(s) | Bound::Excluded(s), Bound::Included(e) | Bound::Excluded(e))
-                if s > e =>
-            {
-                panic!("range start is greater than range end in BTree*")
-            }
-            _ => {}
         }
+        self.search_tree_for_bifurcation_with_bounds(start, end)
+    }
+
+    /// The search itself, parameterized over already-extracted-and-validated bounds.
+    /// Unlike [`Self::search_tree_for_bifurcation`], this function takes two bound
+    /// arguments.
+    #[allow(clippy::type_complexity, reason = "std uses this type declaration")]
+    fn search_tree_for_bifurcation_with_bounds<'a, Q>(
+        mut self,
+        start: Bound<&'a Q>,
+        end: Bound<&'a Q>,
+    ) -> Result<
+        (
+            NodeRef<BorrowType, K, V, marker::LeafOrInternal>,
+            usize,
+            usize,
+            SearchBound<&'a Q>,
+            SearchBound<&'a Q>,
+        ),
+        Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::Edge>,
+    >
+    where
+        Q: Ord + ?Sized,
+        K: Borrow<Q>,
+    {
         let mut lower_bound = SearchBound::from_range(start);
         let mut upper_bound = SearchBound::from_range(end);
         loop {

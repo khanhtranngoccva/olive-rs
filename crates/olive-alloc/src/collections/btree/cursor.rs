@@ -630,10 +630,9 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
         }
         // SAFETY: The handle, root, allocator and length all come from the same
         // map, and the caller has upheld the map invariants.
-        let handle = self.current.take();
         match unsafe {
             entry::do_two_phase(
-                handle,
+                &mut self.current,
                 &mut self.root,
                 key,
                 value,
@@ -645,9 +644,9 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
                 self.current = Some(new.left_edge());
                 Ok(())
             }
-            Err((key, value, e, restored)) => {
-                // The tree is untouched; put the cursor back where it was.
-                self.current = restored;
+            Err((key, value, e)) => {
+                // The tree is untouched; do_two_phase already put the cursor
+                // back where it was.
                 Err((key, value, e))
             }
         }
@@ -702,12 +701,11 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
         if *self.length == usize::MAX {
             return Err((key, value, AllocError));
         }
-        let handle = self.current.take();
         // SAFETY: The handle, root, allocator and length all come from the same
         // map, and the caller has upheld the map invariants.
         match unsafe {
             entry::do_two_phase(
-                handle,
+                &mut self.current,
                 &mut self.root,
                 key,
                 value,
@@ -719,9 +717,9 @@ impl<K: Ord, V, A: Allocator> CursorMutKey<'_, K, V, A> {
                 self.current = Some(new.right_edge());
                 Ok(())
             }
-            Err((key, value, e, restored)) => {
-                // The tree is untouched; put the cursor back where it was.
-                self.current = restored;
+            Err((key, value, e)) => {
+                // The tree is untouched; do_two_phase already put the cursor
+                // back where it was.
                 Err((key, value, e))
             }
         }

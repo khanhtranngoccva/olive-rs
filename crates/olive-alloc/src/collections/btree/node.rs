@@ -1495,11 +1495,6 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Immut<'a>, K, V, NodeTyp
 }
 
 impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
-    #[expect(
-        dead_code,
-        reason = "std-mirror method kept for parity with the upstream port"
-    )]
-    // FIXME: the BTreeSet::replace() is missing
     pub(super) fn key_mut(&mut self) -> &mut K {
         unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
     }

@@ -60,6 +60,36 @@ impl<K: Ord, V, A: Allocator> BTreeMap<K, V, A> {
         }
     }
 
+    /// Gets an [`EntryWithKey`] to a single entry in the map, which may either be
+    /// occupied or vacant. When the entry is occupied, the probed key is returned.
+    pub(super) fn entry_with_key(&mut self, key: K) -> EntryWithKey<'_, K, V, A> {
+        let (map, dormant_map) = DormantMutRef::new(self);
+        match map.root {
+            None => EntryWithKey::Vacant(VacantEntry {
+                key,
+                handle: None,
+                dormant_map,
+                _marker: PhantomData,
+            }),
+            Some(ref mut root) => match root.borrow_mut().search_tree(&key) {
+                SearchResult::Found(handle) => EntryWithKey::Occupied(
+                    OccupiedEntry {
+                        handle,
+                        dormant_map,
+                        _marker: PhantomData,
+                    },
+                    key,
+                ),
+                SearchResult::GoDown(handle) => EntryWithKey::Vacant(VacantEntry {
+                    key,
+                    handle: Some(handle),
+                    dormant_map,
+                    _marker: PhantomData,
+                }),
+            },
+        }
+    }
+
     /// Like [`entry`](Self::entry) but accepts a borrowed key via `Borrow`.
     /// Only useful for lookups that don't need to insert (e.g. `remove`).
     pub(super) fn entry_ref<Q>(&mut self, key: &Q) -> Option<Entry<'_, K, V, A>>
@@ -118,6 +148,14 @@ pub enum Entry<'a, K: 'a, V: 'a, A: Allocator = Global> {
     Vacant(VacantEntry<'a, K, V, A>),
     /// An occupied entry.
     Occupied(OccupiedEntry<'a, K, V, A>),
+}
+
+/// Similar to [`Entry`] but a key is attached to the occupied entry.
+pub(super) enum EntryWithKey<'a, K: 'a, V: 'a, A: Allocator = Global> {
+    /// A vacant entry.
+    Vacant(VacantEntry<'a, K, V, A>),
+    /// An occupied entry.
+    Occupied(OccupiedEntry<'a, K, V, A>, K),
 }
 
 impl<'a, K: Ord, V, A: Allocator> Entry<'a, K, V, A> {
@@ -310,47 +348,6 @@ pub struct OccupiedEntry<'a, K, V, A: Allocator = Global> {
 }
 
 impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
-    /// Descends the tree once for `key` and hands back either a fillable
-    /// [`VacantEntry`] or the probed key itself.
-    ///
-    /// Unlike [`BTreeMap::entry`], which moves the key into the returned
-    /// [`Entry`] (and thereby drops the caller's copy on an occupied result),
-    /// this method keeps ownership of the probed key in every case:
-    ///
-    /// - if the key is absent it returns `Ok(vacant_entry)`, ready to be filled
-    ///   via [`VacantEntry::try_insert_entry`];
-    /// - if the key is already present it returns `Err(key)`, handing the probed
-    ///   key straight back so the caller can salvage it.
-    ///
-    /// This lets "insert-if-absent" operations avoid both a double search (a
-    /// separate occupancy check plus an insert) and the loss of the probed key
-    /// on collision.
-    pub(super) fn vacant_entry_give_back(map: &'a mut BTreeMap<K, V, A>, key: K) -> Result<Self, K>
-    where
-        K: Ord,
-    {
-        let (map, dormant_map) = DormantMutRef::new(map);
-        match map.root {
-            None => Ok(Self {
-                key,
-                handle: None,
-                dormant_map,
-                _marker: PhantomData,
-            }),
-            Some(ref mut root) => match root.borrow_mut().search_tree(&key) {
-                // Occupied: hand the probed key back untouched rather than
-                // burying it in an `OccupiedEntry`.
-                SearchResult::Found(_) => Err(key),
-                SearchResult::GoDown(handle) => Ok(Self {
-                    key,
-                    handle: Some(handle),
-                    dormant_map,
-                    _marker: PhantomData,
-                }),
-            },
-        }
-    }
-
     /// Returns a reference to the key that was probed.
     pub fn key(&self) -> &K {
         &self.key
@@ -392,15 +389,14 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
         let (_r, mut dormant_root) = DormantMutRef::new(&mut reborrowed.root);
         let leaf_kv_handle = unsafe {
             do_two_phase(
-                self.handle,
+                &mut self.handle,
                 &mut dormant_root,
                 self.key,
                 value,
                 &*reborrowed.alloc,
                 &mut reborrowed.length,
             )
-        }
-        .map_err(|(k, v, e, _)| (k, v, e))?;
+        }?;
 
         Ok(OccupiedEntry {
             handle: leaf_kv_handle.forget_node_type(),
@@ -447,6 +443,26 @@ impl<'a, K, V, A: Allocator> OccupiedEntry<'a, K, V, A> {
     /// and returns the entry's old value.
     pub fn insert(&mut self, value: V) -> V {
         core::mem::replace(self.get_mut(), value)
+    }
+
+    /// Replaces the entry's key in place with `key`, returning the old key.
+    ///
+    /// This performs no allocation and no rebalancing: it only swaps the key
+    /// stored in the node's key area, leaving the entry's position (and any
+    /// cursor pointing near it) untouched.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep the entry in its sorted position: `key` must
+    /// compare greater than every key preceding the entry and less than
+    /// every key following it in the tree's in-order traversal. For an entry
+    /// stored in an internal node this means the whole left and right
+    /// subtrees, not just the neighboring slots of the node.
+    ///
+    /// Replacing a key with one that compares equal to it
+    /// always satisfies this contract.
+    pub(super) unsafe fn replace_key_unchecked(&mut self, key: K) -> K {
+        core::mem::replace(self.handle.key_mut(), key)
     }
 
     /// Removes the key-value pair from the map, returning it as a tuple.
@@ -505,46 +521,57 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_
 /// nodes, then splices the resulting subtree back into the map's root. Because
 /// every allocation succeeded, this phase cannot fail or panic.
 ///
-/// On failure the untouched edge handle (if one was passed in) is returned
-/// alongside the key and value so that callers holding cursors can restore
-/// their position.
+/// On failure or panic the untouched edge handle (if one was passed in) is written
+/// back into the `handle` location, and the key and value are returned in
+/// the error, so that callers holding cursors keep their position.
 ///
 /// # Safety
 ///
 /// - The parameters must come from a valid map.
 /// - The map must have fewer than `usize::MAX` items.
 ///
-// FIXME: `handle` should probably be a location instead.
-// On (allocator) panic (???), the location should be restored with the old handle.
-// Although allocators are not supposed to panic because the panic machinery
-// relies on the allocator to function, and panics in deallocating path of this very type
-// abort the program, so implementing this may not be necessary.
+// The `handle` parameter is a mutable location rather than an owned value: the
+// function takes the handle out at the start and, on failure or panic, writes the
+// untouched edge handle back into the same location. This moves the
+// "restore the cursor position on error or panic" bookkeeping into one place instead of
+// leaving it to every caller.
 #[allow(
     clippy::type_complexity,
     reason = "this type declaration is inherently complex"
 )]
 pub(super) unsafe fn do_two_phase<'a, K, V, A: Allocator>(
-    handle: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+    handle: &mut Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
     root: &mut DormantMutRef<'a, Option<NodeRef<marker::Owned, K, V, marker::LeafOrInternal>>>,
     key: K,
     value: V,
     alloc: &A,
     length: &mut usize,
-) -> Result<
-    Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>,
-    (
-        K,
-        V,
-        AllocError,
-        Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
-    ),
-> {
-    let leaf_kv_handle = match handle {
+) -> Result<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::KV>, (K, V, AllocError)> {
+    // Holds the edge handle while it is taken out of the caller's location.
+    // If the reserve phase exits early — through a `return` or through an
+    // unwind from a panicking allocator — the guard writes the untouched
+    // handle back into the location. The commit phase takes the handle out
+    // of the guard first, disarming it: from that point on the edge handle
+    // no longer exists and the returned KV handle takes over.
+    struct HandleRestoreGuard<'a, 'h, K, V> {
+        handle: &'h mut Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+        current: Option<Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, marker::Edge>>,
+    }
+
+    impl<K, V> Drop for HandleRestoreGuard<'_, '_, K, V> {
+        fn drop(&mut self) {
+            *self.handle = self.current.take();
+        }
+    }
+
+    let current = handle.take();
+    let mut guard = HandleRestoreGuard { handle, current };
+    let leaf_kv_handle = match guard.current.as_mut() {
         None => {
             // SAFETY: There is no tree yet so no reference to it exists.
             let node_ref = match NodeRef::new_leaf(&alloc) {
                 Ok(a) => a,
-                Err(e) => return Err((key, value, e, None)),
+                Err(e) => return Err((key, value, e)),
             };
             let root = unsafe { root.reborrow() }.insert(node_ref.forget_type());
             // SAFETY: We *just* created the root as a leaf, and we're
@@ -557,13 +584,18 @@ pub(super) unsafe fn do_two_phase<'a, K, V, A: Allocator>(
         Some(current) => {
             let immut_reborrow = current.reborrow();
             // Reserve phase: allocate all needed nodes with a borrowed allocator reference.
-            // Zero allocator clones are performed. On any allocation failure the partially
-            // allocated nodes are dropped and the untouched tree is returned unchanged.
+            // Zero allocator clones are performed. On any allocation failure (or on an
+            // unwind from a panicking allocator) the partially allocated nodes are dropped
+            // and the untouched tree is returned unchanged; the guard puts the edge handle
+            // back into the caller's location either way.
             let mut nodes = match scratch::reserve_for_insertion(immut_reborrow, alloc) {
                 Ok(nodes) => nodes,
-                Err(e) => return Err((key, value, e, Some(current))),
+                Err(e) => return Err((key, value, e)),
             };
-            // Commit phase: perform the splits bottom-up using the reserved nodes. This phase cannot panic.
+            // Commit phase: perform the splits bottom-up using the reserved nodes. This
+            // phase cannot and should not fail or panic, so the guard is disarmed here to
+            // extract the handle for insert_recursing.
+            let current = guard.current.take().unwrap();
             current.insert_recursing(key, value, &mut nodes, |ins, new_node| {
                 // Already borrowed above, do not need a second borrow.
                 let root = unsafe { root.reborrow() }.as_mut().unwrap(); // same as ins.left
@@ -760,7 +792,9 @@ mod tests {
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the sole leaf to CAPACITY (11) so the next insert forces a split.
         for i in 0..11i32 {
-            map.entry(i).or_try_insert(u32::try_from(i * 10).unwrap()).unwrap();
+            map.entry(i)
+                .or_try_insert(u32::try_from(i * 10).unwrap())
+                .unwrap();
         }
         assert_eq!(map.len(), 11);
 
@@ -885,7 +919,9 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         for i in 0..11i32 {
-            map.entry(i).or_try_insert(u32::try_from(i * 10).unwrap()).unwrap();
+            map.entry(i)
+                .or_try_insert(u32::try_from(i * 10).unwrap())
+                .unwrap();
         }
         assert_eq!(map.len(), 11);
 
@@ -893,7 +929,9 @@ mod tests {
 
         let err = map
             .entry(11)
-            .or_try_insert_with_key(|k| -> Result<u32, Infallible> { Ok(u32::try_from(*k * 10).unwrap()) })
+            .or_try_insert_with_key(|k| -> Result<u32, Infallible> {
+                Ok(u32::try_from(*k * 10).unwrap())
+            })
             .unwrap_err();
         assert!(matches!(err, TryBTreeMapEntryWithError::Alloc(_)));
         assert_eq!(map.len(), 11);
@@ -965,7 +1003,9 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         for i in 0..11i32 {
-            map.entry(i).try_insert_entry(u32::try_from(i * 10).unwrap()).unwrap();
+            map.entry(i)
+                .try_insert_entry(u32::try_from(i * 10).unwrap())
+                .unwrap();
         }
         assert_eq!(map.len(), 11);
 

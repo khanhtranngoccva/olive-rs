@@ -291,15 +291,24 @@ impl<BorrowType: marker::BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Lea
     /// the range, returns an empty `front` and `back`.
     ///
     /// # Safety
+    ///
     /// Unless `BorrowType` is `Immut`, do not use the handles to visit the same
     /// KV twice.
-    unsafe fn find_leaf_edges_spanning_range<Q, R>(self, range: R) -> LeafRange<BorrowType, K, V>
+    ///
+    /// # Panics
+    ///
+    /// Panics if `with_bounds_check` is true and the range is invalid.
+    unsafe fn find_leaf_edges_spanning_range<Q, R>(
+        self,
+        range: R,
+        with_bounds_check: bool,
+    ) -> LeafRange<BorrowType, K, V>
     where
         Q: Ord + ?Sized,
         K: Borrow<Q>,
         R: RangeBounds<Q>,
     {
-        match self.search_tree_for_bifurcation(&range) {
+        match self.search_tree_for_bifurcation(&range, with_bounds_check) {
             Err(_) => LeafRange::none(),
             Ok((
                 node,
@@ -347,14 +356,22 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Immut<'a>, K, V, marker::LeafOrInternal> 
     ///
     /// The result is meaningful only if the tree is ordered by key, like the tree
     /// in a `BTreeMap` is.
-    pub fn range_search<Q, R>(self, range: R) -> LeafRange<marker::Immut<'a>, K, V>
+    ///
+    /// # Panics
+    ///
+    /// Panics if `with_bounds_check` is true and the range is invalid.
+    pub fn range_search<Q, R>(
+        self,
+        range: R,
+        with_bounds_check: bool,
+    ) -> LeafRange<marker::Immut<'a>, K, V>
     where
         Q: ?Sized + Ord,
         K: Borrow<Q>,
         R: RangeBounds<Q>,
     {
         // SAFETY: our borrow type is immutable.
-        unsafe { self.find_leaf_edges_spanning_range(range) }
+        unsafe { self.find_leaf_edges_spanning_range(range, with_bounds_check) }
     }
 
     /// Finds the pair of leaf edges delimiting an entire tree.
@@ -371,15 +388,24 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::ValMut<'a>, K, V, marker::LeafOrInternal>
     /// The result is meaningful only if the tree is ordered by key, like the tree
     /// in a `BTreeMap` is.
     ///
-    /// # Safety
+    /// # Safety (notice)
+    ///
     /// Do not use the duplicate handles to visit the same KV twice.
-    pub fn range_search<Q, R>(self, range: R) -> LeafRange<marker::ValMut<'a>, K, V>
+    ///
+    /// # Panics
+    ///
+    /// Panics if `with_bounds_check` is true and the range is invalid.
+    pub fn range_search<Q, R>(
+        self,
+        range: R,
+        with_bounds_check: bool,
+    ) -> LeafRange<marker::ValMut<'a>, K, V>
     where
         Q: ?Sized + Ord,
         K: Borrow<Q>,
         R: RangeBounds<Q>,
     {
-        unsafe { self.find_leaf_edges_spanning_range(range) }
+        unsafe { self.find_leaf_edges_spanning_range(range, with_bounds_check) }
     }
 
     /// Splits a unique reference into a pair of leaf edges delimiting the full range of the tree.

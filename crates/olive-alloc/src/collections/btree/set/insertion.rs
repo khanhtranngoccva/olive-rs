@@ -44,6 +44,39 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
         }
     }
 
+    /// Adds a value to the set, replacing (and returning) any existing equal
+    /// value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if memory allocation fails during insertion of
+    /// a previously-absent value. The probed value is dropped on failure and
+    /// the set is left unmodified; use
+    /// [`try_replace_give_back`](Self::try_replace_give_back) to recover it.
+    pub fn try_replace(&mut self, value: T) -> Result<Option<T>, AllocError> {
+        match self.try_replace_give_back(value) {
+            Ok(replaced) => Ok(replaced),
+            Err((_, e)) => Err(e),
+        }
+    }
+
+    /// Like [`Self::try_replace`], but returns the probed value back on
+    /// allocation failure so the caller can retry or salvage it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `(T, AllocError)` if memory allocation fails during insertion
+    /// of a previously-absent value; the tuple carries the original value
+    /// back to the caller. The set is left unmodified on failure.
+    pub fn try_replace_give_back(&mut self, value: T) -> Result<Option<T>, (T, AllocError)> {
+        match self.map.try_replace_give_back(value, SetValZST) {
+            // `None` → slot was empty, we just inserted
+            // `Some((k, _))` → slot was occupied, `k` is the replaced value
+            Ok(replaced) => Ok(replaced.map(|(k, _marker)| k)),
+            Err((k, _marker, e)) => Err((k, e)),
+        }
+    }
+
     /// Moves all elements from `other` into `self`, leaving `other` empty.
     ///
     /// If a value from `other` is already present in `self`, it is simply
@@ -517,5 +550,59 @@ mod tests {
             ledger.leaked_ids()
         );
         assert!(ledger.double_dropped().is_empty());
+    }
+
+    #[test]
+    fn try_replace_replaces_existing_value_in_place() {
+        let mut set = BTreeSet::new();
+
+        // Empty set: replace must fall back to insertion.
+        assert_eq!(set.try_replace(1), Ok(None));
+        assert!(set.contains(&1));
+
+        // Absent value: plain insertion again.
+        assert_eq!(set.try_replace(2), Ok(None));
+        assert_eq!(set.len(), 2);
+
+        // Existing value: replaced in place, old value returned.
+        assert_eq!(set.try_replace(1), Ok(Some(1)));
+        assert!(set.contains(&1));
+        assert_eq!(set.len(), 2);
+        check_tree_invariant(&set.map);
+        check_ascending_keys(&set.map);
+    }
+
+    // FIXME: try_replace success changes the ID (identity) of the TrackedItem value in the set
+
+    // FIXME: try_replace OOM drops value
+
+    // FIXME: try_replace_give_back success changes the ID (identity) of the TrackedItem value in the set
+
+    #[test]
+    fn try_replace_give_back_on_oom() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut set: BTreeSet<u32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        // Fill the sole leaf to CAPACITY (11) so that inserting an absent
+        // value forces a split, and thus an allocation.
+        for i in 1..=11u32 {
+            set.try_insert(i).unwrap();
+        }
+        alloc.drain();
+
+        // Existing value: replacement is in place and must succeed even with
+        // the budget fully drained, since it performs no allocation.
+        assert_eq!(set.try_replace_give_back(2), Ok(Some(2)));
+        assert!(set.contains(&2));
+        assert_eq!(set.len(), 11);
+
+        // Absent value: insertion needs an allocation (the split), so it
+        // must fail and return the probed value.
+        assert_eq!(set.try_replace_give_back(12), Err((12, AllocError)));
+        assert!(!set.contains(&12));
+        assert_eq!(set.len(), 11);
+        check_tree_invariant(&set.map);
+        check_ascending_keys(&set.map);
+
+        drop(set);
     }
 }
