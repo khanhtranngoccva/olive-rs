@@ -993,7 +993,7 @@ impl<K, V, A: Allocator> BTreeMap<K, V, A> {
     }
 
     /// Returns a [`Cursor`] pointing at the gap after the greatest key
-    /// smaller than the given bound.
+    /// smaller than or equal to the given bound.
     ///
     /// Passing `Bound::Included(x)` will return a cursor pointing to the
     /// gap after the greatest key smaller than or equal to `x`.
@@ -1025,7 +1025,7 @@ impl<K, V, A: Allocator> BTreeMap<K, V, A> {
     }
 
     /// Returns a [`CursorMut`] pointing at the gap after the greatest key
-    /// smaller than the given bound.
+    /// smaller than or equal to the given bound.
     ///
     /// Passing `Bound::Included(x)` will return a cursor pointing to the
     /// gap after the greatest key smaller than or equal to `x`.

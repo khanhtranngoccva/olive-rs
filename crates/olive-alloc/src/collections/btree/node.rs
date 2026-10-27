@@ -1130,7 +1130,7 @@ impl<K, V, NodeType, HandleType> Handle<NodeRef<marker::Mut<'_>, K, V, NodeType>
     /// dangerous.
     ///
     /// # Safety
-    /// 
+    ///
     /// For details, see `NodeRef::reborrow_mut`.
     pub(super) unsafe fn reborrow_mut(
         &mut self,

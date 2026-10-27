@@ -38,11 +38,12 @@ pub use iter::{
 };
 pub use map::BTreeMap;
 pub use set::{
-    BTreeSet, Difference as BTreeSetDifference, Entry as BTreeSetEntry,
+    BTreeSet, Cursor as BTreeSetCursor, CursorMut as BTreeSetCursorMut,
+    CursorMutKey as BTreeSetCursorMutKey, Difference as BTreeSetDifference, Entry as BTreeSetEntry,
     ExtractIf as BTreeSetExtractIf, Intersection as BTreeSetIntersection,
     IntoIter as BTreeSetIntoIter, Iter as BTreeSetIter, OccupiedEntry as BTreeSetOccupiedEntry,
     SetOp as BTreeSetOp, SymmetricDifference as BTreeSetSymmetricDifference,
-    Union as BTreeSetUnion, VacantEntry as BTreeSetVacantEntry,
+    TryBTreeSetCursorInsertError, Union as BTreeSetUnion, VacantEntry as BTreeSetVacantEntry,
 };
 
 // ---------------------------------------------------------------------------

@@ -17,10 +17,13 @@ pub mod btree_map {
 /// A fallible port of `alloc::collections::BTreeSet`.
 pub mod btree_set {
     pub use super::btree::{
-        BTreeSet, BTreeSetDifference as Difference, BTreeSetEntry as Entry,
-        BTreeSetExtractIf as ExtractIf, BTreeSetIntersection as Intersection,
-        BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter, BTreeSetOccupiedEntry as OccupiedEntry,
-        BTreeSetOp as SetOp, BTreeSetSymmetricDifference as SymmetricDifference,
-        BTreeSetUnion as Union, BTreeSetVacantEntry as VacantEntry, TryBTreeSetWithCloneError,
+        BTreeSet, BTreeSetCursor as Cursor, BTreeSetCursorMut as CursorMut,
+        BTreeSetCursorMutKey as CursorMutKey, BTreeSetDifference as Difference,
+        BTreeSetEntry as Entry, BTreeSetExtractIf as ExtractIf,
+        BTreeSetIntersection as Intersection, BTreeSetIntoIter as IntoIter, BTreeSetIter as Iter,
+        BTreeSetOccupiedEntry as OccupiedEntry, BTreeSetOp as SetOp,
+        BTreeSetSymmetricDifference as SymmetricDifference, BTreeSetUnion as Union,
+        BTreeSetVacantEntry as VacantEntry, TryBTreeSetCursorInsertError,
+        TryBTreeSetWithCloneError,
     };
 }

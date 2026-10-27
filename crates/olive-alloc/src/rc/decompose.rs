@@ -1,7 +1,6 @@
 use super::internals::RcInner;
 use super::{Rc, Weak};
 use crate::alloc::Allocator;
-use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use olive_core::ptr::{self};
