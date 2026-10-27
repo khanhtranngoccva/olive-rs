@@ -85,7 +85,6 @@ impl<T: Ord> TryFromIterator<T> for BinaryHeap<T, Global> {
 // Fallible extension
 // ---------------------------------------------------------------------------
 
-//<LLM-generated
 impl<T: Ord, A: Allocator> TryExtend<T> for BinaryHeap<T, A> {
     type Error = TryReserveError;
 
