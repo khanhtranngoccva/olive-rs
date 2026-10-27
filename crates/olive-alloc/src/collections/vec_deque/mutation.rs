@@ -1379,6 +1379,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// # Errors
     ///
     /// Returns [`TryVecDequeRemoveError`] if `index >= len`.
+    ///
+    /// # Panics
+    ///
+    /// This method should not panic on any [`VecDeque`] instances.
     pub fn try_swap_remove_back(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
         let len = self.len;
         if index >= len {
@@ -1414,6 +1418,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// # Errors
     ///
     /// Returns [`TryVecDequeRemoveError`] if `index >= len`.
+    ///
+    /// # Panics
+    ///
+    /// This method should not panic on any VecDeque instances.
     pub fn try_swap_remove_front(&mut self, index: usize) -> Result<T, TryVecDequeRemoveError> {
         let len = self.len;
         if index >= len {

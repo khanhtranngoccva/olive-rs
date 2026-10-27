@@ -33,14 +33,16 @@ impl<'a, T> Iter<'a, T> {
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
-    #[must_use] pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.inner.len() == 0
     }
 
     /// Views the remaining, not-yet-yielded elements as a slice, in
     /// raw buffer order.
     #[inline]
-    #[must_use] pub fn as_slice(&self) -> &'a [T] {
+    #[must_use]
+    pub fn as_slice(&self) -> &'a [T] {
         self.inner.as_slice()
     }
 }
@@ -104,7 +106,7 @@ impl<T> Clone for Iter<'_, T> {
 impl<T> Default for Iter<'_, T> {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            inner: slice::Iter::default(),
         }
     }
 }
@@ -461,7 +463,7 @@ mod tests {
 
     #[test]
     fn into_iter_default_and_try_default_are_empty() {
-        let empty: IntoIter<u32> = Default::default();
+        let empty: IntoIter<u32> = IntoIter::default();
         assert_eq!(empty.count(), 0);
         let empty: IntoIter<u32> = TryDefault::try_default().unwrap();
         assert_eq!(empty.count(), 0);

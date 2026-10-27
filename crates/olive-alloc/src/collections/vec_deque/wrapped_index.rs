@@ -13,12 +13,20 @@ pub(super) struct WrappedIndex(usize);
 impl WrappedIndex {
     /// The newly constructed index has to be in-bounds for the `VecDeque`
     /// that uses the index.
+    #[allow(
+        clippy::inline_always,
+        reason = "std uses this to speed up trivial calculations"
+    )]
     #[inline(always)]
     pub(super) fn from_arbitrary_number(index: usize) -> Self {
         Self(index)
     }
 
     /// Safety invariant: the newly constructed index must still be in-bounds for the `VecDeque`.
+    #[allow(
+        clippy::inline_always,
+        reason = "std uses this to speed up trivial calculations"
+    )]
     #[inline(always)]
     pub(super) unsafe fn add(self, offset: usize) -> Self {
         #[allow(
@@ -29,6 +37,7 @@ impl WrappedIndex {
     }
 
     /// Safety invariant: the newly constructed index must still be in-bounds for the `VecDeque`.
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     #[expect(
         unused,
@@ -45,21 +54,25 @@ impl WrappedIndex {
         }
     }
 
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     pub(super) const fn zero() -> Self {
         Self(0)
     }
 
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     pub(super) fn abs_diff(self, other: Self) -> usize {
         self.0.abs_diff(other.0)
     }
 
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     pub(super) fn as_index(self) -> usize {
         self.0
     }
 
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     pub(super) fn is_zero(self) -> bool {
         self.0 == 0
@@ -73,6 +86,7 @@ impl core::fmt::Display for WrappedIndex {
 }
 
 impl PartialEq<usize> for WrappedIndex {
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     fn eq(&self, other: &usize) -> bool {
         self.0.eq(other)
@@ -80,6 +94,7 @@ impl PartialEq<usize> for WrappedIndex {
 }
 
 impl PartialOrd<usize> for WrappedIndex {
+    #[allow(clippy::inline_always, reason = "std uses this to speed up trivial calculations")]
     #[inline(always)]
     fn partial_cmp(&self, other: &usize) -> Option<Ordering> {
         self.0.partial_cmp(other)

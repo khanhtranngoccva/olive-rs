@@ -40,14 +40,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
             // == idx - (cap - addend)
             #[allow(clippy::arithmetic_side_effects, reason = "asserted idx >= threshold")]
             return WrappedIndex::from_arbitrary_number(idx - threshold);
-        } else {
-            // idx < cap - addend => idx + addend < cap.
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "asserted overflow being not possible: idx + addend < cap"
-            )]
-            return WrappedIndex::from_arbitrary_number(idx + addend);
         }
+        // idx < cap - addend => idx + addend < cap.
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted overflow being not possible: idx + addend < cap"
+        )]
+        return WrappedIndex::from_arbitrary_number(idx + addend);
     }
 
     /// Converts a logical index of the `VecDeque` to a wrapped index used to access
@@ -81,16 +80,15 @@ impl<T, A: Allocator> VecDeque<T, A> {
         if idx >= subtrahend {
             #[allow(clippy::arithmetic_side_effects, reason = "asserted subtrahend <= idx")]
             return WrappedIndex::from_arbitrary_number(idx - subtrahend);
-        } else {
-            // The modular result is idx + cap - subtrahend = cap - (subtrahend - idx).
-            #[allow(clippy::arithmetic_side_effects, reason = "asserted idx < subtrahend")]
-            let diff = subtrahend - idx;
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "asserted diff <= subtrahend < cap"
-            )]
-            return WrappedIndex::from_arbitrary_number(cap - diff);
         }
+        // The modular result is idx + cap - subtrahend = cap - (subtrahend - idx).
+        #[allow(clippy::arithmetic_side_effects, reason = "asserted idx < subtrahend")]
+        let diff = subtrahend - idx;
+        #[allow(
+            clippy::arithmetic_side_effects,
+            reason = "asserted diff <= subtrahend < cap"
+        )]
+        return WrappedIndex::from_arbitrary_number(cap - diff);
     }
 
     /// Returns a slice pointer into the buffer.
@@ -296,6 +294,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// If the elements do not wrap around the buffer, all of them will be in
     /// the first slice and the second slice will be empty.
+    /// 
+    /// # Panics
+    /// 
+    /// This method should not panic on any valid [`VecDeque`] instances.
     #[inline]
     pub fn as_slices(&self) -> (&[T], &[T]) {
         // A full-range query against our own length can never fail to resolve.
@@ -312,6 +314,10 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// If the elements do not wrap around the buffer, all of them will be in
     /// the first slice and the second slice will be empty.
+    /// 
+    /// # Panics
+    /// 
+    /// This method should not panic on any valid [`VecDeque`] instances.
     #[inline]
     pub fn as_mut_slices(&mut self) -> (&mut [T], &mut [T]) {
         // A full-range query against our own length can never fail to resolve.
