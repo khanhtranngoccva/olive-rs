@@ -108,28 +108,6 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
     fn drop(&mut self) {
         struct DropGuard<'r, 'a, T, A: Allocator>(&'r mut Drain<'a, T, A>);
 
-        let guard = DropGuard(self);
-
-        if mem::needs_drop::<T>() && guard.0.remaining != 0 {
-            // SAFETY: We just checked that `self.remaining != 0`.
-            let (front, back) = unsafe { guard.0.as_slices() };
-            #[allow(
-                clippy::arithmetic_side_effects,
-                reason = "asserted front + back = remaining (as_slices invariant) => front <= remaining,
-                idx + front <= idx + remaining == len <= usize::MAX"
-            )]
-            {
-                guard.0.idx += front.len();
-                guard.0.remaining -= front.len();
-            }
-            // SAFETY: This can't have been dropped before since
-            // `idx` & `remaining` track what's been dropped.
-            unsafe { ptr::drop_in_place(front) };
-            guard.0.remaining = 0;
-            // SAFETY: Ditto.
-            unsafe { ptr::drop_in_place(back) };
-        }
-
         // Dropping `guard` handles moving the remaining elements into place.
         impl<T, A: Allocator> Drop for DropGuard<'_, '_, T, A> {
             #[inline]
@@ -219,46 +197,6 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                 // breaking < capacity invariant.
                 if head_len != 0 && tail_len != 0 {
                     join_head_and_tail_wrapping(source_deque, drain_len, head_len, tail_len);
-                    // Marking this function as cold helps LLVM to eliminate it entirely if
-                    // this branch is never taken.
-                    // We use `#[cold]` instead of `#[inline(never)]`, because inlining this
-                    // function into the general case (`.drain(n..m)`) is fine.
-                    // See `tests/codegen-llvm/vecdeque-drain.rs` for a test.
-                    #[cold]
-                    fn join_head_and_tail_wrapping<T, A: Allocator>(
-                        source_deque: &mut VecDeque<T, A>,
-                        drain_len: usize,
-                        head_len: usize,
-                        tail_len: usize,
-                    ) {
-                        // Pick whether to move the head or the tail here.
-                        let (src, dst, len);
-                        if head_len < tail_len {
-                            src = source_deque.head;
-                            // SAFETY: head_len >= 1, tail_len >= 1, drain_len < capacity
-                            dst = unsafe { source_deque.to_wrapped_index(drain_len) };
-                            len = head_len;
-                        } else {
-                            // `head_len + drain_len` is the logical index of the
-                            // first tail element, which is always `< capacity`.
-                            #[allow(
-                                clippy::arithmetic_side_effects,
-                                reason = "asserted tail_len >= 1 => head_len < capacity, 
-                                tail_len < capacity, head_len + tail_len < capacity"
-                            )]
-                            let src_idx = head_len + drain_len;
-                            // SAFETY: Specified in above clippy lint.
-                            src = unsafe { source_deque.to_wrapped_index(src_idx) };
-                            // SAFETY: Specified in above clippy lint.
-                            dst = unsafe { source_deque.to_wrapped_index(head_len) };
-                            len = tail_len;
-                        };
-
-                        // ignore-tidy-undocumented-unsafe
-                        unsafe {
-                            source_deque.wrap_copy(src, dst, len);
-                        }
-                    }
                 }
 
                 if new_len == 0 {
@@ -273,6 +211,70 @@ impl<T, A: Allocator> Drop for Drain<'_, T, A> {
                 }
                 source_deque.len = new_len;
             }
+        }
+
+        // (std comment)
+        // Marking this function as cold helps LLVM to eliminate it entirely if
+        // this branch is never taken.
+        // We use `#[cold]` instead of `#[inline(never)]`, because inlining this
+        // function into the general case (`.drain(n..m)`) is fine.
+        // See `tests/codegen-llvm/vecdeque-drain.rs` for a test.
+        #[cold]
+        fn join_head_and_tail_wrapping<T, A: Allocator>(
+            source_deque: &mut VecDeque<T, A>,
+            drain_len: usize,
+            head_len: usize,
+            tail_len: usize,
+        ) {
+            // Pick whether to move the head or the tail here.
+            let (src, dst, len);
+            if head_len < tail_len {
+                src = source_deque.head;
+                // SAFETY: head_len >= 1, tail_len >= 1, drain_len < capacity
+                dst = unsafe { source_deque.to_wrapped_index(drain_len) };
+                len = head_len;
+            } else {
+                // `head_len + drain_len` is the logical index of the
+                // first tail element, which is always `< capacity`.
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted tail_len >= 1 => head_len < capacity, 
+                                tail_len < capacity, head_len + tail_len < capacity"
+                )]
+                let src_idx = head_len + drain_len;
+                // SAFETY: Specified in above clippy lint.
+                src = unsafe { source_deque.to_wrapped_index(src_idx) };
+                // SAFETY: Specified in above clippy lint.
+                dst = unsafe { source_deque.to_wrapped_index(head_len) };
+                len = tail_len;
+            };
+
+            // ignore-tidy-undocumented-unsafe
+            unsafe {
+                source_deque.wrap_copy(src, dst, len);
+            }
+        }
+
+        let guard = DropGuard(self);
+
+        if mem::needs_drop::<T>() && guard.0.remaining != 0 {
+            // SAFETY: We just checked that `self.remaining != 0`.
+            let (front, back) = unsafe { guard.0.as_slices() };
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "asserted front + back = remaining (as_slices invariant) => front <= remaining,
+                idx + front <= idx + remaining == len <= usize::MAX"
+            )]
+            {
+                guard.0.idx += front.len();
+                guard.0.remaining -= front.len();
+            }
+            // SAFETY: This can't have been dropped before since
+            // `idx` & `remaining` track what's been dropped.
+            unsafe { ptr::drop_in_place(front) };
+            guard.0.remaining = 0;
+            // SAFETY: Ditto.
+            unsafe { ptr::drop_in_place(back) };
         }
     }
 }

@@ -525,10 +525,8 @@ impl<T, A: Allocator> Vec<T, A> {
             TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
                 TryVecExtendFromWithinError::RangeOverflow
             }
-            TrySliceRangeError::StartExceedsEnd { start, end, len } => {
-                TryVecExtendFromWithinError::InvalidRange { start, end, len }
-            }
-            TrySliceRangeError::EndExceedsBound { start, end, len } => {
+            TrySliceRangeError::StartExceedsEnd { start, end, len }
+            | TrySliceRangeError::EndExceedsBound { start, end, len } => {
                 TryVecExtendFromWithinError::InvalidRange { start, end, len }
             }
         })?;

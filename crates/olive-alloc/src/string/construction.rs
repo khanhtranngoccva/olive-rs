@@ -19,7 +19,8 @@ impl String {
     /// The returned string contains no characters and has no allocated
     /// capacity.
     #[inline]
-    #[must_use] pub const fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
@@ -50,6 +51,11 @@ impl String {
     }
 
     /// Converts a `&str` into a `String` by copying its contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the requested capacity overflows or the
+    /// string allocation fails.
     #[inline]
     pub fn try_from_str(s: &str) -> Result<Self, TryReserveError> {
         Self::try_from_str_in(s, Global)
@@ -99,6 +105,15 @@ impl<A: Allocator> String<A> {
 
     /// Converts a `&str` into a `String` by copying its contents, allocating
     /// through `alloc`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the requested capacity overflows or the
+    /// initial allocation fails.
+    ///
+    /// # Panics
+    ///
+    /// This method should not panic for any valid string.
     #[inline]
     pub fn try_from_str_in(s: &str, alloc: A) -> Result<Self, TryReserveError> {
         let mut buf = Vec::<u8, A>::try_with_capacity_in(s.len(), alloc)?;
@@ -130,7 +145,6 @@ impl<A: AllocatorTryDefault> TryDefault for String<A> {
 
 #[cfg(test)]
 mod tests {
-    
 
     use super::*;
     use crate::alloc::CountingAllocator;

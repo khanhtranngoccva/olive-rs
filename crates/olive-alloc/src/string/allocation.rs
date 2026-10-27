@@ -279,8 +279,10 @@ impl<A: Allocator> String<A> {
     /// Reserves additional capacity so the string can hold at least
     /// `additional` more bytes beyond its current length.
     ///
-    /// This is the primary fallible entry point: it surfaces a
-    /// [`TryReserveError`] directly rather than wrapping it.
+    /// # Errors
+    ///
+    /// - Returns [`TryReserveError`] on capacity overflow or allocation failure.
+    ///   See the type for details.
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.buf.try_reserve(additional)
     }
@@ -291,6 +293,11 @@ impl<A: Allocator> String<A> {
     /// exponential growth strategy and may interfere with it, typically
     /// resulting in extra allocations. However, this prevents overshooting
     /// which may fail.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`TryReserveError`] on capacity overflow or allocation failure.
+    ///   See the type for details.
     pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.buf.try_reserve_exact(additional)
     }
@@ -581,10 +588,8 @@ impl<A: Allocator> String<A> {
             TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
                 TryStringExtendFromWithinError::RangeOverflow
             }
-            TrySliceRangeError::StartExceedsEnd { start, end, len } => {
-                TryStringExtendFromWithinError::InvalidRange { start, end, len }
-            }
-            TrySliceRangeError::EndExceedsBound { start, end, len } => {
+            TrySliceRangeError::StartExceedsEnd { start, end, len }
+            | TrySliceRangeError::EndExceedsBound { start, end, len } => {
                 TryStringExtendFromWithinError::InvalidRange { start, end, len }
             }
         })?;
@@ -655,10 +660,8 @@ impl<A: Allocator> String<A> {
             TrySliceRangeError::StartOverflow | TrySliceRangeError::EndOverflow => {
                 TryStringReplaceRangeError::RangeOverflow
             }
-            TrySliceRangeError::StartExceedsEnd { start, end, .. } => {
-                TryStringReplaceRangeError::InvalidRange { start, end, len }
-            }
-            TrySliceRangeError::EndExceedsBound { start, end, .. } => {
+            TrySliceRangeError::StartExceedsEnd { start, end, .. }
+            | TrySliceRangeError::EndExceedsBound { start, end, .. } => {
                 TryStringReplaceRangeError::InvalidRange { start, end, len }
             }
         })?;
@@ -718,8 +721,6 @@ impl<A: Allocator> String<A> {
 #[cfg(test)]
 mod tests {
     extern crate std;
-
-    
 
     use super::*;
     use crate::alloc::CountingAllocator;

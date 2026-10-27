@@ -64,6 +64,10 @@ pub struct Concat<A: Allocator = Global>(Result<String<A>, TryReserveError>);
 impl<A: Allocator> Concat<A> {
     /// Consume this `Concat` and return the accumulated string (or the error
     /// that caused accumulation to halt).
+    ///
+    /// # Errors
+    ///
+    /// Returns the sticky [`TryReserveError`] if any previous allocation fails.
     pub fn finish(self) -> Result<String<A>, TryReserveError> {
         self.0
     }

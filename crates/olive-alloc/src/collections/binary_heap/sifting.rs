@@ -264,11 +264,6 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 
     /// Rebuild assuming data[0..start] is still a proper heap.
     pub(super) fn rebuild_tail(&mut self, start: usize) {
-        assert!(start <= self.len());
-        if start == self.len() {
-            return;
-        }
-
         #[inline]
         #[allow(
             clippy::arithmetic_side_effects,
@@ -278,10 +273,16 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
             (usize::BITS - x.leading_zeros() - 1) as usize
         }
 
+        assert!(start <= self.len());
+        if start == self.len() {
+            return;
+        }
+
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "guarded: start < self.len(), so the decrement cannot underflow"
         )]
+        // tail_len >= 1
         let tail_len = self.len() - start;
 
         // From std: `rebuild` takes O(self.len()) operations

@@ -66,6 +66,10 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     ///
     /// Returns [`TryCloneError`] if cloning the allocator handle, allocating the
     /// replacement block, or the clone itself fails.
+    ///
+    /// # Panics
+    ///
+    /// This method should not panic on valid instances of [`Rc`].
     #[inline]
     pub fn try_make_mut(this: &mut Self) -> Result<&mut T, TryCloneError>
     where

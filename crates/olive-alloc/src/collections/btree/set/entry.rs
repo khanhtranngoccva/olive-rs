@@ -202,12 +202,14 @@ pub struct OccupiedEntry<'a, T: 'a, A: Allocator = Global> {
 
 impl<T: Ord, A: Allocator> OccupiedEntry<'_, T, A> {
     /// Gets a reference to the value corresponding to the entry in the set.
-    #[must_use] pub fn get(&self) -> &T {
+    #[must_use]
+    pub fn get(&self) -> &T {
         self.inner.key()
     }
 
     /// Removes the value from the set, returning it.
-    #[must_use] pub fn remove(self) -> T {
+    #[must_use]
+    pub fn remove(self) -> T {
         self.inner.remove_entry().0
     }
 }
@@ -461,7 +463,9 @@ mod tests {
         let entry = set.entry(item);
         alloc.drain();
 
-        let Entry::Vacant(vacant) = entry else { panic!("expected vacant") };
+        let Entry::Vacant(vacant) = entry else {
+            panic!("expected vacant")
+        };
         match vacant.try_insert_give_back() {
             Err((returned, e)) => {
                 assert!(matches!(e, AllocError));
@@ -494,11 +498,10 @@ mod tests {
         let entry = set.entry(probe);
         // Consume the entry (moves out of the borrow) and verify the occupied
         // path returns the existing value without allocating.
-        let result = entry.try_insert();
-        match result {
-            Ok(occupied) => assert_eq!(**occupied.get(), 10),
-            Err(_) => panic!("occupied path must not allocate or fail"),
-        }
+        let occupied = entry
+            .try_insert()
+            .expect("occupied path must not allocate or fail");
+        assert_eq!(**occupied.get(), 10);
         // Drop the set so the seeded value deregisters from the ledger before
         // we check for leaks.
         drop(set);
