@@ -648,7 +648,7 @@ mod tests {
         }
         let dbg = {
             let drain = dq.try_drain(..).unwrap();
-            std::format!("{:?}", drain)
+            std::format!("{drain:?}")
         };
         assert!(dbg.contains("Drain"));
     }

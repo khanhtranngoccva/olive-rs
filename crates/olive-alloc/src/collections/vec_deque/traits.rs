@@ -158,12 +158,10 @@ impl<T, A: Allocator> Index<usize> for VecDeque<T, A> {
     /// and the deque's actual length so the mismatch is visible at a glance.
     #[inline]
     fn index(&self, index: usize) -> &T {
-        if index >= self.len {
-            panic!(
+        assert!((index < self.len), 
                 "VecDeque::index: index {index} out of bounds (len = {})",
                 self.len
             );
-        }
         self.get(index)
             .expect("unreachable: bounds already checked")
     }
@@ -188,12 +186,10 @@ impl<T, A: Allocator> IndexMut<usize> for VecDeque<T, A> {
     /// and the deque's actual length so the mismatch is visible at a glance.
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut T {
-        if index >= self.len {
-            panic!(
+        assert!((index < self.len), 
                 "VecDeque::index_mut: index {index} out of bounds (len = {})",
                 self.len
             );
-        }
         self.get_mut(index)
             .expect("unreachable: bounds already checked")
     }
@@ -219,7 +215,7 @@ impl<T: TryClone, A: AllocatorTryClone> TryClone for VecDeque<T, A> {
         let alloc = self.buf.allocator().try_clone()?;
         let mut out =
             Self::try_with_capacity_in(self.len(), alloc).map_err(TryCloneError::Reserve)?;
-        for elem in self.iter() {
+        for elem in self {
             let cloned = elem.try_clone()?;
             // SAFETY: capacity was reserved above for every element.
             unsafe { out.push_back_within_cap(cloned) };
@@ -757,7 +753,7 @@ mod tests {
         // ignore over-reserve failures the head push will fail instead.
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let (resume, err) = match dq.try_extend(1..=3) {
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
             Err(pair) => pair,
         };
         assert!(err.is_alloc());
@@ -878,7 +874,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let src = [1, 2, 3];
         let (rest, err) = match dq.try_extend_from_slice(&src) {
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
             Err(pair) => pair,
         };
         assert!(matches!(err, TryVecDequeWithCloneError::Reserve(_)));
@@ -914,7 +910,7 @@ mod tests {
             FlakyClone::at(2, 2), // count >= threshold → ✗
         ];
         let (rest, err) = match dq.try_extend_from_slice(&src) {
-            Ok(_) => panic!("expected clone failure"),
+            Ok(()) => panic!("expected clone failure"),
             Err(pair) => pair,
         };
         assert!(matches!(
@@ -978,7 +974,7 @@ mod tests {
         // committed; the stranded element is 1 and the remainder holds [2, 3].
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let (resume, err) = match dq.try_extend_front(1..=3) {
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
             Err(pair) => pair,
         };
         assert!(err.is_alloc());

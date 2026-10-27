@@ -396,18 +396,7 @@ impl<T, A: Allocator> Vec<T, A> {
         while g.read < g.original_len {
             // SAFETY: `read` is always less than original_len.
             let cur = unsafe { &mut *g.v.as_mut_ptr().add(g.read) };
-            if !f(cur) {
-                // Advance `read` early to avoid double drop if `drop_in_place` panicked.
-                #[allow(
-                    clippy::arithmetic_side_effects,
-                    reason = "asserted g.read < original_len"
-                )]
-                {
-                    g.read += 1;
-                }
-                // SAFETY: We never touch this element again after dropped.
-                unsafe { ptr::drop_in_place(cur) };
-            } else {
+            if f(cur) {
                 // SAFETY: `read` > `write`, so the slots don't overlap.
                 // We use copy for move, and never touch the source element again.
                 unsafe {
@@ -428,6 +417,17 @@ impl<T, A: Allocator> Vec<T, A> {
                 {
                     g.read += 1;
                 }
+            } else {
+                // Advance `read` early to avoid double drop if `drop_in_place` panicked.
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "asserted g.read < original_len"
+                )]
+                {
+                    g.read += 1;
+                }
+                // SAFETY: We never touch this element again after dropped.
+                unsafe { ptr::drop_in_place(cur) };
             }
         }
 
@@ -809,9 +809,7 @@ mod tests {
         impl Drop for PanicDrop {
             fn drop(&mut self) {
                 self.ledger.unregister(self.id);
-                if self.armer.fetch_and_disarm() {
-                    panic!("forced panic in drop");
-                }
+                assert!(!self.armer.fetch_and_disarm(), "forced panic in drop");
             }
         }
 
@@ -1024,9 +1022,7 @@ mod tests {
                 let mut calls = 0usize;
                 v.dedup_by(|a, b| {
                     calls += 1;
-                    if calls == 3 {
-                        panic!("forced panic mid-dedup");
-                    }
+                    assert!((calls != 3), "forced panic mid-dedup");
                     a.id() == b.id()
                 });
             }

@@ -273,19 +273,16 @@ impl<A: Allocator> String<A> {
                 kind: TryFromUtf16ErrorKind::OddBytes,
             });
         }
-        match (cfg!(target_endian = "little"), unsafe {
+        if let (true, ([], v, [])) = (cfg!(target_endian = "little"), unsafe {
             input.align_to::<u16>()
-        }) {
-            (true, ([], v, [])) => Self::try_from_utf16_in(v, alloc),
-            _ => {
-                let (iter, count) =
-                    convert_slice_to_u16_le_iter(input).map_err(|e| TryFromUtf16Error {
-                        kind: TryFromUtf16ErrorKind::Reserve(e),
-                    })?;
-                // SAFETY: `convert_slice_to_u16_le_iter` guarantees the
-                // iterator yields at most `count` items.
-                unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
-            }
+        }) { Self::try_from_utf16_in(v, alloc) } else {
+            let (iter, count) =
+                convert_slice_to_u16_le_iter(input).map_err(|e| TryFromUtf16Error {
+                    kind: TryFromUtf16ErrorKind::Reserve(e),
+                })?;
+            // SAFETY: `convert_slice_to_u16_le_iter` guarantees the
+            // iterator yields at most `count` items.
+            unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
         }
     }
 
@@ -303,19 +300,16 @@ impl<A: Allocator> String<A> {
                 kind: TryFromUtf16ErrorKind::OddBytes,
             });
         }
-        match (cfg!(target_endian = "big"), unsafe {
+        if let (true, ([], v, [])) = (cfg!(target_endian = "big"), unsafe {
             input.align_to::<u16>()
-        }) {
-            (true, ([], v, [])) => Self::try_from_utf16_in(v, alloc),
-            _ => {
-                let (iter, count) =
-                    convert_slice_to_u16_be_iter(input).map_err(|e| TryFromUtf16Error {
-                        kind: TryFromUtf16ErrorKind::Reserve(e),
-                    })?;
-                // SAFETY: `convert_slice_to_u16_be_iter` guarantees the
-                // iterator yields at most `count` items.
-                unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
-            }
+        }) { Self::try_from_utf16_in(v, alloc) } else {
+            let (iter, count) =
+                convert_slice_to_u16_be_iter(input).map_err(|e| TryFromUtf16Error {
+                    kind: TryFromUtf16ErrorKind::Reserve(e),
+                })?;
+            // SAFETY: `convert_slice_to_u16_be_iter` guarantees the
+            // iterator yields at most `count` items.
+            unsafe { Self::try_from_codeunits_in(iter, count, alloc) }
         }
     }
 
@@ -329,7 +323,7 @@ impl<A: Allocator> String<A> {
     /// Returns [`TryReserveError`] if reserving the buffer fails.
     #[allow(clippy::arithmetic_side_effects)]
     pub fn try_from_utf16_lossy_in(input: &[u16], alloc: A) -> Result<Self, TryReserveError> {
-        Self::try_from_codeunits_lossy_in(input.iter().cloned(), input.len(), alloc)
+        Self::try_from_codeunits_lossy_in(input.iter().copied(), input.len(), alloc)
     }
 
     /// Attempts to convert a byte slice holding UTF-16LE-encoded text into a
@@ -353,7 +347,7 @@ impl<A: Allocator> String<A> {
                     .checked_add(1)
                     .ok_or(TryReserveError::new_capacity_overflow())?;
                 let mut s = Self::try_from_codeunits_lossy_in(
-                    v.iter().cloned(),
+                    v.iter().copied(),
                     len_with_replacement,
                     alloc,
                 )?;
@@ -388,7 +382,7 @@ impl<A: Allocator> String<A> {
                     .checked_add(1)
                     .ok_or(TryReserveError::new_capacity_overflow())?;
                 let mut s = Self::try_from_codeunits_lossy_in(
-                    v.iter().cloned(),
+                    v.iter().copied(),
                     len_with_replacement,
                     alloc,
                 )?;
@@ -487,7 +481,7 @@ fn convert_slice_to_u16_le_iter(
 ) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
     let odd_bytes = input.len() & 1 != 0;
     let len = (input.len() / 2)
-        .checked_add(odd_bytes as usize)
+        .checked_add(usize::from(odd_bytes))
         .ok_or(TryReserveError::new_capacity_overflow())?;
     Ok((
         input.chunks(2).map(|chunk| {
@@ -508,7 +502,7 @@ fn convert_slice_to_u16_be_iter(
 ) -> Result<(impl FusedIterator<Item = u16>, usize), TryReserveError> {
     let odd_bytes = input.len() & 1 != 0;
     let len = (input.len() / 2)
-        .checked_add(odd_bytes as usize)
+        .checked_add(usize::from(odd_bytes))
         .ok_or(TryReserveError::new_capacity_overflow())?;
     Ok((
         input.chunks(2).map(|chunk| {

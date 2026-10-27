@@ -1419,9 +1419,7 @@ mod tests {
 
         impl TryClone for PanickingItem {
             fn try_clone(&self) -> Result<Self, TryCloneError> {
-                if !self.budget.try_consume() {
-                    panic!("clone exhausted")
-                }
+                assert!(self.budget.try_consume(), "clone exhausted");
                 let id = self.ledger.allocate();
                 self.ledger.register(id);
                 Ok(PanickingItem {

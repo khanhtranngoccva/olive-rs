@@ -163,6 +163,7 @@ impl<I: Iterator + ?Sized, A: Allocator> Iterator for Box<I, A> {
         // TODO: this item is not possible to fix on 1.85.
         // std uses a specialization to optimize the Box.
         #[inline]
+        #[allow(clippy::unnecessary_wraps, reason = "std uses this implementation")]
         fn some<T>(_: Option<T>, x: T) -> Option<T> {
             Some(x)
         }
@@ -198,6 +199,7 @@ mod tests {
     use super::*;
     use crate::alloc::Global;
     use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
+    use std::collections::HashSet;
     use std::format;
     use std::string::String;
     use std::vec;
@@ -265,7 +267,6 @@ mod tests {
         assert!(a < c);
         assert_eq!(a.cmp(&b), Ordering::Equal);
 
-        use std::collections::HashSet;
         let mut set = HashSet::new();
         set.insert(a);
         assert!(set.contains(&10i32));

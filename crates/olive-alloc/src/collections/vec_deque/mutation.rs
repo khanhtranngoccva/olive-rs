@@ -1750,13 +1750,13 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
         let err = match dq.try_push_back_within_capacity(3) {
             Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(err.len, 2);
         // Same from the front.
         let err = match dq.try_push_front_within_capacity(0) {
             Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(err.len, 2);
         // The rejected values were not inserted and the deque is unchanged.
@@ -1771,7 +1771,7 @@ mod tests {
         let mut dq: VecDeque<i32> = VecDeque::new();
         let err = match dq.try_push_back_within_capacity(1) {
             Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(err.len, 0);
         assert!(dq.is_empty());
@@ -1808,7 +1808,7 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
         let (returned, err) = match dq.try_push_back_within_capacity_give_back(3) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(returned, 3);
         assert_eq!(err.len, 2);
@@ -1824,7 +1824,7 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
         let (returned, err) = match dq.try_push_front_within_capacity_give_back(0) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(returned, 0);
         assert_eq!(err.len, 2);
@@ -2046,7 +2046,7 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(1), Ok(()));
         let err = match dq.try_insert_within_capacity(5, 99) {
             Err(e) => e,
-            Ok(_) => panic!("expected out-of-bounds error"),
+            Ok(()) => panic!("expected out-of-bounds error"),
         };
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
         assert_eq!(dq.len(), 1);
@@ -2060,7 +2060,7 @@ mod tests {
         // Full; inserting anywhere must fail with Full.
         let err = match dq.try_insert_within_capacity(0, 99) {
             Err(e) => e,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
         // Deque unchanged.
@@ -2075,7 +2075,7 @@ mod tests {
         assert_eq!(dq.try_push_back_within_capacity(2), Ok(()));
         let (returned, err) = match dq.try_insert_within_capacity_give_back(0, 99) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected full-buffer error"),
+            Ok(()) => panic!("expected full-buffer error"),
         };
         assert_eq!(returned, 99);
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::Full { len: 2 });
@@ -2087,7 +2087,7 @@ mod tests {
         let mut dq = VecDeque::<i32>::try_with_capacity(4).expect("allocation ok");
         let (returned, err) = match dq.try_insert_within_capacity_give_back(5, 42) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected out-of-bounds error"),
+            Ok(()) => panic!("expected out-of-bounds error"),
         };
         assert_eq!(returned, 42);
         assert_eq!(err, TryVecDequeInsertWithinCapacityError::OutOfBounds);
@@ -2912,7 +2912,7 @@ mod tests {
         assert_eq!(dq.try_push_back(1), Ok(()));
         let err = match dq.try_swap(5, 0) {
             Err(e) => e,
-            Ok(_) => panic!("expected error"),
+            Ok(()) => panic!("expected error"),
         };
         assert_eq!(err.i, 5);
         assert_eq!(err.j, 0);
@@ -2925,7 +2925,7 @@ mod tests {
         assert_eq!(dq.try_push_back(1), Ok(()));
         let err = match dq.try_swap(0, 3) {
             Err(e) => e,
-            Ok(_) => panic!("expected error"),
+            Ok(()) => panic!("expected error"),
         };
         assert_eq!(err.i, 0);
         assert_eq!(err.j, 3);
@@ -2937,7 +2937,7 @@ mod tests {
         let mut dq: VecDeque<i32> = VecDeque::new();
         let err = match dq.try_swap(0, 0) {
             Err(e) => e,
-            Ok(_) => panic!("expected error"),
+            Ok(()) => panic!("expected error"),
         };
         assert_eq!(err.len, 0);
     }

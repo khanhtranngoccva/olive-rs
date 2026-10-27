@@ -139,19 +139,19 @@ impl<T, A: Allocator> Drain<'_, T, A> {
 
     /// Returns the number of elements still held by this iterator.
     #[inline]
-    pub const fn len(&self) -> usize {
+    #[must_use] pub const fn len(&self) -> usize {
         self.remaining()
     }
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
-    pub const fn is_empty(&self) -> bool {
+    #[must_use] pub const fn is_empty(&self) -> bool {
         self.remaining() == 0
     }
 
     /// Views the remaining (not-yet-yielded) elements as a slice.
     #[inline]
-    pub fn as_slice(&self) -> &[T] {
+    #[must_use] pub fn as_slice(&self) -> &[T] {
         // The computed front pointer is invalid only when it lands one-past-the-
         // end of the buffer: `front_offset() == original_len`. When that case happens,
         // the fallback must be used. This fallback behavior is triggered sparingly
@@ -887,9 +887,7 @@ mod tests {
         impl Drop for Panicky {
             fn drop(&mut self) {
                 self.2.record();
-                if self.1.is_armed() && self.0 == 2 {
-                    panic!("boom");
-                }
+                assert!(!(self.1.is_armed() && self.0 == 2), "boom");
             }
         }
 

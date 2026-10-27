@@ -4,7 +4,7 @@ use core::{hint, ptr};
 
 use olive_core::alloc::Allocator;
 
-use super::node::ForceResult::*;
+use super::node::ForceResult::{Internal, Leaf};
 use super::node::{Handle, NodeRef, marker};
 use super::search::SearchBound;
 
@@ -169,8 +169,8 @@ impl<BorrowType, K, V> LazyLeafRange<BorrowType, K, V> {
     /// Temporarily takes out another, immutable equivalent of the same range.
     pub fn reborrow(&self) -> LazyLeafRange<marker::Immut<'_>, K, V> {
         LazyLeafRange {
-            front: self.front.as_ref().map(|f| f.reborrow()),
-            back: self.back.as_ref().map(|b| b.reborrow()),
+            front: self.front.as_ref().map(LazyLeafHandle::reborrow),
+            back: self.back.as_ref().map(LazyLeafHandle::reborrow),
         }
     }
 }
@@ -232,7 +232,7 @@ impl<K, V> LazyLeafRange<marker::Dying, K, V> {
     #[inline]
     pub fn deallocating_end<A: Allocator>(&mut self, alloc: &A) {
         if let Some(front) = self.take_front() {
-            front.deallocating_end(alloc)
+            front.deallocating_end(alloc);
         }
     }
 }

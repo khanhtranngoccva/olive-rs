@@ -187,8 +187,8 @@ impl<T, A: Allocator> LinkedList<T, A> {
         match self.tail {
             // `self` is empty: the reserved chain becomes the whole list.
             None => {
-                self.head = reserved.head.take().map(|node| node.cast());
-                self.tail = reserved.tail.take().map(|node| node.cast());
+                self.head = reserved.head.take().map(ptr::NonNull::cast);
+                self.tail = reserved.tail.take().map(ptr::NonNull::cast);
             }
             Some(tail) => match reserved.head.take() {
                 // `other` was empty: there is nothing to link.
@@ -203,7 +203,7 @@ impl<T, A: Allocator> LinkedList<T, A> {
                         (*tail.as_ptr()).next = Some(node.cast());
                         (*node.cast::<Node<T>>().as_ptr()).prev = Some(tail);
                     }
-                    self.tail = reserved.tail.take().map(|node| node.cast());
+                    self.tail = reserved.tail.take().map(ptr::NonNull::cast);
                 }
             },
         }
@@ -220,8 +220,8 @@ impl<T, A: Allocator> LinkedList<T, A> {
         // 4. Empty `other` and tear its nodes down through a fake,
         // ad-hoc list of `MaybeUninit` items on `other`'s own allocator.
         drop(LinkedList::<MaybeUninit<T>, &B> {
-            head: other.head.take().map(|node| node.cast()),
-            tail: other.tail.take().map(|node| node.cast()),
+            head: other.head.take().map(ptr::NonNull::cast),
+            tail: other.tail.take().map(ptr::NonNull::cast),
             len: mem::take(&mut other.len),
             alloc: &other.alloc,
             marker: PhantomData,

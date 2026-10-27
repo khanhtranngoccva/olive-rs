@@ -52,7 +52,7 @@ const fn __compile_time_assertions() {
         assert!(
             B < 64,
             "for arithmetic preconditions to hold and not overflow, B must be less than 64"
-        )
+        );
     }
 }
 const __ASSERTIONS: () = __compile_time_assertions();
@@ -249,7 +249,7 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
 }
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
-    /// Creates a new internal (height > 0) `NodeRef` from a partially initialized allocation created by InternalNode::new.
+    /// Creates a new internal (height > 0) `NodeRef` from a partially initialized allocation created by `InternalNode::new`.
     fn from_uninitialized_internal<A: Allocator>(
         mut boxed: Box<InternalNode<K, V>, A>,
         child: Root<K, V>,
@@ -308,7 +308,7 @@ impl<BorrowType, K, V> NodeRef<BorrowType, K, V, marker::Internal> {
     /// Returns a raw ptr to avoid invalidating other references to this node.
     fn as_internal_ptr(this: &Self) -> *mut InternalNode<K, V> {
         // SAFETY: the static node type is `Internal`.
-        this.node.as_ptr() as *mut InternalNode<K, V>
+        this.node.as_ptr().cast::<InternalNode<K, V>>()
     }
 }
 
@@ -428,7 +428,7 @@ impl<BorrowType: marker::BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
 }
 
 impl<BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type> {
-    /// Could be a public implementation of PartialEq, but only used in this module.
+    /// Could be a public implementation of `PartialEq`, but only used in this module.
     fn eq(&self, other: &Self) -> bool {
         let Self {
             node,
@@ -458,7 +458,7 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
         // SAFETY: the first `len` elements of `keys` are initialized, and we
         // only borrow them for the lifetime of this immutable reference.
         unsafe {
-            &*(leaf.keys.get_unchecked(..usize::from(leaf.len)) as *const [MaybeUninit<K>]
+            &*(ptr::from_ref::<[MaybeUninit<K>]>(leaf.keys.get_unchecked(..usize::from(leaf.len)))
                 as *const [K])
         }
     }
@@ -667,7 +667,7 @@ impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
         // SAFETY: the first `len` elements of `keys` are initialized; `ValMut`
         // borrows only values mutably, so key access does not alias.
         unsafe {
-            &*((*ptr).keys.get_unchecked(..usize::from((*ptr).len)) as *const [MaybeUninit<K>]
+            &*(ptr::from_ref::<[MaybeUninit<K>]>((*ptr).keys.get_unchecked(..usize::from((*ptr).len)))
                 as *const [K])
         }
     }
@@ -701,8 +701,8 @@ impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
         let keys: *const [_] = keys;
         let vals: *mut [_] = vals;
         // SAFETY: the element at `idx` is initialized (caller guarantees idx < len).
-        let key = unsafe { &*(keys.cast::<MaybeUninit<K>>().add(idx) as *const K) };
-        let val = unsafe { &mut *(vals.cast::<MaybeUninit<V>>().add(idx) as *mut V) };
+        let key = unsafe { &*keys.cast::<MaybeUninit<K>>().add(idx).cast::<K>() };
+        let val = unsafe { &mut *vals.cast::<MaybeUninit<V>>().add(idx).cast::<V>() };
         (key, val)
     }
 }
@@ -713,7 +713,7 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
         let ptr = Self::as_leaf_ptr(self);
         // SAFETY: we have exclusive access to the node, so no aliasing concerns.
         unsafe {
-            &*((*ptr).keys.get_unchecked(..usize::from((*ptr).len)) as *const [MaybeUninit<K>]
+            &*(ptr::from_ref::<[MaybeUninit<K>]>((*ptr).keys.get_unchecked(..usize::from((*ptr).len)))
                 as *const [K])
         }
     }
@@ -1359,14 +1359,14 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
             slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
             slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
             slice_insert(
-                self.node.edge_area_mut(..new_len + 1),
+                self.node.edge_area_mut(..=new_len),
                 self.idx + 1,
                 edge.node,
             );
             *self.node.len_mut() = new_len as u16;
 
             self.node
-                .correct_childrens_parent_links(self.idx + 1..new_len + 1);
+                .correct_childrens_parent_links((self.idx + 1)..=new_len);
         }
     }
 
@@ -1713,8 +1713,8 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
                 reason = "idx < old_len, old_len + 1 <= 2 * B == 256 => B <= 128, similar to new_len"
             )]
             move_to_slice(
-                self.node.edge_area_mut(self.idx + 1..old_len + 1),
-                &mut new_node.edges[..new_len + 1],
+                self.node.edge_area_mut((self.idx + 1)..=old_len),
+                &mut new_node.edges[..=new_len],
             );
 
             let height = self.node.height;
@@ -1902,7 +1902,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 reason = "asserted parent_idx + 1 < old_parent_len + 1 <= 2 * B"
             )]
             slice_remove(
-                parent_node.edge_area_mut(..old_parent_len + 1),
+                parent_node.edge_area_mut(..=old_parent_len),
                 parent_idx + 1,
             );
 
@@ -1931,15 +1931,15 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                     reason = "old_left_len + 1 <= new_left_len + 1 == 4 * B < 256 => 4 * B < 256 => B < 64, which holds"
                 )]
                 move_to_slice(
-                    right_node.edge_area_mut(..right_len + 1),
-                    left_node.edge_area_mut(old_left_len + 1..new_left_len + 1),
+                    right_node.edge_area_mut(..=right_len),
+                    left_node.edge_area_mut((old_left_len + 1)..=new_left_len),
                 );
 
                 #[allow(
                     clippy::arithmetic_side_effects,
                     reason = "old_left_len + 1 <= new_left_len + 1 == 4 * B < 256 => 4 * B < 256 => B < 64, which holds"
                 )]
-                left_node.correct_childrens_parent_links(old_left_len + 1..new_left_len + 1);
+                left_node.correct_childrens_parent_links((old_left_len + 1)..=new_left_len);
 
                 alloc.deallocate(right_node.node.cast(), Layout::new::<InternalNode<K, V>>());
             } else {
@@ -2102,7 +2102,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                         clippy::arithmetic_side_effects,
                         reason = "new_right_len + 1 <= CAPACITY + 1 == 2 * B, 2 * B < 256 => B < 128"
                     )]
-                    slice_shr(right.edge_area_mut(..new_right_len + 1), count);
+                    slice_shr(right.edge_area_mut(..=new_right_len), count);
 
                     // Steal edges.
                     #[allow(
@@ -2110,7 +2110,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                         reason = "new_left_len + 1 <= CAPACITY + 1 == 2 * B, 2 * B < 256 => B < 128"
                     )]
                     move_to_slice(
-                        left.edge_area_mut(new_left_len + 1..old_left_len + 1),
+                        left.edge_area_mut((new_left_len + 1)..=old_left_len),
                         right.edge_area_mut(..count),
                     );
 
@@ -2118,7 +2118,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                         clippy::arithmetic_side_effects,
                         reason = "new_right_len + 1 lint conditions satisfied above"
                     )]
-                    right.correct_childrens_parent_links(0..new_right_len + 1);
+                    right.correct_childrens_parent_links(0..=new_right_len);
                 }
                 (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                 _ => unreachable!(),
@@ -2195,7 +2195,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                     )]
                     move_to_slice(
                         right.edge_area_mut(..count),
-                        left.edge_area_mut(old_left_len + 1..new_left_len + 1),
+                        left.edge_area_mut((old_left_len + 1)..=new_left_len),
                     );
 
                     // Fill gap where stolen edges used to be.
@@ -2203,18 +2203,18 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                         clippy::arithmetic_side_effects,
                         reason = "old_right_len + 1 <= CAPACITY + 1 == 2 * B, 2 * B < 256 => B < 128"
                     )]
-                    slice_shl(right.edge_area_mut(..old_right_len + 1), count);
+                    slice_shl(right.edge_area_mut(..=old_right_len), count);
 
                     #[allow(
                         clippy::arithmetic_side_effects,
                         reason = "old_left_len < new_left_len, new_left_len asserted above"
                     )]
-                    left.correct_childrens_parent_links(old_left_len + 1..new_left_len + 1);
+                    left.correct_childrens_parent_links((old_left_len + 1)..=new_left_len);
                     #[allow(
                         clippy::arithmetic_side_effects,
                         reason = "new_right_len + 1 < old_right_len + 1"
                     )]
-                    right.correct_childrens_parent_links(0..new_right_len + 1);
+                    right.correct_childrens_parent_links(0..=new_right_len);
                 }
                 (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                 _ => unreachable!(),
@@ -2295,10 +2295,10 @@ impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, ma
                 match (left_node.force(), right_node.force()) {
                     (ForceResult::Internal(mut left), ForceResult::Internal(mut right)) => {
                         move_to_slice(
-                            left.edge_area_mut(new_left_len + 1..old_left_len + 1),
-                            right.edge_area_mut(1..new_right_len + 1),
+                            left.edge_area_mut((new_left_len + 1)..=old_left_len),
+                            right.edge_area_mut(1..=new_right_len),
                         );
-                        right.correct_childrens_parent_links(1..new_right_len + 1);
+                        right.correct_childrens_parent_links(1..=new_right_len);
                     }
                     (ForceResult::Leaf(_), ForceResult::Leaf(_)) => {}
                     _ => unreachable!(),

@@ -50,7 +50,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
         }
     }
 
-    /// Converts a logical index of the VecDeque to a wrapped index used to access
+    /// Converts a logical index of the `VecDeque` to a wrapped index used to access
     /// the buffer.
     ///
     /// # Safety

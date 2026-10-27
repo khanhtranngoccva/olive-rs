@@ -144,13 +144,13 @@ impl<'a, K, V> Cursor<'a, K, V> {
 
     /// Returns the key and value of the element that [`Cursor::next`] would
     /// move over, without moving the cursor.
-    pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
+    #[must_use] pub fn peek_next(&self) -> Option<(&'a K, &'a V)> {
         self.clone().next()
     }
 
     /// Returns the key and value of the element that [`Cursor::prev`] would
     /// move over, without moving the cursor.
-    pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
+    #[must_use] pub fn peek_prev(&self) -> Option<(&'a K, &'a V)> {
         self.clone().prev()
     }
 }
@@ -260,7 +260,7 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// The lifetime of the returned `Cursor` is bound to that of the
     /// `CursorMut`, which means it cannot outlive the `CursorMut` and that
     /// the `CursorMut` is frozen for the lifetime of the `Cursor`.
-    pub fn as_cursor(&self) -> Cursor<'_, K, V> {
+    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, K, V> {
         self.inner.as_cursor()
     }
 
@@ -272,7 +272,7 @@ impl<'a, K, V, A: Allocator> CursorMut<'a, K, V, A> {
     /// The caller must ensure that the tree stays in a sorted state after
     /// having modified a key through the returned cursor, and the new
     /// key must be unique.
-    pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, K, V, A> {
+    #[must_use] pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, K, V, A> {
         self.inner
     }
 }
@@ -527,7 +527,7 @@ impl<K, V, A: Allocator> CursorMutKey<'_, K, V, A> {
         match current.next_kv() {
             Ok(mut kv) => {
                 let (k, v) = unsafe { kv.reborrow_mut().into_kv_mut() };
-                let (k, v) = (k as *mut _, v as *mut _);
+                let (k, v) = (core::ptr::from_mut(k), core::ptr::from_mut(v));
                 self.current = Some(kv.next_leaf_edge());
                 // SAFETY: The dormant references returned by `into_kv_mut` point
                 // to a live element of the tree, which cannot be invalidated by
@@ -552,7 +552,7 @@ impl<K, V, A: Allocator> CursorMutKey<'_, K, V, A> {
         match current.next_back_kv() {
             Ok(mut kv) => {
                 let (k, v) = unsafe { kv.reborrow_mut().into_kv_mut() };
-                let (k, v) = (k as *mut _, v as *mut _);
+                let (k, v) = (core::ptr::from_mut(k), core::ptr::from_mut(v));
                 self.current = Some(kv.next_back_leaf_edge());
                 // SAFETY: The dormant references returned by `into_kv_mut` point
                 // to a live element of the tree, which cannot be invalidated by
@@ -591,7 +591,7 @@ impl<K, V, A: Allocator> CursorMutKey<'_, K, V, A> {
     /// Converts the mutable cursor into an immutable cursor.
     ///
     /// This is useful for looking ahead without modifying the cursor itself.
-    pub fn as_cursor(&self) -> Cursor<'_, K, V> {
+    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, K, V> {
         Cursor {
             // SAFETY: The tree is immutable while the cursor exists.
             root: unsafe { self.root.reborrow_shared().as_ref() },

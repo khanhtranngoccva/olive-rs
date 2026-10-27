@@ -32,13 +32,13 @@ impl<'a, T, A: Allocator> Drain<'a, T, A> {
 
     /// Returns the number of elements still held by this iterator.
     #[inline]
-    pub const fn len(&self) -> usize {
+    #[must_use] pub const fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
-    pub const fn is_empty(&self) -> bool {
+    #[must_use] pub const fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
@@ -50,7 +50,7 @@ impl<'a, T, A: Allocator> Drain<'a, T, A> {
     ///
     /// [`Ord`]: core::cmp::Ord
     #[inline]
-    pub fn as_slice(&self) -> &[T] {
+    #[must_use] pub fn as_slice(&self) -> &[T] {
         self.inner.as_slice()
     }
 }

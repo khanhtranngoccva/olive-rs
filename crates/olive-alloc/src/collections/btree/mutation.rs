@@ -282,7 +282,7 @@ mod tests {
         map.clear();
         // The reinserted guard id (N) is now dropped once too, silently.
         assert_eq!(ledger.total_allocated(), N + 1);
-        assert!(ledger.all_dropped_once(0..N + 1));
+        assert!(ledger.all_dropped_once(0..=N));
     }
 
     #[test]
@@ -323,8 +323,7 @@ mod tests {
         assert_eq!(
             survivors.len(),
             2,
-            "expected exactly 2 live ids, got {:?}",
-            survivors
+            "expected exactly 2 live ids, got {survivors:?}"
         );
         assert_eq!(ledger.total_allocated(), 62);
         // No double-free so far.
@@ -422,7 +421,7 @@ mod tests {
         }
         // Survivors (ids 20..100) are still live.
         let live = ledger.live_ids();
-        assert_eq!(live.len(), 80, "unexpected live ids: {:?}", live);
+        assert_eq!(live.len(), 80, "unexpected live ids: {live:?}");
         assert_eq!(live.first().copied(), Some(20));
         assert_eq!(live.last().copied(), Some(99));
         // Dropping the map frees the rest; everything dies exactly once.
@@ -512,7 +511,7 @@ mod tests {
         }
         // Survivors (ids 0..80) are still live.
         let live = ledger.live_ids();
-        assert_eq!(live.len(), 80, "unexpected live ids: {:?}", live);
+        assert_eq!(live.len(), 80, "unexpected live ids: {live:?}");
         assert_eq!(live.first().copied(), Some(0));
         assert_eq!(live.last().copied(), Some(79));
         // Dropping the map frees the rest; everything dies exactly once.
@@ -771,11 +770,11 @@ mod tests {
                 check_ascending_keys(&map);
             }
         }
-        let initial_height = map.root.as_ref().map_or(0, |r| r.height());
+        let initial_height = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
         assert!(initial_height >= 1, "expected multi-level tree");
 
         for i in 0..N {
-            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {}", i);
+            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {i}");
             check_tree_invariant(&map);
             if i % 10 == 0 {
                 check_ascending_keys(&map);
@@ -804,7 +803,7 @@ mod tests {
         );
 
         for i in (0..N).rev() {
-            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {}", i);
+            assert_eq!(map.remove(&i), Some(i * 2), "wrong value for key {i}");
             check_tree_invariant(&map);
             if i % 10 == 0 {
                 check_ascending_keys(&map);
@@ -826,7 +825,7 @@ mod tests {
         }
         let rng = TestRng::new(0xDEAD_BEEF_CAFE_F00D);
         for (idx, key) in rng.permuted(0..N).enumerate() {
-            assert_eq!(map.remove(&key), Some(key), "wrong value for key {}", key);
+            assert_eq!(map.remove(&key), Some(key), "wrong value for key {key}");
             check_tree_invariant(&map);
             if idx % 20 == 0 {
                 check_ascending_keys(&map);
@@ -890,12 +889,12 @@ mod tests {
         for i in 0..80u32 {
             map.try_insert(i, i).unwrap();
         }
-        let initial_height = map.root.as_ref().map_or(0, |r| r.height());
+        let initial_height = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
         assert!(initial_height >= 1, "expected multi-level tree");
 
         // Remove all elements one by one, checking invariant each step.
         for i in 0..80u32 {
-            assert_eq!(map.remove(&i), Some(i), "failed to remove key {}", i);
+            assert_eq!(map.remove(&i), Some(i), "failed to remove key {i}");
             check_tree_invariant(&map);
             if i % 10 == 0 {
                 check_ascending_keys(&map);
@@ -914,12 +913,11 @@ mod tests {
         }
         // Remove in descending order (worst-case for B-tree: always hits rightmost leaf).
         for i in (0..N).rev() {
-            assert_eq!(map.remove(&i), Some(i * 7), "failed to remove key {}", i);
+            assert_eq!(map.remove(&i), Some(i * 7), "failed to remove key {i}");
             assert_eq!(
                 map.len(),
                 i as usize,
-                "length mismatch after removing key {}",
-                i
+                "length mismatch after removing key {i}"
             );
             check_tree_invariant(&map);
             if i % 10 == 0 {

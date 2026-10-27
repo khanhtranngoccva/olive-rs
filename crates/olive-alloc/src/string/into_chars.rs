@@ -184,7 +184,7 @@ impl<A: Allocator> String<A> {
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use core::ops::Deref;
+    
 
     use super::*;
     use olive_core::try_traits::try_default::TryDefault;
@@ -255,6 +255,6 @@ mod tests {
         let mut ic = mk("keep").into_chars();
         assert_eq!(ic.next(), Some('k'));
         let s = ic.into_string();
-        assert_eq!(s.deref(), "eep");
+        assert_eq!(&*s, "eep");
     }
 }

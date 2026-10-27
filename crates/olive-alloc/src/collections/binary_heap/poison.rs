@@ -25,9 +25,7 @@ impl<T, A: Allocator> BinaryHeap<T, A> {
     /// Panic if the heap is poisoned: helper for operations whose
     /// only failure mode is trusting an invariant that no longer holds.
     pub(super) fn assume_unpoisoned(&self) {
-        if self.poisoned {
-            panic!("{POISON_MSG}");
-        }
+        assert!(!self.poisoned, "{POISON_MSG}");
     }
 }
 

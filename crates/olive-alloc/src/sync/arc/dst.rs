@@ -97,7 +97,7 @@ impl<T: ?Sized, A: Allocator> UniqueArcUninit<T, A> {
     pub(crate) fn data_ptr(&self) -> *mut u8 {
         // Project the `value` field out of the fat pointer to get the exact
         // address of the payload slot.
-        unsafe { &raw mut (*self.ptr.as_ptr()).value as *mut u8 }
+        unsafe { (&raw mut (*self.ptr.as_ptr()).value).cast::<u8>() }
     }
 
     /// Consumes the handle and produces the finalized `Arc<T, A>`.

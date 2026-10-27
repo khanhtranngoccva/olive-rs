@@ -365,7 +365,7 @@ impl<'a, K, V, A: Allocator> VacantEntry<'a, K, V, A> {
     /// Returns `(K, V, AllocError)` if memory allocation fails during the
     /// reserve phase. The tree is left unmodified on failure.
     pub fn try_insert(self, value: V) -> Result<&'a mut V, (K, V, AllocError)> {
-        self.try_insert_entry(value).map(|oe| oe.into_mut())
+        self.try_insert_entry(value).map(OccupiedEntry::into_mut)
     }
 
     /// Sets the value of the entry with the `VacantEntry`'s key,
@@ -508,7 +508,7 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for OccupiedEntry<'_
 /// # Safety
 ///
 /// - The parameters must come from a valid map.
-/// - The map must have fewer than usize::MAX items.
+/// - The map must have fewer than `usize::MAX` items.
 ///
 // FIXME: `handle` should probably be a location instead.
 // On (allocator) panic (???), the location is restored with the old handle.
@@ -564,7 +564,7 @@ pub(super) unsafe fn do_two_phase<'a, K, V, A: Allocator>(
                 // Already borrowed above, do not need a second borrow.
                 let root = unsafe { root.reborrow() }.as_mut().unwrap(); // same as ins.left
                 root.push_internal_level(new_node)
-                    .push(ins.kv.0, ins.kv.1, ins.right)
+                    .push(ins.kv.0, ins.kv.1, ins.right);
             })
         }
     };
@@ -572,7 +572,7 @@ pub(super) unsafe fn do_two_phase<'a, K, V, A: Allocator>(
     // SAFETY: modifying the length doesn't invalidate handles to existing nodes.
     #[allow(clippy::arithmetic_side_effects, reason = "length is capped above")]
     {
-        *length += 1
+        *length += 1;
     }
     Ok(leaf_kv_handle)
 }

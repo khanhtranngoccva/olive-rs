@@ -1,4 +1,4 @@
-//! Public insertion API for BTreeMap.
+//! Public insertion API for `BTreeMap`.
 //!
 //! Thin facade exposing the user-facing insertion variants. All actual
 //! insertion logic lives in [`entry`](super::entry) and
@@ -231,11 +231,10 @@ mod tests {
                 }
             }
         }
-        let h = map.root.as_ref().map_or(0, |r| r.height());
+        let h = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
         assert_eq!(
             missing_count, 0,
-            "Missing {} keys after leaf split, first missing={}, height={}",
-            missing_count, first_missing, h
+            "Missing {missing_count} keys after leaf split, first missing={first_missing}, height={h}"
         );
     }
 
@@ -251,14 +250,13 @@ mod tests {
         }
         assert_eq!(map.len(), 95);
         // Root growth means the tree is now at least two levels deep.
-        let h = map.root.as_ref().map_or(0, |r| r.height());
+        let h = map.root.as_ref().map_or(0, super::super::node::NodeRef::height);
         assert!(
             h >= 2,
-            "expected multi-level tree (root grew), got height {}",
-            h
+            "expected multi-level tree (root grew), got height {h}"
         );
         for i in 0..95u32 {
-            assert_eq!(map.get(&i), Some(&(i * 2)), "missing key {}", i);
+            assert_eq!(map.get(&i), Some(&(i * 2)), "missing key {i}");
         }
     }
 
@@ -359,7 +357,7 @@ mod tests {
         assert!(b.is_empty());
         for i in 0..100u32 {
             let expected = if i < 50 { i } else { i * 2 };
-            assert_eq!(a.get(&i), Some(&expected), "missing key {}", i);
+            assert_eq!(a.get(&i), Some(&expected), "missing key {i}");
         }
     }
 
@@ -553,10 +551,10 @@ mod tests {
         // Snapshot the original union as a key -> value map so we can verify
         // the partition contract after a forced failure.
         let mut expected: HashMap<u32, u32> = HashMap::new();
-        for (k, v) in a.iter() {
+        for (k, v) in &a {
             expected.insert(k.inner, v.inner);
         }
-        for (k, v) in b.iter() {
+        for (k, v) in &b {
             expected.insert(k.inner, v.inner);
         }
 
@@ -576,7 +574,7 @@ mod tests {
         // with no key appearing twice. This proves nothing was silently lost
         // and nothing was duplicated.
         let mut seen: HashSet<u32> = HashSet::new();
-        for (k, v) in a.iter() {
+        for (k, v) in &a {
             assert!(
                 seen.insert(k.inner),
                 "duplicate key in self after failure: {}",
@@ -588,7 +586,7 @@ mod tests {
                 k.inner
             );
         }
-        for (k, v) in b.iter() {
+        for (k, v) in &b {
             assert!(
                 seen.insert(k.inner),
                 "duplicate key in other after failure: {}",

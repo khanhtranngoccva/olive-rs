@@ -177,7 +177,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
                 reason = "asserted child + 1 < end <= len, so both the sibling index and the increment are in range"
             )]
             {
-                child += go_right as usize;
+                child += usize::from(go_right);
             }
             // If we are already in order, stop.
             if element >= unsafe { self.data.get_unchecked(child) } {
@@ -356,7 +356,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
 ///
 /// A single `usize` of bits always suffices, because a tree of `2^n - 1`
 /// items will record `n - 1` steps, with `n` being the number of bits on the
-/// target system and thus `2^n - 1` being usize::MAX.
+/// target system and thus `2^n - 1` being `usize::MAX`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SiftStack {
     start: usize,
@@ -366,7 +366,7 @@ pub(super) struct SiftStack {
 
 impl SiftStack {
     /// Create a fresh, empty recorder. The empty state is not valid for the commit phase,
-    /// and begin() must be invoked.
+    /// and `begin()` must be invoked.
     #[inline]
     pub(super) const fn new() -> Self {
         Self {

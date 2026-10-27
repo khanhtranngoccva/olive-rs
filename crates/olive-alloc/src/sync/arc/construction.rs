@@ -84,7 +84,7 @@ impl<T: ?Sized> Weak<T, Global> {
     /// A dangling `Weak` owns no memory and never keeps a value alive.
     /// Dropping it is a no-op.
     #[inline]
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         // No allocation occurs, so this cannot fail. The pointer is pinned to
         // the misaligned dangling sentinel, which `Drop` and every access path
         // detect before touching memory.

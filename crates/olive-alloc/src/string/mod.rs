@@ -133,7 +133,7 @@ impl<T: Display + ?Sized> TryToString for T {}
 #[cfg(test)]
 mod tests {
     use core::fmt::{self, Display};
-    use core::ops::Deref;
+    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -148,13 +148,13 @@ mod tests {
     #[test]
     fn try_to_string_matches_display() {
         let s = mk("héllo wörld ✓");
-        assert_eq!(s.try_to_string().unwrap().deref(), "héllo wörld ✓");
+        assert_eq!(&*s.try_to_string().unwrap(), "héllo wörld ✓");
     }
 
     #[test]
     fn try_to_string_empty() {
         let s = String::new();
-        assert_eq!(s.try_to_string().unwrap().deref(), "");
+        assert_eq!(&*s.try_to_string().unwrap(), "");
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
         // live behind interior mutability, so the string's stored `&alloc`
         // observes the same instance we hold here.
         let out: String<&CountingAllocator> = s.try_to_string_in(&alloc).unwrap();
-        assert_eq!(out.deref(), "payload");
+        assert_eq!(&*out, "payload");
         // The output buffer was allocated through our counting allocator.
         assert!(alloc.allocations() >= 1);
     }
@@ -185,7 +185,7 @@ mod tests {
     fn try_to_string_blanket_for_non_string_display() {
         // Primitives implement `Display` via std; our trait follows.
         let n: i32 = -42;
-        assert_eq!(n.try_to_string().unwrap().deref(), "-42");
+        assert_eq!(&*n.try_to_string().unwrap(), "-42");
 
         // A custom `Display` type renders through its own formatter.
         struct Pair(i32, i32);
@@ -195,13 +195,13 @@ mod tests {
             }
         }
         let p = Pair(7, 8);
-        assert_eq!(p.try_to_string().unwrap().deref(), "(7,8)");
+        assert_eq!(&*p.try_to_string().unwrap(), "(7,8)");
     }
 
     #[test]
     fn try_to_string_does_not_mutate_receiver() {
         let s = mk("source");
         let _ = s.try_to_string().unwrap();
-        assert_eq!(s.deref(), "source");
+        assert_eq!(&*s, "source");
     }
 }

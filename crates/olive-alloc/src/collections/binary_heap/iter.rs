@@ -33,14 +33,14 @@ impl<'a, T> Iter<'a, T> {
 
     /// Returns `true` if all elements have been yielded.
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    #[must_use] pub fn is_empty(&self) -> bool {
         self.inner.len() == 0
     }
 
     /// Views the remaining, not-yet-yielded elements as a slice, in
     /// raw buffer order.
     #[inline]
-    pub fn as_slice(&self) -> &'a [T] {
+    #[must_use] pub fn as_slice(&self) -> &'a [T] {
         self.inner.as_slice()
     }
 }

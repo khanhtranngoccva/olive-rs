@@ -38,7 +38,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
     /// the same as the inner type of this Rc (including lifetimes).
     ///
     /// This is trivially the case if no such pointers exist, for example
-    /// immediately after Rc::new.
+    /// immediately after `Rc::new`.
     #[inline]
     pub unsafe fn get_mut_unchecked(this: &mut Self) -> &mut T {
         let inner = unsafe { Self::inner_mut(this) };

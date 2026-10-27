@@ -13,7 +13,6 @@
 //!   omitted; this is a pure type with no compiler magic.
 
 use core::marker::PhantomData;
-use core::ops::Deref;
 use core::ptr::{self, NonNull};
 
 use crate::alloc::{Allocator, Global, Layout};
@@ -57,7 +56,7 @@ pub struct Box<T: ?Sized, A: Allocator = Global> {
 /// Owns the raw pointer, layout, and allocator of a [`Box`] being dropped, and
 /// frees them in its own `Drop`.
 ///
-/// Dropping the contained value [ptr::drop_in_place](`ptr::drop_in_place`) can panic.
+/// Dropping the contained value [`ptr::drop_in_place`](`ptr::drop_in_place`) can panic.
 /// Without this guard, a panic would unwind past the deallocation line and leak the block.
 /// Arming the guard *before* dropping the pointee guarantees the free runs both
 /// on the happy path (guard falls out of scope normally) and on unwind (guard's
@@ -89,7 +88,7 @@ impl<T: ?Sized, A: Allocator> Drop for Box<T, A> {
         // `Layout::for_value` needs the dynamic size (and vtable for trait
         // objects), which is carried by `self.inner`.
         let layout = {
-            let val: &T = self.deref();
+            let val: &T = &*self;
             Layout::for_value(val)
         };
         // Arm the deallocation guard *before* dropping the pointee. The guard

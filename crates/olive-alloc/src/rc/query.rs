@@ -217,7 +217,7 @@ mod tests {
         // Cast away constness — only sound because we hold the sole strong
         // reference (strong == 1, weak == 0) and the pointer's provenance
         // covers the payload slot.
-        let mut_p = p as *mut u64;
+        let mut_p = p.cast_mut();
         unsafe {
             ptr::write(mut_p, 7);
         }
@@ -237,7 +237,7 @@ mod tests {
         let arr = [1u8, 2, 3];
         let rc: Rc<[u8]> = Rc::try_from_slice(&arr[..]).unwrap();
         let p: *const [u8] = Rc::as_ptr(&rc);
-        let mut_p = p as *mut [u8];
+        let mut_p = p.cast_mut();
         unsafe {
             (*mut_p)[1] = 20;
         }

@@ -73,13 +73,13 @@ impl<A: Allocator> BorrowMut<str> for String<A> {
 
 impl<A: Allocator> fmt::Debug for String<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self.deref(), f)
+        fmt::Debug::fmt(&**self, f)
     }
 }
 
 impl<A: Allocator> fmt::Display for String<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self.deref(), f)
+        fmt::Display::fmt(&**self, f)
     }
 }
 
@@ -87,7 +87,7 @@ impl<A: Allocator> fmt::Display for String<A> {
 
 impl<A: Allocator> Hash for String<A> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.deref().hash(state)
+        self.deref().hash(state);
     }
 }
 
@@ -101,7 +101,7 @@ impl<A: AllocatorTryClone> TryClone for String<A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = self.buf.allocator().try_clone()?;
         let mut out = Self::try_with_capacity_in(self.len(), alloc)?;
-        out.try_push_str(self.deref())
+        out.try_push_str(self)
             .map_err(TryCloneError::Reserve)?;
         Ok(out)
     }
@@ -254,7 +254,7 @@ mod tests {
         let s = mk("hello");
         let r: &str = &s;
         assert_eq!(r, "hello");
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
     fn try_clone_matches() {
         let s = mk("original");
         let c = s.try_clone().unwrap();
-        assert_eq!(c.deref(), "original");
+        assert_eq!(&*c, "original");
         assert_ne!(s.as_bytes().as_ptr(), c.as_bytes().as_ptr());
     }
 
@@ -348,7 +348,7 @@ mod tests {
         let err = s.try_clone().unwrap_err();
         assert!(matches!(err, TryCloneError::Reserve(_)));
         // The original is untouched.
-        assert_eq!(s.deref(), "original");
+        assert_eq!(&*s, "original");
     }
 
     // ── TryExtend<char> ───────────────────────────────────────────────────────
@@ -357,7 +357,7 @@ mod tests {
     fn extend_chars_via_trait() {
         let mut s = String::new();
         s.try_extend(['a', 'b', 'c'].into_iter()).unwrap();
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
@@ -376,7 +376,7 @@ mod tests {
         // inserted.
         assert!(resume.has_head());
         assert_eq!(*resume.head().unwrap(), 'x');
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     // ── TryExtend<&str> ───────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ mod tests {
     fn extend_strs_via_trait() {
         let mut s = mk("ab");
         s.try_extend(["cd", "ef"].into_iter()).unwrap();
-        assert_eq!(s.deref(), "abcdef");
+        assert_eq!(&*s, "abcdef");
     }
 
     #[test]
@@ -401,7 +401,7 @@ mod tests {
         assert!(err.is_alloc());
         assert!(resume.has_head());
         assert_eq!(*resume.head().unwrap(), "x");
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     // ── TryFromIterator<char> ─────────────────────────────────────────────────
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn collect_chars_into_string() {
         let s: String = ['x', 'y', 'z'].into_iter().try_collect().unwrap();
-        assert_eq!(s.deref(), "xyz");
+        assert_eq!(&*s, "xyz");
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn collect_strs_into_string() {
         let s: String = ["ab", "cd"].into_iter().try_collect().unwrap();
-        assert_eq!(s.deref(), "abcd");
+        assert_eq!(&*s, "abcd");
     }
 
     #[test]

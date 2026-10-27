@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(unsafe { *p }, 42);
         // The pointer addresses the payload slot, not the counter header:
         // writing through it (sole owner) must be observable via the handle.
-        unsafe { *(p as *mut u32) = 7 };
+        unsafe { *p.cast_mut() = 7 };
         assert_eq!(*arc, 7);
     }
 
@@ -271,8 +271,8 @@ mod tests {
         // Tear down the shared block exactly once through one handle: read the
         // Arc out of its `ManuallyDrop` slot (bitwise copy; no refcount effect)
         // and drop that owned value.
-        use core::ops::Deref;
-        unsafe { drop(ptr::read(a.deref())) };
+        
+        unsafe { drop(ptr::read(&*a)) };
     }
 
     #[test]

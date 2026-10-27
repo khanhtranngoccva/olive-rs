@@ -314,7 +314,7 @@ impl<A: Allocator> String<A> {
 mod tests {
     extern crate std;
 
-    use core::ops::Deref;
+    
 
     use super::*;
 
@@ -330,7 +330,7 @@ mod tests {
         s.try_reserve(32).unwrap();
         let expected_cap = s.capacity();
         s.try_truncate(5).unwrap();
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
         assert!(s.capacity() == expected_cap);
     }
 
@@ -340,16 +340,16 @@ mod tests {
         // é occupies bytes [0, 2); byte index 1 is inside it.
         let err = s.try_truncate(1).unwrap_err();
         assert_eq!(err.new_length, 1);
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
     fn try_truncate_at_or_beyond_len_is_noop() {
         let mut s = mk("hello");
         s.try_truncate(5).unwrap();
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
         s.try_truncate(100).unwrap();
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     // ── pop ───────────────────────────────────────────────────────────────────
@@ -370,14 +370,14 @@ mod tests {
     fn try_remove_ascii() {
         let mut s = mk("hello");
         assert_eq!(s.try_remove(0).unwrap(), 'h');
-        assert_eq!(s.deref(), "ello");
+        assert_eq!(&*s, "ello");
     }
 
     #[test]
     fn try_remove_multibyte() {
         let mut s = mk("h🦊i");
         assert_eq!(s.try_remove(1).unwrap(), '🦊');
-        assert_eq!(s.deref(), "hi");
+        assert_eq!(&*s, "hi");
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
         let err = s.try_remove(1).unwrap_err();
         assert_eq!(err.index, 1);
         assert_eq!(err.len, 6);
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -396,7 +396,7 @@ mod tests {
         let err = s.try_remove(5).unwrap_err();
         assert_eq!(err.index, 5);
         assert_eq!(err.len, 2);
-        assert_eq!(s.deref(), "ab");
+        assert_eq!(&*s, "ab");
     }
 
     // ── retain ────────────────────────────────────────────────────────────────
@@ -405,21 +405,21 @@ mod tests {
     fn retain_keeps_matching() {
         let mut s = mk("a1b2c3");
         s.retain(|c| c.is_ascii_alphabetic());
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
     fn retain_multibyte() {
         let mut s = mk("aé🦊z");
         s.retain(|c| c != 'é');
-        assert_eq!(s.deref(), "a🦊z");
+        assert_eq!(&*s, "a🦊z");
     }
 
     #[test]
     fn retain_none_left() {
         let mut s = mk("123");
         s.retain(|_c| false);
-        assert_eq!(s.deref(), "");
+        assert_eq!(&*s, "");
     }
 
     #[test]
@@ -427,18 +427,16 @@ mod tests {
         let mut s = mk("aéb🦊d");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             s.retain(|c| {
-                if c == 'b' {
-                    panic!("predicate panicked");
-                }
+                assert!((c != 'b'), "predicate panicked");
                 if c == 'é' {
                     return false;
                 }
                 true
-            })
+            });
         }));
         assert!(result.is_err());
         assert!(core::str::from_utf8(s.as_bytes()).is_ok());
-        assert_eq!(s.deref(), "ab🦊d");
+        assert_eq!(&*s, "ab🦊d");
     }
 
     // ── clear ─────────────────────────────────────────────────────────────────
@@ -453,6 +451,6 @@ mod tests {
         assert_eq!(s.capacity(), cap);
         // The buffer must remain reusable after a clear.
         s.try_push_str("new").unwrap();
-        assert_eq!(s.deref(), "new");
+        assert_eq!(&*s, "new");
     }
 }

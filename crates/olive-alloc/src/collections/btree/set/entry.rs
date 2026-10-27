@@ -202,12 +202,12 @@ pub struct OccupiedEntry<'a, T: 'a, A: Allocator = Global> {
 
 impl<T: Ord, A: Allocator> OccupiedEntry<'_, T, A> {
     /// Gets a reference to the value corresponding to the entry in the set.
-    pub fn get(&self) -> &T {
+    #[must_use] pub fn get(&self) -> &T {
         self.inner.key()
     }
 
     /// Removes the value from the set, returning it.
-    pub fn remove(self) -> T {
+    #[must_use] pub fn remove(self) -> T {
         self.inner.remove_entry().0
     }
 }

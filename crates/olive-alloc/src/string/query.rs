@@ -2,7 +2,6 @@
 
 use super::String;
 use crate::vec::Vec;
-use core::ops::{Deref, DerefMut};
 use olive_core::alloc::Allocator;
 
 impl<A: Allocator> String<A> {
@@ -42,7 +41,7 @@ impl<A: Allocator> String<A> {
     /// [`Deref`] coercion to `&str`.
     #[inline]
     pub fn as_str(&self) -> &str {
-        self.deref()
+        self
     }
 
     /// Returns the string's contents as a `&mut str`.
@@ -51,7 +50,7 @@ impl<A: Allocator> String<A> {
     /// [`DerefMut`] coercion to `&mut str`.
     #[inline]
     pub fn as_mut_str(&mut self) -> &mut str {
-        self.deref_mut()
+        self
     }
 
     /// Returns the string's backing byte buffer as a `&Vec<u8>`.
@@ -79,7 +78,7 @@ impl<A: Allocator> String<A> {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Deref;
+    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -128,14 +127,14 @@ mod tests {
         let s = mk("query");
         assert_eq!(s.as_str(), "query");
         // Matches the Deref view.
-        assert_eq!(s.deref(), s.as_str());
+        assert_eq!(&*s, s.as_str());
     }
 
     #[test]
     fn as_mut_str_mutates_in_place() {
         let mut s = mk("abc");
         s.as_mut_str().make_ascii_uppercase();
-        assert_eq!(s.deref(), "ABC");
+        assert_eq!(&*s, "ABC");
         assert_eq!(s.as_mut_str().len(), 3);
     }
 
@@ -153,6 +152,6 @@ mod tests {
         // SAFETY: writing ASCII bytes keeps the buffer valid UTF-8.
         let v = unsafe { s.as_mut_vec() };
         v[0] = b'A';
-        assert_eq!(s.deref(), "Abc");
+        assert_eq!(&*s, "Abc");
     }
 }

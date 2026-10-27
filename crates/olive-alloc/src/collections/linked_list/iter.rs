@@ -691,7 +691,7 @@ mod tests {
         for value in 0..5 {
             l.try_push_back(value).unwrap();
         }
-        for element in l.iter_mut() {
+        for element in &mut l {
             *element *= 2;
         }
         let collected: Vec<i32> = l.iter().copied().collect();

@@ -8,7 +8,7 @@ use core::{mem, ptr};
 #[allow(dead_code)] // keep as illustration and for future use
 #[inline]
 pub fn take_mut<T>(v: &mut T, change: impl FnOnce(T) -> T) {
-    replace(v, |value| (change(value), ()))
+    replace(v, |value| (change(value), ()));
 }
 
 /// This replaces the value behind the `v` unique reference by calling the

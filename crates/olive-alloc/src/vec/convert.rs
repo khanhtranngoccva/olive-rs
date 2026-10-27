@@ -334,7 +334,7 @@ mod tests {
         };
         let msg = format!("{e}");
         assert!(msg.contains("[T; 4]"));
-        assert!(msg.contains("2"));
+        assert!(msg.contains('2'));
 
         let e2 = TryVecIntoArrayError::Shrink(TryReserveError::new_capacity_overflow());
         let msg2 = format!("{e2}");

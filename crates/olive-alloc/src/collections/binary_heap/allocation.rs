@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn try_push_give_back_hands_element_back_on_failure() {
         let alloc = BudgetedAlloc::new(1);
-        let mut heap: BinaryHeap<i32, _> = BinaryHeap::new_in(alloc.clone());
+        let mut heap: BinaryHeap<u32, _> = BinaryHeap::new_in(alloc.clone());
         // The one budgeted allocation buys the amortized first block,
         // which is wider than a single slot; fill it completely so the
         // next push is genuinely the one that must re-ask the allocator.

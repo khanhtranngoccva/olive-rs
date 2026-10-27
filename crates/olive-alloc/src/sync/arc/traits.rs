@@ -344,7 +344,7 @@ mod tests {
     fn arc_pointer_formats_as_raw_ptr() {
         let arc = Arc::try_new(42u32).unwrap();
         let expected = std::format!("{:p}", Arc::as_ptr(&arc));
-        let actual = std::format!("{:p}", arc);
+        let actual = std::format!("{arc:p}");
         assert_eq!(expected, actual);
     }
 
@@ -367,14 +367,14 @@ mod tests {
     #[test]
     fn weak_debug_prints_marker() {
         let w: Weak<i32, Global> = Weak::new();
-        assert_eq!(std::format!("{:?}", w), "(Weak)");
+        assert_eq!(std::format!("{w:?}"), "(Weak)");
     }
 
     #[test]
     fn weak_debug_of_live_weak_also_prints_marker() {
         let arc = Arc::try_new(1i32).unwrap();
         let w = Arc::try_downgrade(&arc).unwrap();
-        assert_eq!(std::format!("{:?}", w), "(Weak)");
+        assert_eq!(std::format!("{w:?}"), "(Weak)");
     }
 
     // --- Default / TryDefault ------------------------------------------------

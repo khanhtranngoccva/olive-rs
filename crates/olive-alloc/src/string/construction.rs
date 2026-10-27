@@ -19,7 +19,7 @@ impl String {
     /// The returned string contains no characters and has no allocated
     /// capacity.
     #[inline]
-    pub const fn new() -> Self {
+    #[must_use] pub const fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
@@ -130,7 +130,7 @@ impl<A: AllocatorTryDefault> TryDefault for String<A> {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Deref;
+    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn from_str_roundtrip() {
         let s = mk("héllo wörld ✓");
-        assert_eq!(s.deref(), "héllo wörld ✓");
+        assert_eq!(&*s, "héllo wörld ✓");
     }
 
     // ── String::new_in ────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ mod tests {
     fn try_from_str_in_copies_content_into_custom_allocator() {
         let alloc = CountingAllocator::new();
         let s: String<&CountingAllocator> = String::try_from_str_in("payload", &alloc).unwrap();
-        assert_eq!(s.deref(), "payload");
+        assert_eq!(&*s, "payload");
         // The content was copied through our counting allocator, not leaked
         // from the source slice.
         assert!(alloc.allocations() >= 1);
@@ -231,7 +231,7 @@ mod tests {
     fn default_is_empty() {
         let s = String::default();
         assert!(s.is_empty());
-        assert_eq!(s.deref(), "");
+        assert_eq!(&*s, "");
     }
 
     #[test]

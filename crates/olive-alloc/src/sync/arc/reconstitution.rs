@@ -56,7 +56,7 @@ impl<T: ?Sized> Arc<T, Global> {
         unsafe {
             let inner = data_get_ptr(p);
             Arc {
-                ptr: NonNull::new_unchecked(inner as *mut ArcInner<T>),
+                ptr: NonNull::new_unchecked(inner.cast_mut()),
                 alloc: Global,
                 _marker: PhantomData,
             }
@@ -114,7 +114,7 @@ impl<T: ?Sized, A: Allocator> Arc<T, A> {
         unsafe {
             let inner = data_get_ptr(p);
             Arc {
-                ptr: NonNull::new_unchecked(inner as *mut ArcInner<T>),
+                ptr: NonNull::new_unchecked(inner.cast_mut()),
                 alloc,
                 _marker: PhantomData,
             }
@@ -170,7 +170,7 @@ impl<T: ?Sized> Weak<T, Global> {
             let inner = if is_dangling_weak(p as *const ArcInner<T>) {
                 p as *mut ArcInner<T>
             } else {
-                data_get_ptr(p) as *mut ArcInner<T>
+                data_get_ptr(p).cast_mut()
             };
             Weak {
                 ptr: NonNull::new_unchecked(inner),
@@ -225,7 +225,7 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
             let inner = if is_dangling_weak(p as *const ArcInner<T>) {
                 p as *mut ArcInner<T>
             } else {
-                data_get_ptr(p) as *mut ArcInner<T>
+                data_get_ptr(p).cast_mut()
             };
             Weak {
                 ptr: NonNull::new_unchecked(inner),

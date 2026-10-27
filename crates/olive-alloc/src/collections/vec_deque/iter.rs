@@ -74,17 +74,14 @@ impl<'a, T> Iterator for Iter<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<&'a T> {
-        match self.i1.next() {
-            Some(val) => Some(val),
-            None => {
-                // Most of the time the iterator will either always call
-                // `next()` or always call `next_back()`. By swapping the
-                // iterators once the first one is empty, we ensure that the
-                // first branch is taken as often as possible, without
-                // sacrificing correctness, as `i1` is empty anyway.
-                mem::swap(&mut self.i1, &mut self.i2);
-                self.i1.next()
-            }
+        if let Some(val) = self.i1.next() { Some(val) } else {
+            // Most of the time the iterator will either always call
+            // `next()` or always call `next_back()`. By swapping the
+            // iterators once the first one is empty, we ensure that the
+            // first branch is taken as often as possible, without
+            // sacrificing correctness, as `i1` is empty anyway.
+            mem::swap(&mut self.i1, &mut self.i2);
+            self.i1.next()
         }
     }
 
@@ -111,13 +108,10 @@ impl<'a, T> Iterator for Iter<'a, T> {
 impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a T> {
-        match self.i2.next_back() {
-            Some(val) => Some(val),
-            None => {
-                // Same swap rationale as in `next()`, applied to the back.
-                mem::swap(&mut self.i1, &mut self.i2);
-                self.i2.next_back()
-            }
+        if let Some(val) = self.i2.next_back() { Some(val) } else {
+            // Same swap rationale as in `next()`, applied to the back.
+            mem::swap(&mut self.i1, &mut self.i2);
+            self.i2.next_back()
         }
     }
 
@@ -203,14 +197,11 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<&'a mut T> {
-        match self.i1.next() {
-            Some(val) => Some(val),
-            None => {
-                // Swap once the front slice is exhausted so subsequent
-                // `next()` calls hit the populated half directly.
-                mem::swap(&mut self.i1, &mut self.i2);
-                self.i1.next()
-            }
+        if let Some(val) = self.i1.next() { Some(val) } else {
+            // Swap once the front slice is exhausted so subsequent
+            // `next()` calls hit the populated half directly.
+            mem::swap(&mut self.i1, &mut self.i2);
+            self.i1.next()
         }
     }
 
@@ -237,12 +228,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut T> {
-        match self.i2.next_back() {
-            Some(val) => Some(val),
-            None => {
-                mem::swap(&mut self.i1, &mut self.i2);
-                self.i2.next_back()
-            }
+        if let Some(val) = self.i2.next_back() { Some(val) } else {
+            mem::swap(&mut self.i1, &mut self.i2);
+            self.i2.next_back()
         }
     }
 

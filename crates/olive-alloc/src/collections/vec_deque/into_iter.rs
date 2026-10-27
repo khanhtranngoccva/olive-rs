@@ -186,7 +186,7 @@ mod tests {
         let last = dq.into_iter().last();
         // `last` yields the back element (id 3) and leaves the rest to the
         // deque's Drop, which destroys the three front elements.
-        assert_eq!(last.as_ref().map(|t| t.id()), Some(3));
+        assert_eq!(last.as_ref().map(olive_test_helpers::TrackedItem::id), Some(3));
         assert_eq!(ledger.live_ids(), std::vec![3]);
         assert!(ledger.double_dropped().is_empty());
         drop(last);

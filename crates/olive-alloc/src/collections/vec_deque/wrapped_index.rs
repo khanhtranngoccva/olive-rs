@@ -1,24 +1,24 @@
 use core::cmp::Ordering;
 
-/// Represents an index that can be safely used to index the VecDeque buffer.
+/// Represents an index that can be safely used to index the `VecDeque` buffer.
 /// It exists as a separate type to avoid passing logical (unwrapped) indices to various
-/// VecDeque functions by accident.
+/// `VecDeque` functions by accident.
 ///
-/// The invariant of this index is that it is always < VecDeque capacity, unless the VecDeque
+/// The invariant of this index is that it is always < `VecDeque` capacity, unless the `VecDeque`
 /// is empty (in that case the index can be 0 when the capacity is 0).
 #[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 #[repr(transparent)]
 pub(super) struct WrappedIndex(usize);
 
 impl WrappedIndex {
-    /// The newly constructed index has to be in-bounds for the VecDeque
+    /// The newly constructed index has to be in-bounds for the `VecDeque`
     /// that uses the index.
     #[inline(always)]
     pub(super) fn from_arbitrary_number(index: usize) -> Self {
         Self(index)
     }
 
-    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque.
+    /// Safety invariant: the newly constructed index must still be in-bounds for the `VecDeque`.
     #[inline(always)]
     pub(super) unsafe fn add(self, offset: usize) -> Self {
         #[allow(
@@ -28,7 +28,7 @@ impl WrappedIndex {
         Self(self.0 + offset)
     }
 
-    /// Safety invariant: the newly constructed index must still be in-bounds for the VecDeque.
+    /// Safety invariant: the newly constructed index must still be in-bounds for the `VecDeque`.
     #[inline(always)]
     #[expect(
         unused,

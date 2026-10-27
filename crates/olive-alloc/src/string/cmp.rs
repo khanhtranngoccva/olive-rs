@@ -16,7 +16,7 @@ use olive_core::alloc::Allocator;
 impl<A: Allocator> PartialEq for String<A> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
+        **self == **other
     }
 }
 
@@ -32,7 +32,7 @@ impl<A: Allocator> PartialOrd for String<A> {
 impl<A: Allocator> Ord for String<A> {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        self.deref().cmp(other.deref())
+        self.deref().cmp(&**other)
     }
 }
 
@@ -198,7 +198,7 @@ mod tests {
             assert_eq!(s.partial_cmp(VAL), Some(Ordering::Equal));
         }
 
-        /// Edge 0-4: str vs Cow::Borrowed
+        /// Edge 0-4: str vs `Cow::Borrowed`
         #[test]
         fn e04_str_vs_cow_borrowed() {
             let c: Cow<str> = Cow::Borrowed(VAL);
@@ -210,7 +210,7 @@ mod tests {
             assert_eq!(c.partial_cmp(VAL), Some(Ordering::Equal));
         }
 
-        /// Edge 0-5: str vs Cow::Owned
+        /// Edge 0-5: str vs `Cow::Owned`
         #[test]
         fn e05_str_vs_cow_owned() {
             let c: Cow<str> = Cow::Owned(mk(VAL));
@@ -248,7 +248,7 @@ mod tests {
             assert_eq!(s.partial_cmp(r), Some(Ordering::Equal));
         }
 
-        /// Edge 1-4: &str vs Cow::Borrowed
+        /// Edge 1-4: &str vs `Cow::Borrowed`
         #[test]
         fn e14_ref_str_vs_cow_borrowed() {
             let r: &str = VAL;
@@ -261,7 +261,7 @@ mod tests {
             assert_eq!(c.partial_cmp(r), Some(Ordering::Equal));
         }
 
-        /// Edge 1-5: &str vs Cow::Owned
+        /// Edge 1-5: &str vs `Cow::Owned`
         #[test]
         fn e15_ref_str_vs_cow_owned() {
             let r: &str = VAL;
@@ -287,7 +287,7 @@ mod tests {
             assert_eq!(s.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 2-4: Box<str> vs Cow::Borrowed
+        /// Edge 2-4: Box<str> vs `Cow::Borrowed`
         #[test]
         fn e24_box_str_vs_cow_borrowed() {
             let b = box_mk(VAL);
@@ -300,7 +300,7 @@ mod tests {
             assert_eq!(c.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 2-5: Box<str> vs Cow::Owned
+        /// Edge 2-5: Box<str> vs `Cow::Owned`
         #[test]
         fn e25_box_str_vs_cow_owned() {
             let b = box_mk(VAL);
@@ -313,7 +313,7 @@ mod tests {
             assert_eq!(c.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 3-4: String vs Cow::Borrowed
+        /// Edge 3-4: String vs `Cow::Borrowed`
         #[test]
         fn e34_string_vs_cow_borrowed() {
             let s = mk(VAL);
@@ -326,7 +326,7 @@ mod tests {
             assert_eq!(c.partial_cmp(&s), Some(Ordering::Equal));
         }
 
-        /// Edge 3-5: String vs Cow::Owned
+        /// Edge 3-5: String vs `Cow::Owned`
         #[test]
         fn e35_string_vs_cow_owned() {
             let s = mk(VAL);
@@ -339,7 +339,7 @@ mod tests {
             assert_eq!(c.partial_cmp(&s), Some(Ordering::Equal));
         }
 
-        /// Edge 4-5: Cow::Borrowed vs Cow::Owned
+        /// Edge 4-5: `Cow::Borrowed` vs `Cow::Owned`
         #[test]
         fn e45_cow_borrowed_vs_cow_owned() {
             let cb: Cow<str> = Cow::Borrowed(VAL);
@@ -408,7 +408,7 @@ mod tests {
             assert_ne!(s.partial_cmp(A), Some(Ordering::Equal));
         }
 
-        /// Edge 0-4: str vs Cow::Borrowed
+        /// Edge 0-4: str vs `Cow::Borrowed`
         #[test]
         fn e04_str_vs_cow_borrowed() {
             let c: Cow<str> = Cow::Borrowed(B);
@@ -420,7 +420,7 @@ mod tests {
             assert_ne!(c.partial_cmp(A), Some(Ordering::Equal));
         }
 
-        /// Edge 0-5: str vs Cow::Owned
+        /// Edge 0-5: str vs `Cow::Owned`
         #[test]
         fn e05_str_vs_cow_owned() {
             let c: Cow<str> = Cow::Owned(mk(B));
@@ -458,7 +458,7 @@ mod tests {
             assert_ne!(s.partial_cmp(r), Some(Ordering::Equal));
         }
 
-        /// Edge 1-4: &str vs Cow::Borrowed
+        /// Edge 1-4: &str vs `Cow::Borrowed`
         #[test]
         fn e14_ref_str_vs_cow_borrowed() {
             let r: &str = A;
@@ -471,7 +471,7 @@ mod tests {
             assert_ne!(c.partial_cmp(r), Some(Ordering::Equal));
         }
 
-        /// Edge 1-5: &str vs Cow::Owned
+        /// Edge 1-5: &str vs `Cow::Owned`
         #[test]
         fn e15_ref_str_vs_cow_owned() {
             let r: &str = A;
@@ -497,7 +497,7 @@ mod tests {
             assert_ne!(s.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 2-4: Box<str> vs Cow::Borrowed
+        /// Edge 2-4: Box<str> vs `Cow::Borrowed`
         #[test]
         fn e24_box_str_vs_cow_borrowed() {
             let b = box_mk(A);
@@ -510,7 +510,7 @@ mod tests {
             assert_ne!(c.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 2-5: Box<str> vs Cow::Owned
+        /// Edge 2-5: Box<str> vs `Cow::Owned`
         #[test]
         fn e25_box_str_vs_cow_owned() {
             let b = box_mk(A);
@@ -523,7 +523,7 @@ mod tests {
             assert_ne!(c.partial_cmp(&b), Some(Ordering::Equal));
         }
 
-        /// Edge 3-4: String vs Cow::Borrowed
+        /// Edge 3-4: String vs `Cow::Borrowed`
         #[test]
         fn e34_string_vs_cow_borrowed() {
             let s = mk(A);
@@ -536,7 +536,7 @@ mod tests {
             assert_ne!(c.partial_cmp(&s), Some(Ordering::Equal));
         }
 
-        /// Edge 3-5: String vs Cow::Owned
+        /// Edge 3-5: String vs `Cow::Owned`
         #[test]
         fn e35_string_vs_cow_owned() {
             let s = mk(A);
@@ -549,7 +549,7 @@ mod tests {
             assert_ne!(c.partial_cmp(&s), Some(Ordering::Equal));
         }
 
-        /// Edge 4-5: Cow::Borrowed vs Cow::Owned
+        /// Edge 4-5: `Cow::Borrowed` vs `Cow::Owned`
         #[test]
         fn e45_cow_borrowed_vs_cow_owned() {
             let cb: Cow<str> = Cow::Borrowed(A);
@@ -627,7 +627,7 @@ mod tests {
             assert_eq!(hi_s.partial_cmp(lo), Some(Ordering::Greater));
         }
 
-        /// Edge 0-4: str vs Cow::Borrowed
+        /// Edge 0-4: str vs `Cow::Borrowed`
         #[test]
         fn e04_str_vs_cow_borrowed() {
             let lo: &str = LO;
@@ -642,7 +642,7 @@ mod tests {
             assert_eq!(hi_c.partial_cmp(lo), Some(Ordering::Greater));
         }
 
-        /// Edge 0-5: str vs Cow::Owned
+        /// Edge 0-5: str vs `Cow::Owned`
         #[test]
         fn e05_str_vs_cow_owned() {
             let lo: &str = LO;
@@ -687,7 +687,7 @@ mod tests {
             assert_eq!(hi_s.partial_cmp(lo), Some(Ordering::Greater));
         }
 
-        /// Edge 1-4: &str vs Cow::Borrowed
+        /// Edge 1-4: &str vs `Cow::Borrowed`
         #[test]
         fn e14_ref_str_vs_cow_borrowed() {
             let lo: &str = LO;
@@ -702,7 +702,7 @@ mod tests {
             assert_eq!(hi_c.partial_cmp(lo), Some(Ordering::Greater));
         }
 
-        /// Edge 1-5: &str vs Cow::Owned
+        /// Edge 1-5: &str vs `Cow::Owned`
         #[test]
         fn e15_ref_str_vs_cow_owned() {
             let lo: &str = LO;
@@ -732,7 +732,7 @@ mod tests {
             assert_eq!(hi_box.partial_cmp(&lo_box), Some(Ordering::Greater));
         }
 
-        /// Edge 2-4: Box<str> vs Cow::Borrowed
+        /// Edge 2-4: Box<str> vs `Cow::Borrowed`
         #[test]
         fn e24_box_str_vs_cow_borrowed() {
             let lo_box = box_mk(LO);
@@ -747,7 +747,7 @@ mod tests {
             assert_eq!(hi_box.partial_cmp(&lo_box), Some(Ordering::Greater));
         }
 
-        /// Edge 2-5: Box<str> vs Cow::Owned
+        /// Edge 2-5: Box<str> vs `Cow::Owned`
         #[test]
         fn e25_box_str_vs_cow_owned() {
             let lo_box = box_mk(LO);
@@ -762,7 +762,7 @@ mod tests {
             assert_eq!(hi_box.partial_cmp(&lo_box), Some(Ordering::Greater));
         }
 
-        /// Edge 3-4: String vs Cow::Borrowed
+        /// Edge 3-4: String vs `Cow::Borrowed`
         #[test]
         fn e34_string_vs_cow_borrowed() {
             let lo_s = mk(LO);
@@ -777,7 +777,7 @@ mod tests {
             assert_eq!(hi_s.partial_cmp(&lo_s), Some(Ordering::Greater));
         }
 
-        /// Edge 3-5: String vs Cow::Owned
+        /// Edge 3-5: String vs `Cow::Owned`
         #[test]
         fn e35_string_vs_cow_owned() {
             let lo_s = mk(LO);
@@ -792,7 +792,7 @@ mod tests {
             assert_eq!(hi_s.partial_cmp(&lo_s), Some(Ordering::Greater));
         }
 
-        /// Edge 4-5: Cow::Borrowed vs Cow::Owned
+        /// Edge 4-5: `Cow::Borrowed` vs `Cow::Owned`
         #[test]
         fn e45_cow_borrowed_vs_cow_owned() {
             let lo_c: Cow<str> = Cow::Borrowed(LO);

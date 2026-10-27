@@ -135,7 +135,7 @@ impl<T: ?Sized, A: Allocator> UniqueRcUninit<T, A> {
     pub(super) fn data_ptr(&self) -> *mut u8 {
         // Project the `value` field out of the fat pointer to get the exact
         // address of the payload slot.
-        unsafe { &raw mut (*self.ptr.as_ptr()).value as *mut u8 }
+        unsafe { (&raw mut (*self.ptr.as_ptr()).value).cast::<u8>() }
     }
 
     /// Consumes the handle and produces the finalized `Rc<T, A>`.
@@ -208,6 +208,6 @@ impl<T: Sized, A: Allocator> Rc<MaybeUninit<T>, A> {
         // (both contain `NonNull<RcInner<...>>`, `A`, and a zero-sized phantom);
         // the caller guarantees the payload slot is fully initialized. The casted Rc
         // uses the moved allocator.
-        unsafe { Rc::from_raw_in(ptr as *const T, alloc) }
+        unsafe { Rc::from_raw_in(ptr.cast::<T>(), alloc) }
     }
 }

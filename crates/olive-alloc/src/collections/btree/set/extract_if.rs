@@ -389,7 +389,7 @@ mod tests {
         }
     }
 
-    /// Drains a multi-level tree through extract_if one element at a time
+    /// Drains a multi-level tree through `extract_if` one element at a time
     #[test]
     fn extract_if_drain_one_by_one_preserves_invariant() {
         let mut set = BTreeSet::new();

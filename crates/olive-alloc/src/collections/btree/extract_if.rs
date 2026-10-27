@@ -8,7 +8,7 @@ use core::iter::FusedIterator;
 use core::ops::{Bound, RangeBounds};
 use olive_core::alloc::Allocator;
 
-/// An iterator produced by calling `extract_if` on BTreeMap.
+/// An iterator produced by calling `extract_if` on `BTreeMap`.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct ExtractIf<'a, K, V, R, F, A: Allocator = Global>
 where
@@ -19,8 +19,8 @@ where
     pub(super) alloc: &'a A,
 }
 
-/// Most of the implementation of ExtractIf are generic over the type
-/// of the predicate, thus also serving for BTreeSet::ExtractIf.
+/// Most of the implementation of `ExtractIf` are generic over the type
+/// of the predicate, thus also serving for `BTreeSet::ExtractIf`.
 pub(super) struct ExtractIfInner<'a, K, V, R> {
     /// Reference to the length field in the borrowed map, updated live.
     pub(super) length: &'a mut usize,
@@ -394,11 +394,11 @@ mod tests {
         map.try_insert(2, 20).unwrap();
         let mut iter = map.extract_if(.., |_, _| true);
         // Before any next(): the peek shows the first pending element.
-        assert_eq!(std::format!("{:?}", iter), "ExtractIf(Some((1, 10)))");
+        assert_eq!(std::format!("{iter:?}"), "ExtractIf(Some((1, 10)))");
         assert_eq!(iter.next(), Some((1, 10)));
-        assert_eq!(std::format!("{:?}", iter), "ExtractIf(Some((2, 20)))");
+        assert_eq!(std::format!("{iter:?}"), "ExtractIf(Some((2, 20)))");
         assert_eq!(iter.next(), Some((2, 20)));
-        assert_eq!(std::format!("{:?}", iter), "ExtractIf(None)");
+        assert_eq!(std::format!("{iter:?}"), "ExtractIf(None)");
     }
 
     #[test]
@@ -663,7 +663,7 @@ mod tests {
         }
     }
 
-    /// Drains a multi-level tree through extract_if one element at a time,
+    /// Drains a multi-level tree through `extract_if` one element at a time,
     /// verifying exact values per step and the structural invariant afterwards.
     /// (Mid-drain invariant checks aren't possible while the iterator holds its
     /// mutable borrow.)

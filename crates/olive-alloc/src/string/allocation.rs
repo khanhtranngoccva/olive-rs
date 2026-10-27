@@ -719,7 +719,7 @@ impl<A: Allocator> String<A> {
 mod tests {
     extern crate std;
 
-    use core::ops::Deref;
+    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -738,7 +738,7 @@ mod tests {
         assert!(s.capacity() >= 67); // len 3 + 64 additional
         s.try_shrink_to_fit().unwrap();
         assert!(s.capacity() < 64);
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
@@ -748,7 +748,7 @@ mod tests {
         let mut s = String::try_with_capacity(64).unwrap();
         s.try_push_str("abcdef").unwrap();
         s.try_shrink_to(2).unwrap();
-        assert_eq!(s.deref(), "abcdef");
+        assert_eq!(&*s, "abcdef");
         assert!(s.capacity() >= 6);
     }
 
@@ -757,7 +757,7 @@ mod tests {
         let mut s = String::try_with_capacity(8).unwrap();
         s.try_push_str("abc").unwrap();
         s.try_shrink_to(100).unwrap();
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         assert_eq!(s.capacity(), 8);
     }
 
@@ -788,7 +788,7 @@ mod tests {
         let err = s.try_reserve(usize::MAX).unwrap_err();
         assert!(err.is_capacity_overflow());
         // The string must be untouched after a failed reservation.
-        assert_eq!(s.deref(), "tiny");
+        assert_eq!(&*s, "tiny");
     }
 
     #[test]
@@ -804,7 +804,7 @@ mod tests {
         assert!(err.is_alloc());
 
         assert_eq!(alloc.remaining(), 0);
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         assert_eq!(s.capacity(), 8);
     }
 
@@ -821,7 +821,7 @@ mod tests {
         assert!(err.is_alloc());
 
         assert_eq!(alloc.remaining(), 0);
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         assert_eq!(s.capacity(), 8);
     }
 
@@ -836,7 +836,7 @@ mod tests {
         alloc.drain();
         let err = s.try_reserve_adaptive(64).unwrap_err();
         assert!(err.is_alloc());
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         assert_eq!(s.capacity(), 8);
 
         // Restoring a single unit lets the amortized attempt spend it and
@@ -861,7 +861,7 @@ mod tests {
         s.try_reserve_adaptive(20).unwrap();
         assert!(s.capacity() >= 50);
         assert!(s.capacity() <= 65);
-        assert_eq!(s.deref(), "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        assert_eq!(&*s, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     }
 
     #[test]
@@ -877,14 +877,14 @@ mod tests {
         assert!(err.is_alloc());
         // The string is still safe to use after a failed shrink: content and
         // capacity are untouched.
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         assert_eq!(s.capacity(), 64);
 
         // Refunding budget lets the same shrink succeed.
         alloc.set_budget(1);
         s.try_shrink_to_fit().unwrap();
         assert!(s.capacity() < 64);
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
@@ -896,7 +896,7 @@ mod tests {
         alloc.drain();
         let err = s.try_shrink_to(8).unwrap_err();
         assert!(err.is_alloc());
-        assert_eq!(s.deref(), "abcdef");
+        assert_eq!(&*s, "abcdef");
         assert_eq!(s.capacity(), 64);
 
         // Refunding budget lets the same shrink succeed.
@@ -904,7 +904,7 @@ mod tests {
         s.try_shrink_to(10).unwrap();
         assert!(s.capacity() >= 10);
         assert!(s.capacity() < 64);
-        assert_eq!(s.deref(), "abcdef");
+        assert_eq!(&*s, "abcdef");
     }
 
     // ── try_push / try_push_str ───────────────────────────────────────────────
@@ -915,14 +915,14 @@ mod tests {
         s.try_push('a').unwrap();
         s.try_push('é').unwrap();
         s.try_push('🦊').unwrap();
-        assert_eq!(s.deref(), "aé🦊");
+        assert_eq!(&*s, "aé🦊");
     }
 
     #[test]
     fn push_str_appends() {
         let mut s = mk("foo");
         s.try_push_str("-bar").unwrap();
-        assert_eq!(s.deref(), "foo-bar");
+        assert_eq!(&*s, "foo-bar");
     }
 
     #[test]
@@ -947,23 +947,23 @@ mod tests {
     fn insert_char_middle() {
         let mut s = mk("helo");
         s.try_insert(2, 'l').unwrap();
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     #[test]
     fn insert_str_middle() {
         let mut s = mk("hello world");
         s.try_insert_str(5, ", brave").unwrap();
-        assert_eq!(s.deref(), "hello, brave world");
+        assert_eq!(&*s, "hello, brave world");
     }
 
     #[test]
     fn insert_at_end_and_start() {
         let mut s = mk("bc");
         s.try_insert_str(2, "d").unwrap();
-        assert_eq!(s.deref(), "bcd");
+        assert_eq!(&*s, "bcd");
         s.try_insert(0, 'a').unwrap();
-        assert_eq!(s.deref(), "abcd");
+        assert_eq!(&*s, "abcd");
     }
 
     #[test]
@@ -974,13 +974,13 @@ mod tests {
             err,
             TryStringInsertError::NotCharBoundary { index: 3, len: 2 }
         ));
-        assert_eq!(s.deref(), "ab");
+        assert_eq!(&*s, "ab");
         let err = s.try_insert(3, 'x').unwrap_err();
         assert!(matches!(
             err,
             TryStringInsertError::NotCharBoundary { index: 3, len: 2 }
         ));
-        assert_eq!(s.deref(), "ab");
+        assert_eq!(&*s, "ab");
     }
 
     #[test]
@@ -992,13 +992,13 @@ mod tests {
             err,
             TryStringInsertError::NotCharBoundary { index: 1, len: 6 }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
         let err = s.try_insert_str(1, "x").unwrap_err();
         assert!(matches!(
             err,
             TryStringInsertError::NotCharBoundary { index: 1, len: 6 }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -1011,10 +1011,10 @@ mod tests {
         alloc.drain();
         let err = s.try_insert(3, 'x').unwrap_err();
         assert!(matches!(err, TryStringInsertError::Reserve(_)));
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
         let err = s.try_insert_str(3, "yz").unwrap_err();
         assert!(matches!(err, TryStringInsertError::Reserve(_)));
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     // ── try_split_off ─────────────────────────────────────────────────────────
@@ -1023,24 +1023,24 @@ mod tests {
     fn try_split_off_middle() {
         let mut s = mk("abcdef");
         let right = s.try_split_off(3).unwrap();
-        assert_eq!(s.deref(), "abc");
-        assert_eq!(right.deref(), "def");
+        assert_eq!(&*s, "abc");
+        assert_eq!(&*right, "def");
     }
 
     #[test]
     fn try_split_off_at_end() {
         let mut s = mk("abcdef");
         let right = s.try_split_off(6).unwrap();
-        assert_eq!(s.deref(), "abcdef");
-        assert_eq!(right.deref(), "");
+        assert_eq!(&*s, "abcdef");
+        assert_eq!(&*right, "");
     }
 
     #[test]
     fn try_split_off_at_start() {
         let mut s = mk("abcdef");
         let right = s.try_split_off(0).unwrap();
-        assert_eq!(s.deref(), "");
-        assert_eq!(right.deref(), "abcdef");
+        assert_eq!(&*s, "");
+        assert_eq!(&*right, "abcdef");
     }
 
     #[test]
@@ -1052,7 +1052,7 @@ mod tests {
             err,
             TryStringSplitOffError::NotCharBoundary { index: 1, len: 6 }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -1063,7 +1063,7 @@ mod tests {
             err,
             TryStringSplitOffError::NotCharBoundary { index: 4, len: 3 }
         ));
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
@@ -1071,8 +1071,8 @@ mod tests {
         let alloc = CountingAllocator::new();
         let mut s: String<&CountingAllocator> = String::try_from_str_in("abcdef", &alloc).unwrap();
         let right = s.try_split_off_in(3, &alloc).unwrap();
-        assert_eq!(s.deref(), "abc");
-        assert_eq!(right.deref(), "def");
+        assert_eq!(&*s, "abc");
+        assert_eq!(&*right, "def");
     }
 
     #[test]
@@ -1084,7 +1084,7 @@ mod tests {
         let err = s.try_split_off_in(3, FailAlloc).unwrap_err();
         assert!(matches!(err, TryStringSplitOffError::Reserve(_)));
         // The original string is untouched.
-        assert_eq!(s.deref(), "abcdef");
+        assert_eq!(&*s, "abcdef");
     }
 
     // ── try_extend_from_within ────────────────────────────────────────────────
@@ -1093,21 +1093,21 @@ mod tests {
     fn extend_from_within_basic() {
         let mut s = mk("hello");
         s.try_extend_from_within(0..5).unwrap();
-        assert_eq!(s.deref(), "hellohello");
+        assert_eq!(&*s, "hellohello");
     }
 
     #[test]
     fn extend_from_within_full() {
         let mut s = mk("abc");
         s.try_extend_from_within(0..3).unwrap();
-        assert_eq!(s.deref(), "abcabc");
+        assert_eq!(&*s, "abcabc");
     }
 
     #[test]
     fn extend_from_within_empty_range() {
         let mut s = mk("abc");
         s.try_extend_from_within(1..1).unwrap();
-        assert_eq!(s.deref(), "abc");
+        assert_eq!(&*s, "abc");
     }
 
     #[test]
@@ -1122,7 +1122,7 @@ mod tests {
                 len: 6
             }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -1137,7 +1137,7 @@ mod tests {
                 len: 6
             }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -1151,7 +1151,7 @@ mod tests {
         alloc.drain();
         let err = s.try_extend_from_within(0..5).unwrap_err();
         assert!(matches!(err, TryStringExtendFromWithinError::Reserve(_)));
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
         assert_eq!(s.capacity(), 5);
     }
 
@@ -1161,28 +1161,28 @@ mod tests {
     fn replace_range_shrink() {
         let mut s = mk("hello world");
         s.try_replace_range(5..11, "").unwrap();
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     #[test]
     fn replace_range_grow() {
         let mut s = mk("hello world");
         s.try_replace_range(5..11, ", olive!").unwrap();
-        assert_eq!(s.deref(), "hello, olive!");
+        assert_eq!(&*s, "hello, olive!");
     }
 
     #[test]
     fn replace_range_same_len() {
         let mut s = mk("hello");
         s.try_replace_range(0..5, "world").unwrap();
-        assert_eq!(s.deref(), "world");
+        assert_eq!(&*s, "world");
     }
 
     #[test]
     fn replace_range_multibyte() {
         let mut s = mk("é🦊x");
         s.try_replace_range(0..6, "a").unwrap();
-        assert_eq!(s.deref(), "ax");
+        assert_eq!(&*s, "ax");
     }
 
     #[test]
@@ -1197,7 +1197,7 @@ mod tests {
                 len: 6
             }
         ));
-        assert_eq!(s.deref(), "é🦊");
+        assert_eq!(&*s, "é🦊");
     }
 
     #[test]
@@ -1214,7 +1214,7 @@ mod tests {
                 len: 5
             }
         ));
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
                 len: 5
             }
         ));
-        assert_eq!(s.deref(), "hello");
+        assert_eq!(&*s, "hello");
     }
 
     #[test]
@@ -1243,7 +1243,7 @@ mod tests {
         alloc.drain();
         let err = s.try_replace_range(0..1, "Hx").unwrap_err();
         assert!(matches!(err, TryStringReplaceRangeError::Reserve(_)));
-        assert_eq!(s.deref(), "hello world");
+        assert_eq!(&*s, "hello world");
         assert_eq!(s.capacity(), 11);
     }
 }

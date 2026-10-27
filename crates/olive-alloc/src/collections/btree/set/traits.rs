@@ -43,7 +43,7 @@ impl<T: Hash + Ord, A: Allocator> Hash for BTreeSet<T, A> {
     /// elements were inserted in.
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_usize(self.len());
-        for value in self.iter() {
+        for value in self {
             value.hash(state);
         }
     }

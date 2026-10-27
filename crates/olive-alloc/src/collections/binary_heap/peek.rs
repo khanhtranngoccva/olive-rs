@@ -19,7 +19,7 @@ impl<T: Ord, A: Allocator> BinaryHeap<T, A> {
     ///
     /// # Leaking
     ///
-    /// Do not [`core::mem::forget`] the PeekMut. Otherwise, any tail
+    /// Do not [`core::mem::forget`] the `PeekMut`. Otherwise, any tail
     /// elements will be leaked (which is better than leaving the heap's
     /// invariants silently broken after modifying the peeked element
     /// and attempting to restore it).

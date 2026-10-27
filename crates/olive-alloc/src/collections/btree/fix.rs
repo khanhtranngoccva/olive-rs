@@ -1,6 +1,6 @@
 use super::map::MIN_LEN;
-use super::node::ForceResult::*;
-use super::node::LeftOrRight::*;
+use super::node::ForceResult::Internal;
+use super::node::LeftOrRight::{Left, Right};
 use super::node::{Handle, NodeRef, Root, marker};
 use olive_core::alloc::Allocator;
 
@@ -90,7 +90,7 @@ impl<K, V> Root<K, V> {
 
     /// Stocks up or merge away any underfull nodes on the right border of the
     /// tree. The other nodes, those that are not the root nor a rightmost edge,
-    /// must already have at least MIN_LEN elements.
+    /// must already have at least `MIN_LEN` elements.
     pub fn fix_right_border<A: Allocator>(&mut self, alloc: &A) {
         self.fix_top(alloc);
         if self.len() > 0 {
@@ -114,7 +114,7 @@ impl<K, V> Root<K, V> {
 
     /// Stocks up any underfull nodes on the right border of the tree.
     /// The other nodes, those that are neither the root nor a rightmost edge,
-    /// must be prepared to have up to MIN_LEN elements stolen.
+    /// must be prepared to have up to `MIN_LEN` elements stolen.
     ///
     /// The original implementation uses this for appends where the rightmost nodes can
     /// only appear when left sibling nodes are already full.
@@ -122,7 +122,7 @@ impl<K, V> Root<K, V> {
     /// Note: std's `append` walks the right border linearly (pre-allocating
     /// replacement nodes) which trades extra allocations for lower time complexity.
     ///
-    /// Revisit when implementing an optimized `append` (i.e. try_append_fast).
+    /// Revisit when implementing an optimized `append` (i.e. `try_append_fast`).
     #[expect(unused, reason = "only used during std append")]
     pub fn fix_right_border_of_plentiful(&mut self) {
         let mut cur_node = self.borrow_mut();

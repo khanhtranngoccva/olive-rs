@@ -80,7 +80,7 @@ impl<A: Allocator> Concat<A> {
 
     /// Borrow the inner string if still in the `Ok` state.
     pub fn as_str(&self) -> Option<&str> {
-        self.0.as_ref().ok().map(|s| s.as_str())
+        self.0.as_ref().ok().map(String::as_str)
     }
 }
 
@@ -347,18 +347,17 @@ mod tests {
     #[test]
     fn debug_ok_shows_content() {
         let c = mk("hi") + "!";
-        let dbg = format!("{:?}", c);
-        assert!(dbg.contains("hi!"), "got: {}", dbg);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("hi!"), "got: {dbg}");
     }
 
     #[test]
     fn debug_err_shows_error() {
         let c: Concat = Concat::from(Err(TryReserveError::new_capacity_overflow()));
-        let dbg = format!("{:?}", c);
+        let dbg = format!("{c:?}");
         assert!(
             dbg.contains("CapacityOverflow") || dbg.contains("capacity"),
-            "got: {}",
-            dbg
+            "got: {dbg}"
         );
     }
 }

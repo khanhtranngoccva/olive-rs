@@ -26,7 +26,7 @@ impl<K: Ord, V> BTreeMap<K, V, Global> {
     /// This is a convenience wrapper around [`Self::new_in`] that uses
     /// [`Global`], mirroring std's `BTreeMap::new()`.
     #[inline]
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::new_in(Global)
     }
 }
@@ -140,7 +140,7 @@ mod tests {
         }
         assert_eq!(map.len(), 120);
         for i in 0..120u32 {
-            assert_eq!(map.get(&i), Some(&(i * 3)), "missing key {}", i);
+            assert_eq!(map.get(&i), Some(&(i * 3)), "missing key {i}");
         }
         drop(map);
     }

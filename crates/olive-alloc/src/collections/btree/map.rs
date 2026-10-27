@@ -11,7 +11,7 @@ use crate::alloc::{Allocator, Global};
 /// A node with fewer than this is underfull and needs rebalancing.
 pub(super) const MIN_LEN: usize = node::MIN_LEN_AFTER_SPLIT;
 
-/// A B-tree based implementation of a ordered map, similar to std's BTreeMap.
+/// A B-tree based implementation of a ordered map, similar to std's `BTreeMap`.
 pub struct BTreeMap<K, V, A: Allocator = Global> {
     pub(super) root: Option<Root<K, V>>,
     pub(super) length: usize,
@@ -22,6 +22,6 @@ impl<K, V, A: Allocator> Drop for BTreeMap<K, V, A> {
     fn drop(&mut self) {
         // SAFETY: Mirrors std.
         // All fields are either trivially copyable or are stored in ManuallyDrop.
-        drop(unsafe { ptr::read(self) }.into_iter())
+        drop(unsafe { ptr::read(self) }.into_iter());
     }
 }

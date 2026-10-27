@@ -51,7 +51,7 @@ impl<T: ?Sized> Box<T, Global> {
     /// The `NonNull` must point to a valid, properly-aligned allocation made
     /// by `Global`.
     #[inline]
-    pub unsafe fn from_non_null(nn: NonNull<T>) -> Self {
+    #[must_use] pub unsafe fn from_non_null(nn: NonNull<T>) -> Self {
         // SAFETY: caller guarantees `nn` is a valid, non-null, properly-aligned
         // allocation made by `Global`. Constructing the box performs no
         // dereference; the safety contract is carried by the function signature.
@@ -91,7 +91,7 @@ impl<T: ?Sized> Box<T, Global> {
         // uniqueness assumptions (from the `&mut`) that we only want with the default allocator.
         // We still want to extract the allocator for consistency even if it is a ZST.
         let _alloc = unsafe { ptr::read(&b.alloc) };
-        (&mut **b) as *mut T
+        &raw mut **b
     }
 
     /// Converts a `Box<T, Global>` into a `NonNull<T>`.

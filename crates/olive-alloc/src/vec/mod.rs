@@ -212,18 +212,18 @@ mod tests {
         let wce = TryVecWithCloneError::Clone(TryCloneError::Other("boom"));
         assert!(format!("{wce}").contains("boom"));
 
-        let wcle = TryVecWithClosureError::Closure(TryCloneError::Other("boom"));
-        assert!(format!("{wcle}").contains("boom"));
+        let closure_error = TryVecWithClosureError::Closure(TryCloneError::Other("boom"));
+        assert!(format!("{closure_error}").contains("boom"));
 
-        let wcle =
+        let cap_overflow =
             TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_capacity_overflow());
-        assert!(format!("{wcle}").contains("capacity overflow"));
+        assert!(format!("{cap_overflow}").contains("capacity overflow"));
 
-        let wcle = TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_alloc(
+        let alloc_error = TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_alloc(
             Layout::new::<i32>(),
         ));
         assert!(
-            format!("{wcle}").contains("4"),
+            format!("{alloc_error}").contains('4'),
             "should include layout size in an alloc error"
         );
     }

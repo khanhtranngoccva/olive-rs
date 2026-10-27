@@ -32,7 +32,7 @@ impl String {
     ///
     /// The first `length` bytes are valid UTF-8.
     #[inline]
-    pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
+    #[must_use] pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
         self.buf.into_raw_parts()
     }
 }
@@ -95,7 +95,7 @@ impl<A: Allocator> String<A> {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Deref;
+    
 
     use super::*;
     use crate::alloc::CountingAllocator;
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn into_raw_parts_roundtrips_through_from_raw_parts() {
         let s = mk("raw parts \u{2713}");
-        let ptr = s.as_bytes().as_ptr() as *mut u8;
+        let ptr = s.as_bytes().as_ptr().cast_mut();
         let (p, len, cap) = s.into_raw_parts();
         assert_eq!(len, 13); // 10 ASCII bytes plus the 3-byte item
         assert!(cap >= 13);
@@ -115,7 +115,7 @@ mod tests {
         // SAFETY: the components come straight from a live string, so they
         // satisfy `from_raw_parts`' preconditions.
         let rebuilt = unsafe { String::from_raw_parts(p, len, cap) };
-        assert_eq!(rebuilt.deref(), "raw parts \u{2713}");
+        assert_eq!(&*rebuilt, "raw parts \u{2713}");
     }
 
     #[test]
@@ -129,6 +129,6 @@ mod tests {
         assert!(ptr::eq(returned, &alloc));
         // SAFETY: the components come straight from a live string.
         let rebuilt = unsafe { String::from_raw_parts_in(ptr, len, cap, returned) };
-        assert_eq!(rebuilt.deref(), "payload");
+        assert_eq!(&*rebuilt, "payload");
     }
 }

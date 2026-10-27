@@ -18,7 +18,7 @@ impl<T: Ord, A: Allocator> BTreeSet<T, A> {
 impl<T: Ord> BTreeSet<T, Global> {
     /// Creates an empty `BTreeSet` backed by the global allocator.
     #[inline]
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self::new_in(Global)
     }
 }

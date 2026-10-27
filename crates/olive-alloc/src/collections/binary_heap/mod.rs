@@ -36,7 +36,7 @@ pub use peek::PeekMut;
 ///
 /// # Atomicity
 ///
-/// There are a few atomicity aspects for the BinaryHeap, and they usually
+/// There are a few atomicity aspects for the `BinaryHeap`, and they usually
 /// cannot all be satisfied at once.
 ///
 /// - Atomicity on errors - demonstrated on normal errors during algorithm execution.

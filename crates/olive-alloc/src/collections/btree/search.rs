@@ -3,10 +3,10 @@ use core::cmp::Ordering;
 use core::ops::{Bound, RangeBounds};
 
 use super::TryBTreeMapRangeError;
-use SearchBound::*;
-use SearchResult::*;
+use SearchBound::{AllExcluded, AllIncluded, Excluded, Included};
+use SearchResult::{Found, GoDown};
 
-use super::node::ForceResult::*;
+use super::node::ForceResult::{Internal, Leaf};
 use super::node::{Handle, NodeRef, marker};
 
 pub(super) enum SearchBound<T> {

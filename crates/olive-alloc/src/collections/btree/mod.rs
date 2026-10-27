@@ -50,7 +50,7 @@ pub use set::{
 // Error types
 // ---------------------------------------------------------------------------
 
-/// Error returned by fallible BTreeMap operations that may both allocate and
+/// Error returned by fallible `BTreeMap` operations that may both allocate and
 /// clone elements.
 ///
 /// Covers [`TryExtendFromSlice`](olive_core::try_traits::try_extend::TryExtendFromSlice)
@@ -105,7 +105,7 @@ impl From<TryCloneError> for TryBTreeMapWithCloneError {
     }
 }
 
-/// Error returned by fallible BTreeSet operations that may both allocate and
+/// Error returned by fallible `BTreeSet` operations that may both allocate and
 /// clone elements.
 ///
 /// Covers any operation whose failure modes are limited to an

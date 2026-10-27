@@ -689,7 +689,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
                     // SAFETY: this only runs if `try_shrink_to_fit` returned
                     // without completing the shrink (error or abort unwind),
                     // which is precisely when `abort_shrink` is safe to call.
-                    self.deque.abort_shrink(self.old_head, self.target_cap)
+                    self.deque.abort_shrink(self.old_head, self.target_cap);
                 }
             }
         }
@@ -962,7 +962,7 @@ mod tests {
         let mut dq: VecDeque<u8> = VecDeque::new();
         let err = match dq.try_reserve(usize::MAX) {
             Err(e) => e,
-            Ok(_) => panic!("expected capacity overflow"),
+            Ok(()) => panic!("expected capacity overflow"),
         };
         assert!(err.is_capacity_overflow());
         // The deque survived the failed reservation.
@@ -974,7 +974,7 @@ mod tests {
         let mut dq: VecDeque<u8> = VecDeque::new();
         let err = match dq.try_reserve_exact(usize::MAX) {
             Err(e) => e,
-            Ok(_) => panic!("expected capacity overflow"),
+            Ok(()) => panic!("expected capacity overflow"),
         };
         assert!(err.is_capacity_overflow());
         assert!(dq.is_empty());
@@ -1014,7 +1014,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let err = match dq.try_reserve(4) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         assert!(!err.is_capacity_overflow());
@@ -1176,7 +1176,7 @@ mod tests {
         }
         let err = match dq.try_shrink_to(2) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         // Elements intact, length unchanged, and the buffer kept its old size.
@@ -1230,7 +1230,7 @@ mod tests {
         // The drop guard must undo that compaction against the original buffer.
         let err = match dq.try_shrink_to(3) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
 
@@ -1270,7 +1270,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let err = match dq.try_push_back(1) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1282,7 +1282,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let (returned, err) = match dq.try_push_back_give_back(42) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1326,7 +1326,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let err = match dq.try_push_front(1) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         assert!(dq.is_empty());
@@ -1337,7 +1337,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let (returned, err) = match dq.try_push_front_give_back(42) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert_eq!(returned, 42);
         assert!(err.is_alloc());
@@ -1616,7 +1616,7 @@ mod tests {
         assert_eq!(dq.try_push_back(1), Ok(()));
         let err = match dq.try_insert(5, 99) {
             Err(e) => e,
-            Ok(_) => panic!("expected out-of-bounds error"),
+            Ok(()) => panic!("expected out-of-bounds error"),
         };
         assert_eq!(err, TryVecDequeInsertError::OutOfBounds);
         assert_eq!(dq.len(), 1);
@@ -1628,7 +1628,7 @@ mod tests {
         let mut dq: VecDeque<i32, FailAlloc> = VecDeque::new_in(FailAlloc);
         let (returned, err) = match dq.try_insert_give_back(0, 42) {
             Err(pair) => pair,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert_eq!(returned, 42);
         assert!(matches!(err, TryVecDequeInsertError::Reserve(_)));
@@ -1812,7 +1812,7 @@ mod tests {
         let mut b = oom_deque(3); // [3, 4]
         let err = match a.try_append(&mut b) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         // Neither deque may have been touched on failure.
@@ -1826,7 +1826,7 @@ mod tests {
         let mut b = oom_deque(3); // [3, 4]
         let err = match a.try_prepend(&mut b) {
             Err(e) => e,
-            Ok(_) => panic!("expected allocation failure"),
+            Ok(()) => panic!("expected allocation failure"),
         };
         assert!(err.is_alloc());
         assert_eq!(collect_any::<2, BudgetedAlloc>(&a), Some([1, 2]));
@@ -2160,9 +2160,7 @@ mod tests {
                 let _: Result<(), TryVecDequeWithClosureError<&str>> =
                     dq.try_resize_with(4, || {
                         calls += 1;
-                        if calls == 3 {
-                            panic!("forced panic mid-resize_with");
-                        }
+                        assert!((calls != 3), "forced panic mid-resize_with");
                         let id = l.allocate();
                         Ok(TrackedItem::with_id(&l, id, ()))
                     });

@@ -156,7 +156,7 @@ mod tests {
         }
         assert_eq!(set.len(), 12);
         for i in 0..12u32 {
-            assert!(set.contains(&i), "missing {} after split", i);
+            assert!(set.contains(&i), "missing {i} after split");
         }
     }
 
@@ -168,7 +168,7 @@ mod tests {
         }
         assert_eq!(set.len(), 200);
         for i in 0..200u32 {
-            assert!(set.contains(&i), "missing {}", i);
+            assert!(set.contains(&i), "missing {i}");
         }
     }
 
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(a.len(), 10);
         assert!(b.is_empty());
         for i in 0..10u32 {
-            assert!(a.contains(&i), "missing {}", i);
+            assert!(a.contains(&i), "missing {i}");
         }
     }
 
@@ -362,7 +362,7 @@ mod tests {
         check_tree_invariant(&a.map);
         check_ascending_keys(&a.map);
         for i in 0..300u32 {
-            assert!(a.contains(&i), "missing {}", i);
+            assert!(a.contains(&i), "missing {i}");
         }
     }
 
@@ -470,10 +470,10 @@ mod tests {
 
         // Partition contract: self ∪ other ∪ {stranded} == original union.
         let mut seen: HashSet<u32> = HashSet::new();
-        for item in a.iter() {
+        for item in &a {
             assert!(seen.insert(item.inner), "duplicate in self: {}", item.inner);
         }
-        for item in b.iter() {
+        for item in &b {
             assert!(
                 seen.insert(item.inner),
                 "duplicate in other: {}",

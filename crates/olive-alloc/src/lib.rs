@@ -20,6 +20,8 @@
 #![deny(missing_debug_implementations)]
 // Enable pedantic checking.
 #![warn(clippy::pedantic)]
+// This check highlights a lot of false positives (e.g. "heap" - "head").
+#![allow(clippy::similar_names)]
 
 // Need extern stub for documentation.
 extern crate alloc as stock_alloc;

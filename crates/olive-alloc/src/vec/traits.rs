@@ -340,7 +340,7 @@ impl<T, A: Allocator> Vec<T, A> {
 impl<T: TryClone, A: AllocatorTryClone> TryClone for Vec<T, A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let mut out = Self::try_with_capacity_in(self.len, self.raw.allocator().try_clone()?)?;
-        for elem in self.iter() {
+        for elem in self {
             match elem.try_clone() {
                 // SAFETY: capacity was reserved above for every element.
                 Ok(cloned) => unsafe { out.force_push(cloned) },
@@ -978,9 +978,7 @@ mod tests {
         impl Drop for RollbackPanicPayload {
             fn drop(&mut self) {
                 self.ledger.unregister(self.id);
-                if self.armer.fetch_and_disarm() {
-                    panic!("forced panic in rollback drop");
-                }
+                assert!(!self.armer.fetch_and_disarm(), "forced panic in rollback drop");
             }
         }
 
@@ -1140,7 +1138,7 @@ mod tests {
         // the same code path through the `_in` seam with one that does.
         let res: Result<Vec<i32, FailAlloc>, _> = Vec::try_from_iter_in(1..=4, FailAlloc);
         let r = res.expect_err("allocation should fail");
-        assert!(matches!(r.kind(), TryReserveErrorKind::AllocError { .. }))
+        assert!(matches!(r.kind(), TryReserveErrorKind::AllocError { .. }));
     }
 
     #[test]
@@ -1164,6 +1162,6 @@ mod tests {
         let res: Result<Vec<i32, ByteCapAlloc>, _> =
             Vec::try_from_iter_in(iter, ByteCapAlloc::new(64));
         let e = res.expect_err("genuine OOM should surface");
-        assert!(e.is_alloc())
+        assert!(e.is_alloc());
     }
 }

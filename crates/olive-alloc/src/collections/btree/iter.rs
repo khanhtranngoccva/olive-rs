@@ -1,4 +1,4 @@
-//! Iterators for BTreeMap.
+//! Iterators for `BTreeMap`.
 
 use olive_core::try_traits::{TryClone, TryCloneError, TryDefault, TryDefaultError};
 
@@ -53,7 +53,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
     }
 
     /// Returns a reference to the key-value pair with the smallest key,
-    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next()`.
+    /// consuming the iterator. Since `BTreeMap` is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<(&'a K, &'a V)>
     where
         (&'a K, &'a V): Ord,
@@ -62,7 +62,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
     }
 
     /// Returns a reference to the key-value pair with the largest key,
-    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next_back()`.
+    /// consuming the iterator. Since `BTreeMap` is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<(&'a K, &'a V)>
     where
         (&'a K, &'a V): Ord,
@@ -159,7 +159,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
     }
 
     /// Returns a reference to the smallest key, consuming the iterator.
-    /// Since BTreeMap is sorted by key, this is just `next()`.
+    /// Since `BTreeMap` is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<&'a K>
     where
         &'a K: Ord,
@@ -168,7 +168,7 @@ impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
     }
 
     /// Returns a reference to the largest key, consuming the iterator.
-    /// Since BTreeMap is sorted by key, this is just `next_back()`.
+    /// Since `BTreeMap` is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<&'a K>
     where
         &'a K: Ord,
@@ -349,7 +349,7 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
     }
 
     /// Returns a reference to the key-value pair with the smallest key,
-    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next()`.
+    /// consuming the iterator. Since `BTreeMap` is sorted by key, this is just `next()`.
     fn min(mut self) -> Option<(&'a K, &'a mut V)>
     where
         (&'a K, &'a mut V): Ord,
@@ -358,7 +358,7 @@ impl<'a, K: 'a, V: 'a> Iterator for IterMut<'a, K, V> {
     }
 
     /// Returns a reference to the key-value pair with the largest key,
-    /// consuming the iterator. Since BTreeMap is sorted by key, this is just `next_back()`.
+    /// consuming the iterator. Since `BTreeMap` is sorted by key, this is just `next_back()`.
     fn max(mut self) -> Option<(&'a K, &'a mut V)>
     where
         (&'a K, &'a mut V): Ord,
@@ -1088,7 +1088,7 @@ mod tests {
         }
         let mut it = map.iter();
         for i in 0..5i32 {
-            assert_eq!(it.next(), Some((&i, &(i * 10))), "position {}", i);
+            assert_eq!(it.next(), Some((&i, &(i * 10))), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1101,7 +1101,7 @@ mod tests {
         }
         let mut it = map.iter();
         for i in (0..5i32).rev() {
-            assert_eq!(it.next_back(), Some((&i, &(i * 10))), "position {}", i);
+            assert_eq!(it.next_back(), Some((&i, &(i * 10))), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1114,7 +1114,7 @@ mod tests {
         }
         let mut it = map.iter();
         for i in 0..80u32 {
-            assert_eq!(it.next(), Some((&i, &(i * 2))), "position {}", i);
+            assert_eq!(it.next(), Some((&i, &(i * 2))), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1127,7 +1127,7 @@ mod tests {
         }
         let mut it = map.iter();
         for i in (0..80u32).rev() {
-            assert_eq!(it.next_back(), Some((&i, &(i * 2))), "position {}", i);
+            assert_eq!(it.next_back(), Some((&i, &(i * 2))), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1149,7 +1149,7 @@ mod tests {
                 match it.next() {
                     Some((k, _)) => {
                         if let Some(p) = prev_fwd {
-                            assert!(p < *k, "forward order violated: {} !< {}", p, k);
+                            assert!(p < *k, "forward order violated: {p} !< {k}");
                         }
                         prev_fwd = Some(*k);
                         fwd_count += 1;
@@ -1160,7 +1160,7 @@ mod tests {
             match it.next_back() {
                 Some((k, _)) => {
                     if let Some(p) = prev_bwd {
-                        assert!(p > *k, "backward order violated: {} !> {}", p, k);
+                        assert!(p > *k, "backward order violated: {p} !> {k}");
                     }
                     prev_bwd = Some(*k);
                     bwd_count += 1;
@@ -1219,11 +1219,11 @@ mod tests {
         for i in 0..5 {
             map.try_insert(i, i * 10).unwrap();
         }
-        for (_, v) in map.iter_mut() {
+        for (_, v) in &mut map {
             *v *= 2;
         }
         for i in 0..5 {
-            assert_eq!(map.get(&i), Some(&(i * 20)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i * 20)), "key {i}");
         }
     }
 
@@ -1237,7 +1237,7 @@ mod tests {
             *v += 100;
         }
         for i in 0..5 {
-            assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i + 100)), "key {i}");
         }
     }
 
@@ -1247,11 +1247,11 @@ mod tests {
         for i in 0..80u32 {
             map.try_insert(i, i).unwrap();
         }
-        for (_, v) in map.iter_mut() {
+        for (_, v) in &mut map {
             *v += 100;
         }
         for i in 0..80u32 {
-            assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i + 100)), "key {i}");
         }
     }
 
@@ -1265,7 +1265,7 @@ mod tests {
             *v += 100;
         }
         for i in 0..80u32 {
-            assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i + 100)), "key {i}");
         }
     }
 
@@ -1315,7 +1315,7 @@ mod tests {
         }
         let mut it = map.into_iter();
         for i in 0..20i32 {
-            assert_eq!(it.next(), Some((i, i * 10)), "position {}", i);
+            assert_eq!(it.next(), Some((i, i * 10)), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1328,7 +1328,7 @@ mod tests {
         }
         let mut it = map.into_iter();
         for i in (0..20i32).rev() {
-            assert_eq!(it.next_back(), Some((i, i * 10)), "position {}", i);
+            assert_eq!(it.next_back(), Some((i, i * 10)), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1341,7 +1341,7 @@ mod tests {
         }
         let mut it = map.into_iter();
         for i in 0..100u32 {
-            assert_eq!(it.next(), Some((i, i * 3)), "position {}", i);
+            assert_eq!(it.next(), Some((i, i * 3)), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1473,7 +1473,7 @@ mod tests {
         }
         let mut it = map.keys();
         for i in 0..5i32 {
-            assert_eq!(it.next(), Some(&i), "position {}", i);
+            assert_eq!(it.next(), Some(&i), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1486,7 +1486,7 @@ mod tests {
         }
         let mut it = map.keys();
         for i in (0..5i32).rev() {
-            assert_eq!(it.next_back(), Some(&i), "position {}", i);
+            assert_eq!(it.next_back(), Some(&i), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1499,7 +1499,7 @@ mod tests {
         }
         let mut it = map.keys();
         for i in 0..80u32 {
-            assert_eq!(it.next(), Some(&i), "position {}", i);
+            assert_eq!(it.next(), Some(&i), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1564,7 +1564,7 @@ mod tests {
         }
         let mut it = map.values();
         for i in 0..5i32 {
-            assert_eq!(it.next(), Some(&(i * 10)), "position {}", i);
+            assert_eq!(it.next(), Some(&(i * 10)), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1577,7 +1577,7 @@ mod tests {
         }
         let mut it = map.values();
         for i in (0..5i32).rev() {
-            assert_eq!(it.next_back(), Some(&(i * 10)), "position {}", i);
+            assert_eq!(it.next_back(), Some(&(i * 10)), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1590,7 +1590,7 @@ mod tests {
         }
         let mut it = map.values();
         for i in 0..80u32 {
-            assert_eq!(it.next(), Some(&(i * 2)), "position {}", i);
+            assert_eq!(it.next(), Some(&(i * 2)), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1648,7 +1648,7 @@ mod tests {
             *v *= 2;
         }
         for i in 0..5 {
-            assert_eq!(map.get(&i), Some(&(i * 20)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i * 20)), "key {i}");
         }
     }
 
@@ -1662,7 +1662,7 @@ mod tests {
             *v += 100;
         }
         for i in 0..5 {
-            assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i + 100)), "key {i}");
         }
     }
 
@@ -1676,7 +1676,7 @@ mod tests {
             *v += 100;
         }
         for i in 0..200u32 {
-            assert_eq!(map.get(&i), Some(&(i + 100)), "key {}", i);
+            assert_eq!(map.get(&i), Some(&(i + 100)), "key {i}");
         }
     }
 
@@ -1735,7 +1735,7 @@ mod tests {
         }
         let mut it = map.into_keys();
         for i in 0..20i32 {
-            assert_eq!(it.next(), Some(i), "position {}", i);
+            assert_eq!(it.next(), Some(i), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1748,7 +1748,7 @@ mod tests {
         }
         let mut it = map.into_keys();
         for i in (0..20i32).rev() {
-            assert_eq!(it.next_back(), Some(i), "position {}", i);
+            assert_eq!(it.next_back(), Some(i), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1761,7 +1761,7 @@ mod tests {
         }
         let mut it = map.into_keys();
         for i in 0..200u32 {
-            assert_eq!(it.next(), Some(i), "position {}", i);
+            assert_eq!(it.next(), Some(i), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1846,7 +1846,7 @@ mod tests {
         }
         let mut it = map.into_values();
         for i in 0..20i32 {
-            assert_eq!(it.next(), Some(i * 10), "position {}", i);
+            assert_eq!(it.next(), Some(i * 10), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1859,7 +1859,7 @@ mod tests {
         }
         let mut it = map.into_values();
         for i in (0..20i32).rev() {
-            assert_eq!(it.next_back(), Some(i * 10), "position {}", i);
+            assert_eq!(it.next_back(), Some(i * 10), "position {i}");
         }
         assert_eq!(it.next_back(), None);
     }
@@ -1872,7 +1872,7 @@ mod tests {
         }
         let mut it = map.into_values();
         for i in 0..200u32 {
-            assert_eq!(it.next(), Some(i * 3), "position {}", i);
+            assert_eq!(it.next(), Some(i * 3), "position {i}");
         }
         assert_eq!(it.next(), None);
     }
@@ -1938,9 +1938,7 @@ mod tests {
         impl Drop for MaybePanic {
             fn drop(&mut self) {
                 self.counter.record();
-                if self.armed.swap(false, Ordering::SeqCst) {
-                    panic!("boom during IntoIter drop");
-                }
+                assert!(!self.armed.swap(false, Ordering::SeqCst), "boom during IntoIter drop");
             }
         }
 

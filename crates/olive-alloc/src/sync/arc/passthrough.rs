@@ -59,14 +59,14 @@ mod tests {
     #[test]
     fn arc_debug_delegates_to_inner() {
         let arc = Arc::try_new(std::vec![1, 2, 3]).unwrap();
-        let dbg = std::format!("{:?}", arc);
+        let dbg = std::format!("{arc:?}");
         assert_eq!(dbg, "[1, 2, 3]");
     }
 
     #[test]
     fn arc_display_delegates_to_inner() {
         let arc = Arc::try_new(String::from("world")).unwrap();
-        let disp = std::format!("{}", arc);
+        let disp = std::format!("{arc}");
         assert_eq!(disp, "world");
     }
 

@@ -40,7 +40,7 @@ impl<T: ?Sized> Rc<T, Global> {
         unsafe {
             let inner = helpers::data_get_ptr(p);
             Rc {
-                ptr: NonNull::new_unchecked(inner as *mut RcInner<T>),
+                ptr: NonNull::new_unchecked(inner.cast_mut()),
                 alloc: Global,
                 _marker: PhantomData,
             }
@@ -97,7 +97,7 @@ impl<T: ?Sized, A: Allocator> Rc<T, A> {
         unsafe {
             let inner = helpers::data_get_ptr(p);
             Rc {
-                ptr: NonNull::new_unchecked(inner as *mut RcInner<T>),
+                ptr: NonNull::new_unchecked(inner.cast_mut()),
                 alloc,
                 _marker: PhantomData,
             }
@@ -150,7 +150,7 @@ impl<T: ?Sized> Weak<T, Global> {
             let inner = if helpers::is_dangling_weak(p as *const RcInner<T>) {
                 p as *mut RcInner<T>
             } else {
-                helpers::data_get_ptr(p) as *mut RcInner<T>
+                helpers::data_get_ptr(p).cast_mut()
             };
             Weak {
                 ptr: NonNull::new_unchecked(inner),
@@ -204,7 +204,7 @@ impl<T: ?Sized, A: Allocator> Weak<T, A> {
             let inner = if helpers::is_dangling_weak(p as *const RcInner<T>) {
                 p as *mut RcInner<T>
             } else {
-                helpers::data_get_ptr(p) as *mut RcInner<T>
+                helpers::data_get_ptr(p).cast_mut()
             };
             Weak {
                 ptr: NonNull::new_unchecked(inner),

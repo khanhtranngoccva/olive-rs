@@ -2,10 +2,10 @@ use core::borrow::Borrow;
 use core::mem::ManuallyDrop;
 
 use super::map::BTreeMap;
-use super::node::ForceResult::*;
+use super::node::ForceResult::Internal;
 use super::node::{Handle, InternalNode, Root};
 use super::scratch::MAX_HEIGHT;
-use super::search::SearchResult::*;
+use super::search::SearchResult::{Found, GoDown};
 use crate::vec::Vec;
 use olive_core::alloc::{AllocError, Allocator, AllocatorTryClone};
 

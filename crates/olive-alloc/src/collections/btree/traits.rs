@@ -28,7 +28,7 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for BTreeMap<K, V, A
     /// An empty map renders as `{}`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_map();
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             d.entry(k, v);
         }
         d.finish()
@@ -96,7 +96,7 @@ impl<K: Ord + Hash, V: Hash, A: Allocator> Hash for BTreeMap<K, V, A> {
         // Hash the length first so that a map which is a strict prefix of
         // another cannot collide with it.
         self.len().hash(state);
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             k.hash(state);
             v.hash(state);
         }
@@ -215,7 +215,7 @@ impl<K: Ord + TryClone, V: TryClone, A: AllocatorTryClone> TryClone for BTreeMap
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = self.alloc.try_clone()?;
         let mut out = Self::new_in(alloc);
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             let ck = k.try_clone()?;
             let cv = v.try_clone()?;
             // `try_insert` returns `AllocError`; convert via `From<AllocError>`.
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(map.len(), 6);
         let keys: std::vec::Vec<u32> = map.keys().copied().collect();
         assert_eq!(keys, [0, 1, 2, 3, 4, 5]);
-        for (k, v) in map.iter() {
+        for (k, v) in &map {
             assert_eq!(*v, *k * 10);
         }
     }
@@ -818,7 +818,7 @@ mod tests {
         let mut map = BTreeMap::new();
         map.try_extend(start).expect("retry ok");
         assert_eq!(map.len(), 3);
-        for (k, v) in map.iter() {
+        for (k, v) in &map {
             assert_eq!(*v, *k * 10);
         }
     }
@@ -916,7 +916,7 @@ mod tests {
         let mut map: BTreeMap<u32, u32> = BTreeMap::new();
         map.try_extend(start).expect("retry ok");
         assert_eq!(map.len(), 3);
-        for (k, v) in map.iter() {
+        for (k, v) in &map {
             assert_eq!(*v, *k * 10);
         }
     }
@@ -1097,8 +1097,7 @@ mod tests {
         let (rest, e) = result.unwrap_err();
         assert!(
             matches!(e, TryBTreeMapWithCloneError::Alloc(_)),
-            "failure must be an allocation error, got {:?}",
-            e
+            "failure must be an allocation error, got {e:?}"
         );
         assert_eq!(rest.len(), 1, "the slice has one unprocessed element");
 

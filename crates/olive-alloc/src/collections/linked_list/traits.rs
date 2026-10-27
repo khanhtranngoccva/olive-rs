@@ -105,7 +105,7 @@ impl<T: TryClone, A: AllocatorTryClone> TryClone for LinkedList<T, A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = self.alloc.try_clone()?;
         let mut out = Self::new_in(alloc);
-        for element in self.iter() {
+        for element in self {
             let cloned = element.try_clone()?;
             out.try_push_back(cloned).map_err(TryCloneError::Alloc)?;
         }

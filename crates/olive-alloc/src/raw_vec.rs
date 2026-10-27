@@ -108,7 +108,7 @@ impl Cap {
 /// careful when round-tripping this type with a `Box<[T]>`, since `capacity()`
 /// won't yield the length.
 ///
-/// Note that the RawVec may increase the requested capacity before forwarding the
+/// Note that the `RawVec` may increase the requested capacity before forwarding the
 /// allocation request to the allocator, and the allocator can in turn increase the
 /// size of the allocated block (the current implementation ignores the allocator's
 /// excess for now).
@@ -296,7 +296,7 @@ impl<T, A: Allocator> RawVec<T, A> {
     /// could differ, as an allocator could overallocate and return a greater memory block
     /// than requested.
     ///
-    /// For example, the caller could request a total capacity of 4 items, but the RawVec
+    /// For example, the caller could request a total capacity of 4 items, but the `RawVec`
     /// requests 6 items from the allocator instead, depending on which method was used,
     /// and get 8 items worth of capacity instead.
     ///
@@ -582,7 +582,7 @@ impl<A: Allocator> RawVecInner<A> {
     ///
     /// # Errors
     /// - Fails with a capacity overflow error if the element is a ZST (ZST vectors always have
-    ///   usize::MAX capacity)
+    ///   `usize::MAX` capacity)
     /// - Fails with a capacity overflow on non-ZSTs if the total size exceeds Layout allowance
     /// - Fails with an allocation error if memory allocation fails
     #[inline]
@@ -794,7 +794,7 @@ impl<A: Allocator> RawVecInner<A> {
     ///
     /// # Errors
     /// - Fails with a capacity overflow error if the element is a ZST (ZST vectors always have
-    ///   usize::MAX capacity)
+    ///   `usize::MAX` capacity)
     /// - Fails with a capacity overflow on non-ZSTs if the total size exceeds Layout allowance
     /// - Fails with an allocation error if memory allocation fails
     unsafe fn grow_amortized(
@@ -923,7 +923,7 @@ const fn base_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
     slice.cast()
 }
 
-/// Obtains the packed array layout for `cap` number of elements. This also caps the capacity at isize::MAX.
+/// Obtains the packed array layout for `cap` number of elements. This also caps the capacity at `isize::MAX`.
 #[inline]
 fn layout_array(cap: usize, elem_layout: Layout) -> Result<Layout, TryReserveError> {
     if let Some(size) = elem_layout.size().checked_mul(cap) {
