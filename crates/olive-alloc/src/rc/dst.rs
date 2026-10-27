@@ -57,7 +57,8 @@ impl<T: TryClone, A: Allocator> Rc<[T], A> {
     ///
     /// # Errors
     ///
-    /// Returns [`TryCloneError`] if the allocation fails.
+    /// Returns [`TryCloneError`] if the allocation fails, or
+    /// if cloning one of the elements fails.
     #[inline]
     pub fn try_from_slice_in(src: &[T], alloc: A) -> Result<Self, TryCloneError> {
         Self::try_clone_from_ref_in(src, alloc)
@@ -67,6 +68,11 @@ impl<T: TryClone, A: Allocator> Rc<[T], A> {
 impl<T: TryClone> Rc<[T], Global> {
     /// Convenience wrapper around [`Self::try_from_slice_in`]
     /// using the global allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError`] if the allocation fails, or
+    /// if cloning one of the elements fails.
     #[inline]
     pub fn try_from_slice(src: &[T]) -> Result<Self, TryCloneError> {
         Self::try_clone_from_ref(src)
@@ -89,6 +95,11 @@ impl<A: Allocator> Rc<str, A> {
 impl Rc<str, Global> {
     /// Convenience wrapper around [`Self::try_from_str_in`] using
     /// the global allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryCloneError`] if the allocation fails, or
+    /// if cloning one of the elements fails.
     #[inline]
     pub fn try_from_str(src: &str) -> Result<Self, TryCloneError> {
         Self::try_clone_from_ref(src)

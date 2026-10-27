@@ -270,6 +270,11 @@ impl<T, A: Allocator> Rc<T, A> {
     ///
     /// Returns [`TryRcWithError<E>`]: either an [`AllocError`] if allocating
     /// the block fails, or the callback's own error `E`.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic as long as the Weak reference's invariants
+    /// are not broken (i.e. cannot panic with safe code).
     #[inline]
     pub fn try_new_cyclic_in<E, F>(f: F, alloc: A) -> Result<Self, TryRcWithError<E>>
     where
@@ -372,6 +377,7 @@ impl<T, A: Allocator> Rc<T, A> {
 impl<T: ?Sized> Weak<T, Global> {
     /// Creates a new dangling `Weak<T>` that does not point to any allocation.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Weak {
             ptr: helpers::dangling_inner_ptr(),
@@ -415,6 +421,7 @@ impl<T: TryDefault, A: AllocatorTryDefault> TryDefault for Rc<T, A> {
 }
 
 /// Converts a [`TryCloneError`] into a [`TryDefaultError`].
+#[allow(clippy::needless_pass_by_value)]
 fn try_clone_error_to_default(e: TryCloneError) -> TryDefaultError {
     match e {
         TryCloneError::Reserve(r) => TryDefaultError::Reserve(r),
@@ -782,7 +789,7 @@ mod tests {
     #[test]
     fn weak_default_equals_new() {
         // Both infallible constructors produce an equivalent dangling weak.
-        let a: Weak<i32> = Default::default();
+        let a: Weak<i32> = Weak::default();
         let b: Weak<i32> = Weak::new();
         assert!(a.try_upgrade().unwrap().is_none());
         assert!(b.try_upgrade().unwrap().is_none());

@@ -1,6 +1,6 @@
 use super::Box;
 use core::mem::{self, MaybeUninit};
-use core::ptr::NonNull;
+use core::ptr::{self, NonNull};
 
 use crate::alloc::{AllocError, Allocator, Global, Layout};
 use crate::raw_vec::RawVec;
@@ -64,7 +64,7 @@ impl<T: ?Sized + TryCloneToUninit, A: Allocator> Box<T, A> {
         // Safety: We just initialized `*ptr` as a clone of `src`. Relocate the
         // freshly allocated mutable base `ptr` onto `src`'s metadata (length /
         // vtable), yielding a valid `*mut T` fat pointer to the clone.
-        Ok(unsafe { Box::from_raw_in(ptr.cast_with_metadata(src as *const T), alloc) })
+        Ok(unsafe { Box::from_raw_in(ptr.cast_with_metadata(ptr::from_ref::<T>(src)), alloc) })
     }
 }
 

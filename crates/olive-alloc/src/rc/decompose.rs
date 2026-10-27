@@ -2,7 +2,6 @@ use super::internals::RcInner;
 use super::{Rc, Weak};
 use crate::alloc::Allocator;
 use core::mem::ManuallyDrop;
-use core::ops::Deref;
 use olive_core::ptr::{self};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
@@ -17,6 +16,10 @@ impl<T, A: Allocator> Rc<T, A> {
     ///
     /// Returns the input `Rc` if the value could not be unwrapped because
     /// ownership is shared.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic for valid [`Rc`]s.
     #[inline]
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
         // Move-out is safe whenever we are the unique strong owner: weak
@@ -33,7 +36,7 @@ impl<T, A: Allocator> Rc<T, A> {
             // alive but can no longer access the moved-out payload.
             let val = unsafe { ptr::read(&**me) };
             let alloc = unsafe { ptr::read(&me.alloc) };
-            let inner: &RcInner<T> = Rc::inner(me.deref());
+            let inner: &RcInner<T> = Rc::inner(&*me);
             inner.dec_strong().expect("strong count underflow");
             // Drop a throwaway `Weak` standing in for this `Rc`'s implicit
             // weak reference. With other weaks alive this only decrements
