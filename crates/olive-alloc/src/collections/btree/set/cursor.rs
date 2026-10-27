@@ -321,6 +321,113 @@ impl<T: Ord, A: Allocator> CursorMut<'_, T, A> {
             .map_err(TryBTreeSetCursorInsertError::from)
     }
 
+    /// Similar to [`insert_after_unchecked`] but also returns the value on
+    /// error.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns the value along with an [`AllocError`] and leaves both the
+    /// set and the cursor unchanged.
+    ///
+    /// # Safety
+    ///
+    /// Please see [`insert_after_unchecked`] for the safety requirements.
+    ///
+    /// [`insert_after_unchecked`]: Self::insert_after_unchecked
+    pub unsafe fn insert_after_unchecked_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<(), (T, AllocError)> {
+        // SAFETY: precondition from the caller.
+        unsafe {
+            self.cursor
+                .insert_after_unchecked_give_back(value, SetValZST)
+                .map_err(|(value, _, e)| (value, e))
+        }
+    }
+
+    /// Inserts a new value into the set in the gap that the cursor is
+    /// currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap before the
+    /// newly inserted value.
+    ///
+    /// This is faster than [`insert_after`](Self::insert_after), but does not
+    /// check that the value is properly ordered relative to its neighbors.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns an [`AllocError`] and leaves both the set and the cursor
+    /// unchanged. The value is dropped.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the `BTreeSet` invariants are maintained.
+    /// Specifically:
+    ///
+    /// * The value of the newly inserted element must be unique in the set.
+    /// * All values in the set must remain in sorted order.
+    pub unsafe fn insert_after_unchecked(&mut self, value: T) -> Result<(), AllocError> {
+        // SAFETY: precondition from the caller
+        unsafe { self.cursor.insert_after_unchecked(value, SetValZST) }
+    }
+
+    /// Similar to [`insert_before_unchecked`] but also returns the value on
+    /// error.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns the value along with an [`AllocError`] and leaves both the
+    /// set and the cursor unchanged.
+    ///
+    /// # Safety
+    ///
+    /// Please see [`insert_before_unchecked`] for the safety requirements.
+    ///
+    /// [`insert_before_unchecked`]: Self::insert_before_unchecked
+    pub unsafe fn insert_before_unchecked_give_back(
+        &mut self,
+        value: T,
+    ) -> Result<(), (T, AllocError)> {
+        // SAFETY: precondition from the caller.
+        unsafe {
+            self.cursor
+                .insert_before_unchecked_give_back(value, SetValZST)
+                .map_err(|(value, _, e)| (value, e))
+        }
+    }
+
+    /// Inserts a new value into the set in the gap that the cursor is
+    /// currently pointing to.
+    ///
+    /// After the insertion the cursor will be pointing at the gap after the
+    /// newly inserted value.
+    ///
+    /// This is faster than [`insert_before`](Self::insert_before), but does
+    /// not check that the value is properly ordered relative to its
+    /// neighbors.
+    ///
+    /// # Errors
+    ///
+    /// On out-of-memory conditions or length overflows, this operation
+    /// returns an [`AllocError`] and leaves both the set and the cursor
+    /// unchanged. The value is dropped.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the `BTreeSet` invariants are maintained.
+    /// Specifically:
+    ///
+    /// * The value of the newly inserted element must be unique in the set.
+    /// * All values in the set must remain in sorted order.
+    pub unsafe fn insert_before_unchecked(&mut self, value: T) -> Result<(), AllocError> {
+        // SAFETY: precondition from the caller
+        unsafe { self.cursor.insert_before_unchecked(value, SetValZST) }
+    }
+
     /// Removes the value that the cursor would return by [`next`](Self::next),
     /// if there is one.
     ///
@@ -830,7 +937,8 @@ mod tests {
 
         // The clones should not affect the old cursor.
         assert_eq!(snapshot_2.next(), Some(&3));
-        assert_eq!(cursor.peek_next(), Some(&3));
+        // The old cursor already moved past 3, so 4 is next.
+        assert_eq!(cursor.peek_next(), Some(&4));
     }
 
     #[test]
@@ -922,6 +1030,83 @@ mod tests {
             let mut cursor: CursorMutKey<i32, BudgetedAlloc> =
                 unsafe { set.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             cursor.insert_after(12).unwrap();
+        }
+        assert_eq!(set.len(), 12);
+        assert_eq!(set.get(&12), Some(&12));
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_happy_path() {
+        let mut set = make_set();
+        {
+            let mut cursor: CursorMut<i32, Global> = set.lower_bound_mut(Bound::Unbounded);
+            // SAFETY: prepending before the smallest element keeps the set
+            // sorted.
+            unsafe { cursor.insert_after_unchecked(0).unwrap() };
+            // The cursor ends up at the gap before the inserted value.
+            assert_eq!(cursor.peek_prev(), None);
+            assert_eq!(cursor.next(), Some(&0));
+        }
+        {
+            let mut cursor: CursorMut<i32, Global> = set.upper_bound_mut(Bound::Unbounded);
+            // SAFETY: appending past the largest element keeps the set sorted.
+            unsafe { cursor.insert_before_unchecked(5).unwrap() };
+            assert_eq!(cursor.peek_prev(), Some(&5));
+            assert_eq!(cursor.peek_next(), None);
+        }
+        assert_eq!(set.len(), 6);
+        let collected: std::vec::Vec<i32> = set.iter().copied().collect();
+        assert_eq!(collected, std::vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn cursor_mut_insert_unchecked_alloc_failure() {
+        let alloc = BudgetedAlloc::new(1 << 20);
+        let mut set: BTreeSet<i32, BudgetedAlloc> = BTreeSet::new_in(alloc.clone());
+        // Fill the root leaf completely, so that the next insertion has to
+        // split it and therefore really allocates.
+        for i in 1..=11 {
+            set.try_insert(i).unwrap();
+        }
+
+        {
+            let mut cursor: CursorMut<i32, BudgetedAlloc> = set.upper_bound_mut(Bound::Unbounded);
+            alloc.drain();
+            // SAFETY: the value is appended past the largest element, so the
+            // set stays sorted; the failure must be an allocation error.
+            let result = unsafe { cursor.insert_before_unchecked_give_back(12) };
+            match result {
+                Err((v, AllocError)) => assert_eq!(v, 12),
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // SAFETY: same ordering precondition as above.
+            let result = unsafe { cursor.insert_before_unchecked(12) };
+            match result {
+                Err(AllocError) => {}
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // SAFETY: same ordering precondition as above.
+            let result = unsafe { cursor.insert_after_unchecked_give_back(12) };
+            match result {
+                Err((v, AllocError)) => assert_eq!(v, 12),
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            // SAFETY: same ordering precondition as above.
+            let result = unsafe { cursor.insert_after_unchecked(12) };
+            match result {
+                Err(AllocError) => {}
+                _ => panic!("insertion should fail when the budget is exhausted"),
+            }
+            assert_eq!(cursor.peek_prev(), Some(&11));
+        }
+        assert_eq!(set.len(), 11);
+
+        // After the budget is restored, the same insertion succeeds.
+        alloc.set_budget(1 << 20);
+        {
+            let mut cursor: CursorMut<i32, BudgetedAlloc> = set.upper_bound_mut(Bound::Unbounded);
+            // SAFETY: appending past the largest element keeps the set sorted.
+            unsafe { cursor.insert_before_unchecked(12).unwrap() };
         }
         assert_eq!(set.len(), 12);
         assert_eq!(set.get(&12), Some(&12));
