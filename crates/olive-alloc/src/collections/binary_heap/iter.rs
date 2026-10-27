@@ -162,6 +162,10 @@ impl<T, A: Allocator> IntoIter<T, A> {
     }
 
     /// Borrows the remaining elements as an iterator, in raw buffer order.
+    #[allow(
+        clippy::iter_without_into_iter,
+        reason = "helper on a type that is itself an Iterator; an `IntoIterator for &IntoIter` impl would be confusing"
+    )]
     #[inline]
     pub fn iter(&self) -> Iter<'_, T> {
         Iter::new(self.inner.as_slice().iter())

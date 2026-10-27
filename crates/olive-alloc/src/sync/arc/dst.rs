@@ -671,7 +671,7 @@ mod tests {
         // Fill each slot directly, bypassing any higher-level writer, to prove
         // `assume_init` is a pure type reinterpretation. Each element is a
         // `MaybeUninit<i32>`; writing a valid `i32` into it initializes that slot.
-        fill_slots(&uninit, |i| i as i32 * 10);
+        fill_slots(&uninit, |i| i32::try_from(i).unwrap() * 10);
 
         let arc = unsafe { uninit.assume_init() };
         assert_eq!(&*arc, &[0, 10, 20, 30]);

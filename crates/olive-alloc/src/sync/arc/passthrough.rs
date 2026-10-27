@@ -87,6 +87,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "deliberate NaN comparison to demonstrate PartialEq on Arc"
+    )]
     fn arc_partial_eq_non_reflexive() {
         let a = Arc::try_new(f64::NAN).unwrap();
         let b = Arc::try_new(f64::NAN).unwrap();

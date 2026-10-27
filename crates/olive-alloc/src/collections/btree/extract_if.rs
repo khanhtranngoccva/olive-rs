@@ -271,8 +271,8 @@ mod tests {
         let extracted: Vec<(u32, u32)> = map.extract_if(.., |&k, _| k < 100).collect();
         assert_eq!(extracted.len(), 10);
         for (i, (k, v)) in extracted.iter().enumerate() {
-            assert_eq!(*k, i as u32);
-            assert_eq!(*v, i as u32 * 10);
+            assert_eq!(*k, u32::try_from(i).unwrap());
+            assert_eq!(*v, u32::try_from(i).unwrap() * 10);
         }
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
@@ -681,8 +681,8 @@ mod tests {
         let drained: Vec<(u32, u32)> = map.extract_if(.., |_, _| true).collect();
         assert_eq!(drained.len(), N as usize);
         for (i, (k, v)) in drained.iter().enumerate() {
-            assert_eq!(*k, i as u32, "wrong key at step {i}");
-            assert_eq!(*v, i as u32, "wrong value at step {i}");
+            assert_eq!(*k, u32::try_from(i).unwrap(), "wrong key at step {i}");
+            assert_eq!(*v, u32::try_from(i).unwrap(), "wrong value at step {i}");
         }
         assert!(map.is_empty());
         check_tree_invariant(&map);
@@ -747,6 +747,7 @@ mod tests {
             // closure so it can be re-checked after extraction.
             let threshold = (rng.next_u64() % 97) as u32;
             let seed = rng.next_u64();
+            #[allow(clippy::cast_possible_truncation, reason = "deliberate: 32-bit fold of the 64-bit RNG word into the hash seed")]
             let seed32 = seed as u32;
             let pred = |k: u32| -> bool {
                 let h = k
@@ -790,7 +791,7 @@ mod tests {
             let n_extracted = map.extract_if(.., |&k, _| k < midpoint).count();
             check_tree_invariant(&map);
             check_ascending_keys(&map);
-            for j in 0..n_extracted as u32 {
+            for j in 0..u32::try_from(n_extracted).unwrap() {
                 map.try_insert(midpoint + 1 + j * 3, round).unwrap();
             }
             check_tree_invariant(&map);

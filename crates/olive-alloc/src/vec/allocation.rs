@@ -968,10 +968,10 @@ mod tests {
     #[test]
     fn resize_with_calls_closure() {
         let mut v = Vec::new();
-        let mut counter = 0u32;
+        let mut counter = 0i32;
         v.try_resize_with(3, || -> Result<i32, ()> {
             counter += 1;
-            Ok(counter as i32)
+            Ok(counter)
         })
         .expect("resize_with ok");
         assert_eq!(v.as_slice(), &[1, 2, 3]);

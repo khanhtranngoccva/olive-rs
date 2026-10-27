@@ -1097,10 +1097,10 @@ mod tests {
     use super::{Cursor, CursorMut, CursorMutKey, TryBTreeMapCursorInsertError};
     use crate::alloc::Global;
 
-    fn make_map() -> BTreeMap<i32, u32, Global> {
+    fn make_map() -> BTreeMap<u32, u32, Global> {
         let mut map = BTreeMap::new_in(Global);
         for i in 1..=4 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+            map.try_insert(i, i * 10).unwrap();
         }
         map
     }
@@ -1297,7 +1297,7 @@ mod tests {
 
         // The mutations made through the shell are visible in the map.
         for i in 1..=4 {
-            assert_eq!(map.get(&i), Some(&(10 * i as u32)));
+            assert_eq!(map.get(&i), Some(&(10 * i)));
         }
         assert_eq!(map.len(), 4);
 
@@ -1310,11 +1310,11 @@ mod tests {
     #[test]
     fn cursor_mut_insert_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
-        for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+        for i in 1..=11u32 {
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
@@ -1349,11 +1349,11 @@ mod tests {
     #[test]
     fn cursor_mut_insert_give_back_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
-        for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+        for i in 1..=11u32 {
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
@@ -1452,15 +1452,15 @@ mod tests {
     #[test]
     fn cursor_mut_insert_unchecked_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
         for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMut<u32, u32, BudgetedAlloc> =
                 map.upper_bound_mut(Bound::Unbounded);
             // Exhaust the budget so any further allocation fails.
             alloc.drain();
@@ -1482,7 +1482,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMut<u32, u32, BudgetedAlloc> =
                 map.upper_bound_mut(Bound::Unbounded);
             // SAFETY: 12 is ordered after 11.
             unsafe { cursor.insert_after_unchecked(12, 120) }.unwrap();
@@ -1494,15 +1494,15 @@ mod tests {
     #[test]
     fn cursor_mut_insert_unchecked_give_back_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
         for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMut<u32, u32, BudgetedAlloc> =
                 map.upper_bound_mut(Bound::Unbounded);
             // Exhaust the budget so any further allocation fails.
             alloc.drain();
@@ -1528,7 +1528,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMut<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMut<u32, u32, BudgetedAlloc> =
                 map.upper_bound_mut(Bound::Unbounded);
             // SAFETY: 12 is ordered after 11.
             unsafe { cursor.insert_after_unchecked_give_back(12, 120) }.unwrap();
@@ -1596,15 +1596,15 @@ mod tests {
     #[test]
     fn insert_unchecked_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
-        for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+        for i in 1..=11u32 {
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // Exhaust the budget so any further allocation fails.
             alloc.drain();
@@ -1624,7 +1624,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             unsafe { cursor.insert_after_unchecked(12, 120) }.unwrap();
         }
@@ -1635,15 +1635,15 @@ mod tests {
     #[test]
     fn insert_unchecked_give_back_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
-        for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+        for i in 1..=11u32 {
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // Exhaust the budget so any further allocation fails.
             alloc.drain();
@@ -1666,7 +1666,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             unsafe { cursor.insert_after_unchecked_give_back(12, 120) }.unwrap();
         }
@@ -1680,7 +1680,7 @@ mod tests {
 
         // Gap before 1: key 0 fits.
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.lower_bound_mut(Bound::Included(&1)).with_mutable_key() };
             cursor.insert_after(0, 5).unwrap();
             assert_eq!(cursor.peek_prev(), None);
@@ -1690,7 +1690,7 @@ mod tests {
 
         // Gap after 4: key 9 fits.
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             cursor.insert_before(9, 90).unwrap();
             assert_eq!(cursor.peek_prev(), Some((&mut 9, &mut 90)));
@@ -1709,7 +1709,7 @@ mod tests {
         let mut map = make_map();
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.lower_bound_mut(Bound::Included(&2)).with_mutable_key() };
             assert_eq!(
                 cursor.insert_after(1, 0),
@@ -1723,7 +1723,7 @@ mod tests {
         assert_eq!(map.len(), 4);
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // The key must be greater than the previous element (4) and
             // strictly less than the next one, which does not exist here.
@@ -1742,15 +1742,15 @@ mod tests {
     #[test]
     fn checked_insert_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
         for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // Exhaust the budget so any further allocation fails. The key is
             // properly ordered here, so the failure must be reported as an
@@ -1772,7 +1772,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             cursor.insert_before(12, 120).unwrap();
         }
@@ -1784,7 +1784,7 @@ mod tests {
     fn checked_insert_give_back_unordered() {
         let mut map = make_map(); // {1: 10, 2: 20, 3: 30, 4: 40}
         {
-            let mut cursor: CursorMutKey<i32, u32> =
+            let mut cursor: CursorMutKey<u32, u32> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // An out-of-order key is rejected and handed back.
             match cursor.insert_after_give_back(2, 200) {
@@ -1804,7 +1804,7 @@ mod tests {
             cursor.insert_after_give_back(5, 50).unwrap();
         }
         {
-            let mut cursor: CursorMutKey<i32, u32> =
+            let mut cursor: CursorMutKey<u32, u32> =
                 unsafe { map.lower_bound_mut(Bound::Unbounded).with_mutable_key() };
             cursor.insert_before(0, 0).unwrap();
         }
@@ -1816,15 +1816,15 @@ mod tests {
     #[test]
     fn checked_insert_give_back_alloc_failure() {
         let alloc = BudgetedAlloc::new(1 << 20);
-        let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
+        let mut map: BTreeMap<u32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the root leaf completely, so that the next insertion has to
         // split it and therefore really allocates.
-        for i in 1..=11 {
-            map.try_insert(i, i as u32 * 10).unwrap();
+        for i in 1..=11u32 {
+            map.try_insert(i, i * 10).unwrap();
         }
 
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             // Exhaust the budget so any further allocation fails. The key is
             // properly ordered here, so the failure must be reported as an
@@ -1849,7 +1849,7 @@ mod tests {
         // After the budget is restored, the same insertion succeeds.
         alloc.set_budget(1 << 20);
         {
-            let mut cursor: CursorMutKey<i32, u32, BudgetedAlloc> =
+            let mut cursor: CursorMutKey<u32, u32, BudgetedAlloc> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             cursor.insert_after_give_back(12, 120).unwrap();
         }
@@ -1862,7 +1862,7 @@ mod tests {
         let mut map = make_map();
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.lower_bound_mut(Bound::Unbounded).with_mutable_key() };
             assert_eq!(cursor.remove_next(), Some((1, 10)));
             // The cursor stays in place, now facing the element that followed.
@@ -1872,7 +1872,7 @@ mod tests {
         assert_eq!(map.len(), 3);
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.upper_bound_mut(Bound::Unbounded).with_mutable_key() };
             assert_eq!(cursor.remove_next(), None);
             cursor.prev();
@@ -1883,7 +1883,7 @@ mod tests {
         assert_eq!(map.len(), 2);
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.lower_bound_mut(Bound::Unbounded).with_mutable_key() };
             assert_eq!(cursor.remove_prev(), None);
         }
@@ -1893,14 +1893,14 @@ mod tests {
     #[test]
     fn remove_across_internal_levels() {
         let mut map = BTreeMap::new_in(Global);
-        for i in 0..=20 {
-            map.try_insert(i, i as u32).unwrap();
+        for i in 0..=20u32 {
+            map.try_insert(i, i).unwrap();
         }
         // 21 elements force the root to split into an internal node.
         assert!(map.len() > 11);
 
         {
-            let mut cursor: CursorMutKey<i32, u32, Global> =
+            let mut cursor: CursorMutKey<u32, u32, Global> =
                 unsafe { map.lower_bound_mut(Bound::Unbounded).with_mutable_key() };
             let mut seen = std::vec::Vec::new();
             while let Some((k, v)) = cursor.remove_next() {
@@ -1919,7 +1919,7 @@ mod tests {
     fn cursor_mut_as_cursor() {
         let mut map = make_map();
         let mut cursor_mut = map.lower_bound_mut(Bound::Unbounded);
-        let mut cursor: Cursor<i32, u32> = cursor_mut.as_cursor();
+        let mut cursor: Cursor<u32, u32> = cursor_mut.as_cursor();
         assert_eq!(cursor.next(), Some((&1, &10)));
         // The mutable cursor and its immutable view agree on position.
         assert_eq!(cursor_mut.peek_next(), Some((&1, &mut 10)));

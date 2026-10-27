@@ -437,7 +437,7 @@ mod tests {
                 return None;
             }
             self.remaining -= 1;
-            let value = (self.advertised_upper - self.remaining) as i32;
+            let value = i32::try_from(self.advertised_upper - self.remaining).unwrap();
             Some(value)
         }
 
@@ -1092,7 +1092,7 @@ mod tests {
             type Item = i32;
             fn next(&mut self) -> Option<i32> {
                 if self.yielded < self.n {
-                    let v = self.yielded as i32;
+                    let v = i32::try_from(self.yielded).unwrap();
                     self.yielded += 1;
                     Some(v)
                 } else {

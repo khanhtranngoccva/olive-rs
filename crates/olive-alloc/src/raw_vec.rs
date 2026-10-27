@@ -34,6 +34,7 @@ use olive_core::alloc_errors::{TryReserveError, TryReserveErrorKind};
 use TryReserveErrorKind::CapacityOverflow;
 
 /// Whether a fresh allocation should be left uninitialized or zero-filled.
+#[derive(Clone, Copy)]
 enum AllocInit {
     /// The contents of the new memory are uninitialized.
     Uninitialized,
@@ -957,10 +958,10 @@ mod tests {
         // Write and read back through the raw pointer.
         unsafe {
             for i in 0..10 {
-                v.ptr().add(i).write(i as i32);
+                v.ptr().add(i).write(i32::try_from(i).unwrap());
             }
             for i in 0..10 {
-                assert_eq!(v.ptr().add(i).read(), i as i32);
+                assert_eq!(v.ptr().add(i).read(), i32::try_from(i).unwrap());
             }
         }
     }
@@ -1116,7 +1117,7 @@ mod tests {
         let v = RawVec::<i32>::try_with_capacity(4).expect("alloc ok");
         unsafe {
             for i in 0..4 {
-                v.ptr().add(i).write((i * 10) as i32);
+                v.ptr().add(i).write(i32::try_from(i * 10).unwrap());
             }
         }
         let ptr = v.ptr();
@@ -1129,7 +1130,7 @@ mod tests {
         assert_eq!(v2.capacity(), cap);
         unsafe {
             for i in 0..4 {
-                assert_eq!(v2.ptr().add(i).read(), (i * 10) as i32);
+                assert_eq!(v2.ptr().add(i).read(), i32::try_from(i * 10).unwrap());
             }
         }
     }

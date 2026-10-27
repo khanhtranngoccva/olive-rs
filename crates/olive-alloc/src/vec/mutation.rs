@@ -801,13 +801,15 @@ mod tests {
     /// drop (double-free) those elements again.
     #[test]
     fn truncate_panicking_drop_is_safe() {
-        // FIXME: use a PanickyDrop
+
+
         /// Panics exactly once, the first time it runs while armed; records its id.
         struct PanicDrop {
             id: u32,
             ledger: Arc<Ledger>,
             armer: Arc<PanicArmer>,
         }
+        // FIXME: use a PanickyDrop
         impl Drop for PanicDrop {
             fn drop(&mut self) {
                 self.ledger.unregister(self.id);

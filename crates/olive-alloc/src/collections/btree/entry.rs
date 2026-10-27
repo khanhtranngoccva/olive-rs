@@ -760,7 +760,7 @@ mod tests {
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         // Fill the sole leaf to CAPACITY (11) so the next insert forces a split.
         for i in 0..11i32 {
-            map.entry(i).or_try_insert((i * 10) as u32).unwrap();
+            map.entry(i).or_try_insert(u32::try_from(i * 10).unwrap()).unwrap();
         }
         assert_eq!(map.len(), 11);
 
@@ -885,7 +885,7 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         for i in 0..11i32 {
-            map.entry(i).or_try_insert((i * 10) as u32).unwrap();
+            map.entry(i).or_try_insert(u32::try_from(i * 10).unwrap()).unwrap();
         }
         assert_eq!(map.len(), 11);
 
@@ -893,7 +893,7 @@ mod tests {
 
         let err = map
             .entry(11)
-            .or_try_insert_with_key(|k| -> Result<u32, Infallible> { Ok((*k * 10) as u32) })
+            .or_try_insert_with_key(|k| -> Result<u32, Infallible> { Ok(u32::try_from(*k * 10).unwrap()) })
             .unwrap_err();
         assert!(matches!(err, TryBTreeMapEntryWithError::Alloc(_)));
         assert_eq!(map.len(), 11);
@@ -965,7 +965,7 @@ mod tests {
         let alloc = BudgetedAlloc::new(1 << 20);
         let mut map: BTreeMap<i32, u32, BudgetedAlloc> = BTreeMap::new_in(alloc.clone());
         for i in 0..11i32 {
-            map.entry(i).try_insert_entry((i * 10) as u32).unwrap();
+            map.entry(i).try_insert_entry(u32::try_from(i * 10).unwrap()).unwrap();
         }
         assert_eq!(map.len(), 11);
 

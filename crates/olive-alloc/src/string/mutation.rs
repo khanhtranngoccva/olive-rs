@@ -164,10 +164,58 @@ impl<A: Allocator> String<A> {
     /// unchecked tail is shifted left over any holes created by rejected
     /// characters, so the result contains all originally-kept characters
     /// followed by all not-yet-examined characters (in their original order).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "copied std implementation, but this implementation contains more lint reasoning lines"
+    )]
     pub fn retain<F>(&mut self, mut predicate: F)
     where
         F: FnMut(char) -> bool,
     {
+        // Critical section: at least one character will be removed.
+        // On unwind, we shift the unchecked tail left to seal gaps, then
+        // restore the length. We track state in plain variables and use a
+        // small RAII guard that borrows `self` exclusively.
+        struct RetainGuard<'a, A: Allocator> {
+            string: &'a mut String<A>,
+            base: *mut u8,
+            read: usize,
+            write: usize,
+            original_len: usize,
+        }
+
+        impl<A: Allocator> Drop for RetainGuard<'_, A> {
+            #[cold]
+            fn drop(&mut self) {
+                #[allow(clippy::arithmetic_side_effects, reason = "read <= original_len")]
+                let remaining = self.original_len - self.read;
+                // SAFETY: Need to check to prevent OOB pointer.
+                if remaining > 0 {
+                    // SAFETY: The unchecked tail `[read..original_len)` consists
+                    // of whole characters. Shifting it left to position `write`
+                    // (also a char boundary) keeps the buffer valid UTF-8.
+                    unsafe {
+                        ptr::copy(
+                            self.base.add(self.read),
+                            self.base.add(self.write),
+                            remaining,
+                        );
+                    }
+                }
+                // SAFETY: After filling holes, all bytes are contiguous and
+                // valid UTF-8; the new length equals `write + remaining`.
+                unsafe {
+                    #[allow(
+                        clippy::arithmetic_side_effects,
+                        reason = "write + remaining <= original_len"
+                    )]
+                    {
+                        self.string.buf.set_len(self.write + remaining);
+                    }
+                }
+            }
+        }
+
         let len = self.len();
         if len == 0 {
             return;
@@ -198,49 +246,6 @@ impl<A: Allocator> String<A> {
             if read_pos == len {
                 // All characters kept; nothing to do.
                 return;
-            }
-        }
-
-        // Critical section: at least one character will be removed.
-        // On unwind, we shift the unchecked tail left to seal gaps, then
-        // restore the length. We track state in plain variables and use a
-        // small RAII guard that borrows `self` exclusively.
-        struct RetainGuard<'a, A: Allocator> {
-            string: &'a mut String<A>,
-            base: *mut u8,
-            read: usize,
-            write: usize,
-            original_len: usize,
-        }
-        impl<A: Allocator> Drop for RetainGuard<'_, A> {
-            #[cold]
-            fn drop(&mut self) {
-                #[allow(clippy::arithmetic_side_effects, reason = "read <= original_len")]
-                let remaining = self.original_len - self.read;
-                // SAFETY: Need to check to prevent OOB pointer.
-                if remaining > 0 {
-                    // SAFETY: The unchecked tail `[read..original_len)` consists
-                    // of whole characters. Shifting it left to position `write`
-                    // (also a char boundary) keeps the buffer valid UTF-8.
-                    unsafe {
-                        ptr::copy(
-                            self.base.add(self.read),
-                            self.base.add(self.write),
-                            remaining,
-                        );
-                    }
-                }
-                // SAFETY: After filling holes, all bytes are contiguous and
-                // valid UTF-8; the new length equals `write + remaining`.
-                unsafe {
-                    #[allow(
-                        clippy::arithmetic_side_effects,
-                        reason = "write + remaining <= original_len"
-                    )]
-                    {
-                        self.string.buf.set_len(self.write + remaining);
-                    }
-                }
             }
         }
 
@@ -313,8 +318,6 @@ impl<A: Allocator> String<A> {
 #[cfg(test)]
 mod tests {
     extern crate std;
-
-    
 
     use super::*;
 

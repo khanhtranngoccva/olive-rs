@@ -118,6 +118,10 @@ macro_rules! impl_downcast {
     ($dyn_ty:ty, $doc:literal, $($bound:tt)*) => {
         impl<A: Allocator> Box<$dyn_ty, A> {
             #[doc = $doc]
+            #[doc = ""]
+            #[doc = "# Errors"]
+            #[doc = "Returns the original box unchanged in `Err` when the"]
+            #[doc = "dynamic type is not `T`."]
             pub fn downcast<T: $($bound)*>(self) -> Result<Box<T, A>, Self> {
                 if self.is::<T>() {
                     unsafe {

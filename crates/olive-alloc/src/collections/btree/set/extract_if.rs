@@ -406,7 +406,7 @@ mod tests {
         let drained: std::vec::Vec<u32> = set.extract_if(.., |_| true).collect();
         assert_eq!(drained.len(), N as usize);
         for (i, v) in drained.iter().enumerate() {
-            assert_eq!(*v, i as u32, "wrong value at step {i}");
+            assert_eq!(*v, u32::try_from(i).unwrap(), "wrong value at step {i}");
             if i % 50 == 0 {
                 check_tree_invariant(&set.map);
                 check_ascending_keys(&set.map);
@@ -434,6 +434,10 @@ mod tests {
             // closure so it can be re-checked after extraction.
             let threshold = (rng.next_u64() % 97) as u32;
             let seed = rng.next_u64();
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deliberate: 32-bit fold of the 64-bit RNG word into the hash seed"
+            )]
             let seed32 = seed as u32;
             let pred = |v: u32| -> bool {
                 let h = v
@@ -475,7 +479,7 @@ mod tests {
             let n_extracted = set.extract_if(.., |v| *v < midpoint).count();
             check_tree_invariant(&set.map);
             check_ascending_keys(&set.map);
-            for j in 0..n_extracted as u32 {
+            for j in 0..u32::try_from(n_extracted).unwrap() {
                 set.try_insert(midpoint + 1 + j * 3).unwrap();
             }
             check_tree_invariant(&set.map);

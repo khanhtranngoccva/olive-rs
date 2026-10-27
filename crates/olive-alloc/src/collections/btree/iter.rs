@@ -312,6 +312,11 @@ pub struct IterMut<'a, K: 'a, V: 'a> {
 
 impl<K, V> IterMut<'_, K, V> {
     /// Returns an iterator of references over the remaining items.
+    #[allow(
+        clippy::iter_without_into_iter,
+        reason = "`IterMut` is itself an Iterator, so an \
+                  `IntoIterator for &IterMut` impl would be misleading"
+    )]
     #[inline]
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
@@ -490,6 +495,11 @@ pub struct IntoIter<K, V, A: Allocator = Global> {
 
 impl<K, V, A: Allocator> IntoIter<K, V, A> {
     /// Returns an iterator of references over the remaining items.
+    #[allow(
+        clippy::iter_without_into_iter,
+        reason = "`IntoIter` is itself an Iterator, so an \
+                  `IntoIterator for &IntoIter` impl would be misleading"
+    )]
     #[inline]
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
@@ -1938,7 +1948,10 @@ mod tests {
         impl Drop for MaybePanic {
             fn drop(&mut self) {
                 self.counter.record();
-                assert!(!self.armed.swap(false, Ordering::SeqCst), "boom during IntoIter drop");
+                assert!(
+                    !self.armed.swap(false, Ordering::SeqCst),
+                    "boom during IntoIter drop"
+                );
             }
         }
 

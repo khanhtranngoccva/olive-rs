@@ -274,6 +274,11 @@ pub struct SetOp<T, A: Allocator = Global>(
 
 impl<T, A: Allocator> SetOp<T, A> {
     /// Obtain the result of the operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error recorded when some step of the operation failed;
+    /// every later step is then skipped.
     #[must_use = "the result of the set operation must be handled"]
     pub fn finish(self) -> Result<BTreeSet<T, A>, TryBTreeSetWithCloneError> {
         self.0
@@ -629,8 +634,8 @@ mod tests {
     #[test]
     fn tree_still_valid_after_trait_queries() {
         let mut set = BTreeSet::new();
-        for i in (0..80u32).rev() {
-            set.try_insert(i as i32).unwrap();
+        for i in (0..80i32).rev() {
+            set.try_insert(i).unwrap();
         }
         check_ascending_keys(&set.map);
         check_tree_invariant(&set.map);
@@ -1077,7 +1082,7 @@ mod tests {
 
         // Original must still be intact.
         assert_eq!(set.len(), len_before);
-        for i in 0..len_before as i32 {
+        for i in 0..i32::try_from(len_before).unwrap() {
             assert!(set.contains(&i));
         }
     }

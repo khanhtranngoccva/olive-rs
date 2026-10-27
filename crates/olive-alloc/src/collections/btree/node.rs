@@ -250,6 +250,10 @@ impl<K, V> NodeRef<marker::Owned, K, V, marker::Leaf> {
 
 impl<K, V> NodeRef<marker::Owned, K, V, marker::Internal> {
     /// Creates a new internal (height > 0) `NodeRef` from a partially initialized allocation created by `InternalNode::new`.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "need to pass owned node for correct semantics"
+    )]
     fn from_uninitialized_internal<A: Allocator>(
         mut boxed: Box<InternalNode<K, V>, A>,
         child: Root<K, V>,
@@ -374,6 +378,10 @@ impl<BorrowType: marker::BorrowType, K, V, Type> NodeRef<BorrowType, K, V, Type>
     ///
     /// `edge.descend().ascend().unwrap()` and `node.ascend().unwrap().descend()` should
     /// both, upon success, do nothing.
+    #[allow(
+        clippy::type_complexity,
+        reason = "return type has the best type representation possible"
+    )]
     pub(super) fn ascend(
         self,
     ) -> Result<Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::Edge>, Self> {
@@ -474,30 +482,6 @@ impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Immut<'a>, K, V, Type> {
             _marker: PhantomData,
         }
     }
-
-    /// Unsafely asserts to the compiler the static information that this node is a `Leaf`.
-    pub(super) unsafe fn cast_to_leaf_unchecked(
-        self,
-    ) -> NodeRef<marker::Immut<'a>, K, V, marker::Leaf> {
-        debug_assert!(self.height == 0);
-        NodeRef {
-            height: self.height,
-            node: self.node,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Returns a reference to the key-value pair at the given index.
-    ///
-    /// # Safety
-    /// `idx` must be less than the node's length.
-    pub(super) unsafe fn into_key_val_at(self, idx: usize) -> (&'a K, &'a V) {
-        debug_assert!(idx < self.len());
-        let leaf = self.into_leaf();
-        let k = unsafe { leaf.keys.get_unchecked(idx).assume_init_ref() };
-        let v = unsafe { leaf.vals.get_unchecked(idx).assume_init_ref() };
-        (k, v)
-    }
 }
 
 impl<K, V> NodeRef<marker::Dying, K, V, marker::LeafOrInternal> {
@@ -556,8 +540,8 @@ impl<'a, K, V, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
     }
 
     /// Offers exclusive access to the leaf portion of a leaf or internal node.
-    fn into_leaf_mut(mut self) -> &'a mut LeafNode<K, V> {
-        let ptr = Self::as_leaf_ptr(&mut self);
+    fn into_leaf_mut(self) -> &'a mut LeafNode<K, V> {
+        let ptr = Self::as_leaf_ptr(&self);
         // SAFETY: we have exclusive access to the entire node.
         unsafe { &mut *ptr }
     }
@@ -660,30 +644,6 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
 }
 
 impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
-    /// Borrows a view into the keys stored in the node. Keys are never mutated
-    /// through `ValMut`, so this is safe alongside outstanding value references.
-    pub(super) fn keys(&self) -> &[K] {
-        let ptr = Self::as_leaf_ptr(self);
-        // SAFETY: the first `len` elements of `keys` are initialized; `ValMut`
-        // borrows only values mutably, so key access does not alias.
-        unsafe {
-            &*(ptr::from_ref::<[MaybeUninit<K>]>((*ptr).keys.get_unchecked(..usize::from((*ptr).len)))
-                as *const [K])
-        }
-    }
-
-    /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
-    pub(super) unsafe fn cast_to_internal_unchecked(
-        self,
-    ) -> NodeRef<marker::ValMut<'a>, K, V, marker::Internal> {
-        debug_assert!(self.height > 0);
-        NodeRef {
-            height: self.height,
-            node: self.node,
-            _marker: PhantomData,
-        }
-    }
-
     /// # Safety
     /// - The node has more than `idx` initialized elements.
     pub(super) unsafe fn into_key_val_mut_at(mut self, idx: usize) -> (&'a K, &'a mut V) {
@@ -708,16 +668,6 @@ impl<'a, K, V, Type> NodeRef<marker::ValMut<'a>, K, V, Type> {
 }
 
 impl<'a, K: 'a, V: 'a, Type> NodeRef<marker::Mut<'a>, K, V, Type> {
-    /// Borrows a view into the keys stored in the node.
-    pub(super) fn keys(&self) -> &[K] {
-        let ptr = Self::as_leaf_ptr(self);
-        // SAFETY: we have exclusive access to the node, so no aliasing concerns.
-        unsafe {
-            &*(ptr::from_ref::<[MaybeUninit<K>]>((*ptr).keys.get_unchecked(..usize::from((*ptr).len)))
-                as *const [K])
-        }
-    }
-
     /// Unsafely asserts to the compiler the static information that this node is an `Internal`.
     pub(super) unsafe fn cast_to_internal_unchecked(
         self,
@@ -762,6 +712,10 @@ impl<'a, K, V> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
 impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal> {
     /// Sets the node's link to its parent edge,
     /// without invalidating other references to the node.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "invariant: `parent_idx` is a slot index within a `CAPACITY`-sized parent, far below u16::MAX"
+    )]
     pub(super) fn set_parent_link(
         &mut self,
         parent: NonNull<InternalNode<K, V>>,
@@ -912,6 +866,10 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
 
     /// Adds a key-value pair to the end of the node, and returns
     /// the mutable reference of the inserted value.
+    #[expect(
+        dead_code,
+        reason = "std-mirror method kept for parity with the upstream port"
+    )]
     pub(super) fn push(&mut self, key: K, val: V) -> *mut V {
         // SAFETY: The unbound handle is no longer accessible.
         unsafe { self.push_with_handle(key, val).into_val_mut() }
@@ -921,6 +879,10 @@ impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Leaf> {
 impl<'a, K: 'a, V: 'a> NodeRef<marker::Mut<'a>, K, V, marker::Internal> {
     /// Adds a key-value pair, and an edge to go to the right of that pair,
     /// to the end of the node.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "edge root must be passed by value for owned semantics"
+    )]
     pub(super) fn push(&mut self, key: K, val: V, edge: Root<K, V>) {
         #[allow(
             clippy::arithmetic_side_effects,
@@ -1218,6 +1180,7 @@ impl<BorrowType, K, V, NodeType> Handle<NodeRef<BorrowType, K, V, NodeType>, mar
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum LeftOrRight<T> {
     Left(T),
     Right(T),
@@ -1270,8 +1233,13 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
         unsafe {
             slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
             slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
-            *self.node.len_mut() = new_len as u16;
-
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "safety precondition: node length is below CAPACITY, far below u16::MAX"
+            )]
+            {
+                *self.node.len_mut() = new_len as u16;
+            }
             Handle::new_kv(self.node, self.idx)
         }
     }
@@ -1340,6 +1308,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
     /// Inserts a new key-value pair and an edge that will go to the right of that new pair
     /// between this edge and the key-value pair to the right of this edge. This method assumes
     /// that there is enough space in the node for the new pair to fit.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the edge root must be passed by value for owned semantics"
+    )]
     pub(super) fn insert_fit(&mut self, key: K, val: V, edge: Root<K, V>) {
         debug_assert!(self.node.len() < CAPACITY);
         #[allow(clippy::arithmetic_side_effects, reason = "invariant: internal node")]
@@ -1358,13 +1330,14 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Internal>, 
         unsafe {
             slice_insert(self.node.key_area_mut(..new_len), self.idx, key);
             slice_insert(self.node.val_area_mut(..new_len), self.idx, val);
-            slice_insert(
-                self.node.edge_area_mut(..=new_len),
-                self.idx + 1,
-                edge.node,
-            );
-            *self.node.len_mut() = new_len as u16;
-
+            slice_insert(self.node.edge_area_mut(..=new_len), self.idx + 1, edge.node);
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "invariant: node length is bounded by CAPACITY, far below u16::MAX"
+            )]
+            {
+                *self.node.len_mut() = new_len as u16;
+            }
             self.node
                 .correct_childrens_parent_links((self.idx + 1)..=new_len);
         }
@@ -1522,6 +1495,11 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Immut<'a>, K, V, NodeTyp
 }
 
 impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>, marker::KV> {
+    #[expect(
+        dead_code,
+        reason = "std-mirror method kept for parity with the upstream port"
+    )]
+    // FIXME: the BTreeSet::replace() is missing
     pub(super) fn key_mut(&mut self) -> &mut K {
         unsafe { self.node.key_area_mut(self.idx).assume_init_mut() }
     }
@@ -1621,7 +1599,13 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
             reason = "asserted self.idx < old_len"
         )]
         let new_len = old_len - self.idx - 1;
-        new_node.len = new_len as u16;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "invariant: node length is bounded by CAPACITY, far below u16::MAX"
+        )]
+        {
+            new_node.len = new_len as u16;
+        }
         #[allow(
             clippy::arithmetic_side_effects,
             reason = "asserted self.idx < old_len"
@@ -1639,7 +1623,13 @@ impl<'a, K: 'a, V: 'a, NodeType> Handle<NodeRef<marker::Mut<'a>, K, V, NodeType>
                 &mut new_node.vals[..new_len],
             );
 
-            *self.node.len_mut() = self.idx as u16;
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "invariant: node length is bounded by CAPACITY, far below u16::MAX"
+            )]
+            {
+                *self.node.len_mut() = self.idx as u16;
+            }
             (k, v)
         }
     }
@@ -1669,6 +1659,10 @@ impl<'a, K: 'a, V: 'a> Handle<NodeRef<marker::Mut<'a>, K, V, marker::Leaf>, mark
     /// Removes the key-value pair pointed to by this handle and returns it, along with the edge
     /// that the key-value pair collapsed into.
     #[allow(clippy::type_complexity, reason = "std uses this return declaration")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "invariant: node length is bounded by CAPACITY, far below u16::MAX"
+    )]
     pub(super) fn remove(
         mut self,
     ) -> (
@@ -1870,8 +1864,13 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
         assert!(new_left_len <= CAPACITY);
 
         unsafe {
-            *left_node.len_mut() = new_left_len as u16;
-
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "invariant: merged node lengths are bounded by CAPACITY, far below u16::MAX"
+            )]
+            {
+                *left_node.len_mut() = new_left_len as u16;
+            }
             // Move the parent's separator key and then the right node's keys.
             let parent_key = slice_remove(parent_node.key_area_mut(..old_parent_len), parent_idx);
             left_node.key_area_mut(old_left_len).write(parent_key);
@@ -1901,10 +1900,7 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 clippy::arithmetic_side_effects,
                 reason = "asserted parent_idx + 1 < old_parent_len + 1 <= 2 * B"
             )]
-            slice_remove(
-                parent_node.edge_area_mut(..=old_parent_len),
-                parent_idx + 1,
-            );
+            slice_remove(parent_node.edge_area_mut(..=old_parent_len), parent_idx + 1);
 
             // Patch the newly shifted edges' children to point to the correct index.
             #[allow(
@@ -2059,8 +2055,14 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
                 reason = "asserted old_right_len + count <= CAPACITY above"
             )]
             let new_right_len = old_right_len + count;
-            *left_node.len_mut() = new_left_len as u16;
-            *right_node.len_mut() = new_right_len as u16;
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "invariant: after-steal lengths are bounded by CAPACITY, far below u16::MAX"
+            )]
+            {
+                *left_node.len_mut() = new_left_len as u16;
+                *right_node.len_mut() = new_right_len as u16;
+            }
 
             // Move leaf data.
             #[allow(
@@ -2150,8 +2152,14 @@ impl<'a, K: 'a, V: 'a> BalancingContext<'a, K, V> {
             #[allow(clippy::arithmetic_side_effects, reason = "assertion done above")]
             let new_right_len = old_right_len - count;
 
-            *left_node.len_mut() = new_left_len as u16;
-            *right_node.len_mut() = new_right_len as u16;
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "invariant: after-steal lengths are bounded by CAPACITY, far below u16::MAX"
+            )]
+            {
+                *left_node.len_mut() = new_left_len as u16;
+                *right_node.len_mut() = new_right_len as u16;
+            }
 
             // Move leaf data.
             #[allow(
@@ -2247,17 +2255,13 @@ impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Leaf>, marker::K
     }
 }
 
-impl<BorrowType, K, V> Handle<NodeRef<BorrowType, K, V, marker::Internal>, marker::KV> {
-    pub(super) fn forget_node_type(
-        self,
-    ) -> Handle<NodeRef<BorrowType, K, V, marker::LeafOrInternal>, marker::KV> {
-        unsafe { Handle::new_kv(self.node.forget_type(), self.idx) }
-    }
-}
-
 impl<'a, K, V> Handle<NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>, marker::Edge> {
     /// Move the suffix after `self` from one node to another one. `right` must be empty.
     /// The first edge of `right` remains unchanged.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "invariant: split lengths are bounded by CAPACITY, far below u16::MAX"
+    )]
     pub fn move_suffix(
         &mut self,
         right: &mut NodeRef<marker::Mut<'a>, K, V, marker::LeafOrInternal>,

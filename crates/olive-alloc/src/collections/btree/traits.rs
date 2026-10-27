@@ -445,8 +445,8 @@ mod tests {
     #[test]
     fn debug_multilevel_map() {
         let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
-        for i in 0..80u32 {
-            map.try_insert(i as i32, (i * 2) as i32).unwrap();
+        for i in 0..80i32 {
+            map.try_insert(i, i * 2).unwrap();
         }
         let s = format!("{map:?}");
         // Should start with '{' and end with '}'
@@ -503,9 +503,9 @@ mod tests {
     fn partial_eq_multilevel_same_contents() {
         let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
-        for i in 0..80u32 {
-            a.try_insert(i as i32, (i * 3) as i32).unwrap();
-            b.try_insert(i as i32, (i * 3) as i32).unwrap();
+        for i in 0..80i32 {
+            a.try_insert(i, i * 3).unwrap();
+            b.try_insert(i, i * 3).unwrap();
         }
         assert_eq!(a, b);
     }
@@ -551,9 +551,9 @@ mod tests {
     fn ord_multilevel() {
         let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
         let mut b: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
-        for i in 0..80u32 {
-            a.try_insert(i as i32, (i * 2) as i32).unwrap();
-            b.try_insert(i as i32, (i * 2) as i32).unwrap();
+        for i in 0..80i32 {
+            a.try_insert(i, i * 2).unwrap();
+            b.try_insert(i, i * 2).unwrap();
         }
         assert_eq!(a.cmp(&b), Ordering::Equal);
         // Modify one value to make them differ.
@@ -623,13 +623,13 @@ mod tests {
     #[test]
     fn try_clone_multilevel() {
         let mut map: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
-        for i in 0..80u32 {
-            map.try_insert(i as i32, (i * 3) as i32).unwrap();
+        for i in 0..80i32 {
+            map.try_insert(i, i * 3).unwrap();
         }
         let cloned = map.try_clone().expect("clone ok");
         assert_eq!(cloned.len(), 80);
-        for i in 0..80u32 {
-            assert_eq!(cloned.get(&(i as i32)), Some(&((i * 3) as i32)));
+        for i in 0..80i32 {
+            assert_eq!(cloned.get(&i), Some(&(i * 3)));
         }
     }
 
@@ -700,7 +700,7 @@ mod tests {
 
         // Original must still be intact.
         assert_eq!(map.len(), len_before);
-        for i in 0..len_before as i32 {
+        for i in 0..i32::try_from(len_before).unwrap() {
             assert_eq!(map.get(&i), Some(&(i * 2)));
         }
     }
