@@ -19,7 +19,7 @@ use crate::alloc::Allocator;
 /// Panics on the first violation with a descriptive message.
 pub(crate) fn check_tree_invariant<K, V, A: Allocator>(map: &BTreeMap<K, V, A>) {
     if let Some(root) = map.root.as_ref() {
-        let min_len = if root.height() > 0 { 1 } else { 0 };
+        let min_len = usize::from(root.height() > 0);
         root.reborrow().assert_min_len_and_capacity(min_len);
 
         let actual = root.reborrow().calc_length();
@@ -47,12 +47,7 @@ where
     let mut last_key: Option<&K> = None;
     for (key, _) in iter {
         if let Some(prev) = last_key {
-            assert!(
-                prev < key,
-                "ascending order violated: {:?} >= {:?}",
-                prev,
-                key
-            );
+            assert!(prev < key, "ascending order violated: {prev:?} >= {key:?}",);
         }
         last_key = Some(key);
     }

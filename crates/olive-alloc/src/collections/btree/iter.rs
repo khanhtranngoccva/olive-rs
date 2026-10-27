@@ -797,6 +797,14 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Range<'a, K, V> {
 
 impl<K, V> FusedIterator for Range<'_, K, V> {}
 
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Range<'_, K, V> {
+    /// Formats the remaining key-value pairs as a list, like
+    /// `[(1, 1), (2, 4), (3, 9)]`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
 impl<'a, K: 'a, V: 'a> Clone for Range<'a, K, V> {
     fn clone(&self) -> Self {
         Range {
@@ -858,6 +866,17 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for RangeMut<'a, K, V> {
 }
 
 impl<K, V> FusedIterator for RangeMut<'_, K, V> {}
+
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for RangeMut<'_, K, V> {
+    /// Formats the remaining key-value pairs as a list, like
+    /// `[(1, 1), (2, 4), (3, 9)]`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let range = Range {
+            range: self.range.reborrow(),
+        };
+        f.debug_list().entries(range).finish()
+    }
+}
 
 // ── BTreeMap methods ─────────────────────────────────────────────────────────
 
@@ -1417,7 +1436,7 @@ mod tests {
 
     #[test]
     fn into_iter_default_is_empty() {
-        let m: IntoIter<u32, u32> = Default::default();
+        let m: IntoIter<u32, u32> = IntoIter::default();
         assert_eq!(m.count(), 0);
     }
 

@@ -16,6 +16,10 @@
 #![cfg_attr(not(test), deny(clippy::arithmetic_side_effects))]
 // Require every `unsafe fn` / `unsafe impl` to carry a `# Safety` doc section.
 #![deny(clippy::missing_safety_doc)]
+// Require types to implement Debug implementations.
+#![deny(missing_debug_implementations)]
+// Enable pedantic checking.
+#![warn(clippy::pedantic)]
 
 // Need extern stub for documentation.
 extern crate alloc as stock_alloc;

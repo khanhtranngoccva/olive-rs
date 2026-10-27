@@ -1,6 +1,7 @@
 //! The owned iterator produced by `VecDeque::into_iter`.
 use super::VecDeque;
 use crate::alloc::{Allocator, Global};
+use core::fmt;
 use core::iter::FusedIterator;
 use olive_core::alloc::{AllocatorTryClone, AllocatorTryDefault};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -88,6 +89,14 @@ impl<T, A: Allocator> ExactSizeIterator for IntoIter<T, A> {
 }
 
 impl<T, A: Allocator> FusedIterator for IntoIter<T, A> {}
+
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<T, A> {
+    /// Formats the elements not yet yielded as `IntoIter([...])`, in logical
+    /// front-to-back order.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("IntoIter").field(&self.deque).finish()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // IntoIterator

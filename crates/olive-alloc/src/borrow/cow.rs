@@ -244,7 +244,7 @@ where
 {
     #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        hash::Hash::hash(&**self, state)
+        hash::Hash::hash(&**self, state);
     }
 }
 

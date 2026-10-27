@@ -25,7 +25,7 @@ use olive_core::try_traits::try_default::{TryDefault, TryDefaultError};
 /// calls the exposed `alloc::alloc` free functions. Those dispatch through the
 /// installed `#[global_allocator]`, so a custom global allocator is honored
 /// transparently.
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Global;
 
 unsafe impl Allocator for Global {

@@ -4,6 +4,7 @@
 
 use super::Vec;
 use crate::alloc::Global;
+use core::fmt;
 use core::iter::FusedIterator;
 use core::marker::PhantomData;
 use core::mem::size_of;
@@ -69,6 +70,14 @@ pub struct Drain<'a, T, A: Allocator = Global> {
 // `Send`/`Sync`.
 unsafe impl<T: Send, A: Allocator + Send> Send for Drain<'_, T, A> {}
 unsafe impl<T: Sync, A: Allocator + Sync> Sync for Drain<'_, T, A> {}
+
+impl<T: fmt::Debug, A: Allocator> fmt::Debug for Drain<'_, T, A> {
+    /// Formats the elements not yet yielded as `Drain([...])`, in the order
+    /// `next` would yield them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Drain").field(&self.as_slice()).finish()
+    }
+}
 
 impl<T, A: Allocator> Drain<'_, T, A> {
     /// Constructs a drainer from the raw parts of a borrowed `Vec`.
@@ -651,16 +660,16 @@ mod tests {
 
     #[test]
     fn drain_fully_collected_compacts_and_drops_once() {
-        let counter = Arc::new(Counter::new());
-
         #[allow(dead_code)]
         struct Tracked(u32, Arc<Counter>);
+
         impl Drop for Tracked {
             fn drop(&mut self) {
                 self.1.record();
             }
         }
 
+        let counter = Arc::new(Counter::new());
         let mut v: Vec<Tracked> = Vec::new();
         for i in 0..5u32 {
             v.try_push(Tracked(i, counter.clone())).unwrap();
