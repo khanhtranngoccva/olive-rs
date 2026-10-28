@@ -386,7 +386,7 @@ impl<'a, T, A: Allocator> Cursor<'a, T, A> {
     pub fn move_prev(&mut self) {
         if let Some(current) = self.current {
             unsafe {
-                self.current = current.as_ref().prev;
+                self.current = (*current.as_ptr()).prev;
                 self.index = self.index.checked_sub(1).unwrap_or_else(|| self.list.len());
             }
         } else {
@@ -418,7 +418,7 @@ impl<'a, T, A: Allocator> Cursor<'a, T, A> {
         unsafe {
             let next = match self.current {
                 None => self.list.head,
-                Some(node) => node.as_ref().next,
+                Some(node) => (*node.as_ptr()).next,
             };
             next.map(|node| &(*node.as_ptr()).element)
         }
@@ -436,7 +436,7 @@ impl<'a, T, A: Allocator> Cursor<'a, T, A> {
         unsafe {
             let prev = match self.current {
                 None => self.list.tail,
-                Some(node) => node.as_ref().prev,
+                Some(node) => (*node.as_ptr()).prev,
             };
             prev.map(|node| &(*node.as_ptr()).element)
         }
@@ -501,7 +501,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
     /// element of the list then this moves it to the "ghost" non-element.
     pub fn move_next(&mut self) {
         if let Some(current) = self.current {
-            unsafe { self.current = current.as_ref().next };
+            unsafe { self.current = (*current.as_ptr()).next };
             #[allow(
                 clippy::arithmetic_side_effects,
                 reason = "the index is bounded by the list's length, so incrementing it \
@@ -524,7 +524,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
     pub fn move_prev(&mut self) {
         if let Some(current) = self.current {
             unsafe {
-                self.current = current.as_ref().prev;
+                self.current = (*current.as_ptr()).prev;
                 self.index = self.index.checked_sub(1).unwrap_or_else(|| self.list.len());
             }
         } else {
@@ -581,13 +581,13 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
     /// element of the `LinkedList` then this returns `None`.
     #[must_use]
     pub fn peek_next(&mut self) -> Option<&mut T> {
-        // SAFETY: `self.current` either points to a node thfat belongs to the
+        // SAFETY: `self.current` either points to a node that belongs to the
         // list, or is `None`. We have a `&mut self` so no other reference
         // into that node can exist at the same time.
         unsafe {
             let next = match self.current {
                 None => self.list.head,
-                Some(node) => node.as_ref().next,
+                Some(node) => (*node.as_ptr()).next,
             };
             next.map(|node| &mut (*node.as_ptr()).element)
         }
@@ -606,7 +606,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
         unsafe {
             let prev = match self.current {
                 None => self.list.tail,
-                Some(node) => node.as_ref().prev,
+                Some(node) => (*node.as_ptr()).prev,
             };
             prev.map(|node| &mut (*node.as_ptr()).element)
         }
@@ -677,7 +677,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
         unsafe {
             let node_next = match self.current {
                 None => self.list.head,
-                Some(node) => node.as_ref().next,
+                Some(node) => (*node.as_ptr()).next,
             };
             self.list
                 .splice_nodes(self.current, node_next, spliced_node, spliced_node, 1);
@@ -737,7 +737,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
         unsafe {
             let node_prev = match self.current {
                 None => self.list.tail,
-                Some(node) => node.as_ref().prev,
+                Some(node) => (*node.as_ptr()).prev,
             };
             self.list
                 .splice_nodes(node_prev, self.current, spliced_node, spliced_node, 1);
@@ -767,6 +767,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
         // SAFETY: `unlinked_node` points to a node that belongs to the list,
         // and the cursor is the only holder of a pointer into it.
         unsafe {
+            // We own this node that is about to be removed.
             self.current = unlinked_node.as_ref().next;
             self.list.unlink_node(unlinked_node);
             let unlinked_node = Box::from_raw_in(unlinked_node.as_ptr(), &self.list.alloc);
@@ -801,7 +802,7 @@ impl<T, A: Allocator> CursorMut<'_, T, A> {
         // SAFETY: `unlinked_node` points to a node that belongs to the list,
         // and the cursor is the only holder of a pointer into it.
         unsafe {
-            self.current = unlinked_node.as_ref().next;
+            self.current = (*unlinked_node.as_ptr()).next;
             self.list.unlink_node(unlinked_node);
 
             unlinked_node.as_mut().prev = None;
@@ -1091,7 +1092,7 @@ impl<T> CursorMut<'_, T> {
             };
             let node_next = match self.current {
                 None => self.list.head,
-                Some(node) => node.as_ref().next,
+                Some(node) => (*node.as_ptr()).next,
             };
             self.list.splice_nodes(
                 self.current,
@@ -1135,7 +1136,7 @@ impl<T> CursorMut<'_, T> {
             };
             let node_prev = match self.current {
                 None => self.list.tail,
-                Some(node) => node.as_ref().prev,
+                Some(node) => (*node.as_ptr()).prev,
             };
             self.list.splice_nodes(
                 node_prev,
@@ -1606,7 +1607,9 @@ mod tests {
 
         // Trying to remove while being unable to clone the allocator results in an error.
         let mut c = l.cursor_back_mut();
-        let _err = c.try_remove_current_as_list().expect_err("should return TryCloneError");
+        let _err = c
+            .try_remove_current_as_list()
+            .expect_err("should return TryCloneError");
 
         // At the "ghost" non-element there is nothing to remove, so cloning is not needed.
         let mut c = l.cursor_back_mut();
