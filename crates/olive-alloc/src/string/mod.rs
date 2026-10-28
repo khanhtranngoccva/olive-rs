@@ -43,6 +43,7 @@ mod construction;
 mod convert;
 mod encode;
 mod into_chars;
+mod macros;
 mod mutation;
 mod query;
 mod reconstitution;

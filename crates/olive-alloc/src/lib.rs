@@ -6,7 +6,7 @@
 //! Module organization mirrors the original `alloc` crate:
 //! - [`borrow`] — [`TryToOwned`], the fallible analogue of [`ToOwned`](stock_alloc::borrow::ToOwned).
 //! - [`boxed`] — fallible `Box`.
-//! - [`vec`] — fallible `Vec`.
+//! - [`vec`] — fallible `Vec`, plus `try_vec!`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
 //! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap` and `VecDeque`.
 //! - [`rc`] / [`sync::Arc`] — reference-counted pointers with fallible construction.

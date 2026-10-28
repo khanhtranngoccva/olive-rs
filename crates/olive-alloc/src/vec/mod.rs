@@ -22,6 +22,7 @@ mod construction;
 mod convert;
 mod drain;
 mod iter;
+mod macros;
 mod mutation;
 mod query;
 mod reconstitution;
