@@ -275,7 +275,9 @@ impl<A: Allocator> String<A> {
         }
         if let (true, ([], v, [])) = (cfg!(target_endian = "little"), unsafe {
             input.align_to::<u16>()
-        }) { Self::try_from_utf16_in(v, alloc) } else {
+        }) {
+            Self::try_from_utf16_in(v, alloc)
+        } else {
             let (iter, count) =
                 convert_slice_to_u16_le_iter(input).map_err(|e| TryFromUtf16Error {
                     kind: TryFromUtf16ErrorKind::Reserve(e),
@@ -302,7 +304,9 @@ impl<A: Allocator> String<A> {
         }
         if let (true, ([], v, [])) = (cfg!(target_endian = "big"), unsafe {
             input.align_to::<u16>()
-        }) { Self::try_from_utf16_in(v, alloc) } else {
+        }) {
+            Self::try_from_utf16_in(v, alloc)
+        } else {
             let (iter, count) =
                 convert_slice_to_u16_be_iter(input).map_err(|e| TryFromUtf16Error {
                     kind: TryFromUtf16ErrorKind::Reserve(e),

@@ -101,8 +101,7 @@ impl<A: AllocatorTryClone> TryClone for String<A> {
     fn try_clone(&self) -> Result<Self, TryCloneError> {
         let alloc = self.buf.allocator().try_clone()?;
         let mut out = Self::try_with_capacity_in(self.len(), alloc)?;
-        out.try_push_str(self)
-            .map_err(TryCloneError::Reserve)?;
+        out.try_push_str(self).map_err(TryCloneError::Reserve)?;
         Ok(out)
     }
 }

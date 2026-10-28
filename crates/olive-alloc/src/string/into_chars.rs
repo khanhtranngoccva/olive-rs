@@ -184,7 +184,6 @@ impl<A: Allocator> String<A> {
 #[cfg(test)]
 mod tests {
     extern crate std;
-    
 
     use super::*;
     use olive_core::try_traits::try_default::TryDefault;

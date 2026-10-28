@@ -226,7 +226,9 @@ mod tests {
         // A capacity whose byte size overflows must be reported as a capacity
         // overflow, not an allocation error. (`VecDeque` is not `Debug` yet, so we
         // match rather than use `expect_err`.)
-        let Err(err) = VecDeque::<u8>::try_with_capacity(usize::MAX) else { panic!("expected capacity overflow") };
+        let Err(err) = VecDeque::<u8>::try_with_capacity(usize::MAX) else {
+            panic!("expected capacity overflow")
+        };
         assert!(err.is_capacity_overflow());
     }
 
@@ -234,7 +236,9 @@ mod tests {
     fn try_with_capacity_oom_returns_alloc_error_kind() {
         // Prove an allocation failure surfaces as an AllocError-kind
         // `TryReserveError` (distinct from CapacityOverflow).
-        let Err(err) = VecDeque::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) else { panic!("expected allocation failure") };
+        let Err(err) = VecDeque::<i32, FailAlloc>::try_with_capacity_in(8, FailAlloc) else {
+            panic!("expected allocation failure")
+        };
         assert!(err.is_alloc());
         assert!(!err.is_capacity_overflow());
     }

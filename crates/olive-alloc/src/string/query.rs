@@ -78,7 +78,6 @@ impl<A: Allocator> String<A> {
 
 #[cfg(test)]
 mod tests {
-    
 
     use super::*;
     use crate::alloc::CountingAllocator;

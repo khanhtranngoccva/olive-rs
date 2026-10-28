@@ -2,6 +2,7 @@
 
 mod allocation;
 mod construction;
+mod cursor;
 mod drop;
 mod iter;
 mod mutation;
@@ -9,6 +10,7 @@ mod node;
 mod query;
 mod traits;
 
+pub use cursor::{Cursor, CursorMut};
 pub use iter::{IntoIter, Iter, IterMut};
 
 use self::node::Node;

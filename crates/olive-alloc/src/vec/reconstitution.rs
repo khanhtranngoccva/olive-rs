@@ -46,7 +46,8 @@ impl<T> Vec<T, Global> {
     /// Same requirements as [`Self::from_raw_parts`], except `ptr` is already
     /// known to be non-null.
     #[inline]
-    #[must_use] pub unsafe fn from_parts(ptr: NonNull<T>, length: usize, capacity: usize) -> Self {
+    #[must_use]
+    pub unsafe fn from_parts(ptr: NonNull<T>, length: usize, capacity: usize) -> Self {
         unsafe { Self::from_parts_in(ptr, length, capacity, Global) }
     }
 

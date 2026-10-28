@@ -158,10 +158,11 @@ impl<T, A: Allocator> Index<usize> for VecDeque<T, A> {
     /// and the deque's actual length so the mismatch is visible at a glance.
     #[inline]
     fn index(&self, index: usize) -> &T {
-        assert!((index < self.len), 
-                "VecDeque::index: index {index} out of bounds (len = {})",
-                self.len
-            );
+        assert!(
+            (index < self.len),
+            "VecDeque::index: index {index} out of bounds (len = {})",
+            self.len
+        );
         self.get(index)
             .expect("unreachable: bounds already checked")
     }
@@ -186,10 +187,11 @@ impl<T, A: Allocator> IndexMut<usize> for VecDeque<T, A> {
     /// and the deque's actual length so the mismatch is visible at a glance.
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut T {
-        assert!((index < self.len), 
-                "VecDeque::index_mut: index {index} out of bounds (len = {})",
-                self.len
-            );
+        assert!(
+            (index < self.len),
+            "VecDeque::index_mut: index {index} out of bounds (len = {})",
+            self.len
+        );
         self.get_mut(index)
             .expect("unreachable: bounds already checked")
     }

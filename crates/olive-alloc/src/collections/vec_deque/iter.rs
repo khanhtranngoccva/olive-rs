@@ -74,7 +74,9 @@ impl<'a, T> Iterator for Iter<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<&'a T> {
-        if let Some(val) = self.i1.next() { Some(val) } else {
+        if let Some(val) = self.i1.next() {
+            Some(val)
+        } else {
             // Most of the time the iterator will either always call
             // `next()` or always call `next_back()`. By swapping the
             // iterators once the first one is empty, we ensure that the
@@ -108,7 +110,9 @@ impl<'a, T> Iterator for Iter<'a, T> {
 impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a T> {
-        if let Some(val) = self.i2.next_back() { Some(val) } else {
+        if let Some(val) = self.i2.next_back() {
+            Some(val)
+        } else {
             // Same swap rationale as in `next()`, applied to the back.
             mem::swap(&mut self.i1, &mut self.i2);
             self.i2.next_back()
@@ -197,7 +201,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 
     #[inline]
     fn next(&mut self) -> Option<&'a mut T> {
-        if let Some(val) = self.i1.next() { Some(val) } else {
+        if let Some(val) = self.i1.next() {
+            Some(val)
+        } else {
             // Swap once the front slice is exhausted so subsequent
             // `next()` calls hit the populated half directly.
             mem::swap(&mut self.i1, &mut self.i2);
@@ -228,7 +234,9 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut T> {
-        if let Some(val) = self.i2.next_back() { Some(val) } else {
+        if let Some(val) = self.i2.next_back() {
+            Some(val)
+        } else {
             mem::swap(&mut self.i1, &mut self.i2);
             self.i2.next_back()
         }
@@ -441,7 +449,9 @@ mod tests {
     fn try_range_out_of_bounds_rejects() {
         let dq = wrapped_deque();
         // len == 5, so ending at index 7 exceeds the bound.
-        let Err(err) = dq.try_range(0..7) else { panic!("expected out-of-bounds error") };
+        let Err(err) = dq.try_range(0..7) else {
+            panic!("expected out-of-bounds error")
+        };
         assert!(matches!(err, TrySliceRangeError::EndExceedsBound { .. }));
     }
 
@@ -452,7 +462,9 @@ mod tests {
             clippy::reversed_empty_ranges,
             reason = "we are deliberately testing error scenario"
         )]
-        let Err(err) = dq.try_range(3..1) else { panic!("expected reversed-range error") };
+        let Err(err) = dq.try_range(3..1) else {
+            panic!("expected reversed-range error")
+        };
         assert!(matches!(err, TrySliceRangeError::StartExceedsEnd { .. }));
     }
 

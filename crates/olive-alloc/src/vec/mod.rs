@@ -219,9 +219,9 @@ mod tests {
             TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_capacity_overflow());
         assert!(format!("{cap_overflow}").contains("capacity overflow"));
 
-        let alloc_error = TryVecWithClosureError::<Infallible>::Reserve(TryReserveError::new_alloc(
-            Layout::new::<i32>(),
-        ));
+        let alloc_error = TryVecWithClosureError::<Infallible>::Reserve(
+            TryReserveError::new_alloc(Layout::new::<i32>()),
+        );
         assert!(
             format!("{alloc_error}").contains('4'),
             "should include layout size in an alloc error"

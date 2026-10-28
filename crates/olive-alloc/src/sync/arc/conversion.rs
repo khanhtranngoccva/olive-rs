@@ -153,7 +153,9 @@ impl<T: ?Sized, A: AllocatorTryClone> Weak<T, A> {
         // A dangling weak (from `Weak::new`) never referred to an allocation,
         // so it can never be upgraded. Checking this first also avoids ever
         // dereferencing the sentinel address below.
-        let Some(inner) = self.inner() else { return Ok(None) };
+        let Some(inner) = self.inner() else {
+            return Ok(None);
+        };
 
         // Clone the allocator handle before touching any counter.
         let alloc = A::try_clone(&self.alloc)?;

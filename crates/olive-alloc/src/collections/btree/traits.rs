@@ -573,7 +573,7 @@ mod tests {
             a.try_insert(i, i * 10).unwrap();
             b.try_insert(i, i * 10).unwrap();
         }
-        
+
         let mut ha = std::collections::hash_map::DefaultHasher::default();
         let mut hb = std::collections::hash_map::DefaultHasher::default();
         a.hash(&mut ha);

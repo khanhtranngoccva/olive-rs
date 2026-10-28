@@ -74,9 +74,9 @@ impl<A: Allocator> String<A> {
     /// The underlying bytes remain valid UTF-8.
     ///
     /// This method does not try to shrink the underlying allocation.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// This method should not panic for any valid strings.
     pub fn leak<'a>(self) -> &'a mut str
     where

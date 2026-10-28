@@ -271,7 +271,7 @@ mod tests {
         // Tear down the shared block exactly once through one handle: read the
         // Arc out of its `ManuallyDrop` slot (bitwise copy; no refcount effect)
         // and drop that owned value.
-        
+
         unsafe { drop(ptr::read(&*a)) };
     }
 

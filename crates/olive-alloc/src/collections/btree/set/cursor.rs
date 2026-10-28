@@ -129,13 +129,15 @@ impl<'a, T: 'a> Cursor<'a, T> {
 
     /// Returns the value that [`Cursor::next`] would move over, without
     /// moving the cursor.
-    #[must_use] pub fn peek_next(&self) -> Option<&'a T> {
+    #[must_use]
+    pub fn peek_next(&self) -> Option<&'a T> {
         self.cursor.peek_next().map(|(k, _)| k)
     }
 
     /// Returns the value that [`Cursor::prev`] would move over, without
     /// moving the cursor.
-    #[must_use] pub fn peek_prev(&self) -> Option<&'a T> {
+    #[must_use]
+    pub fn peek_prev(&self) -> Option<&'a T> {
         self.cursor.peek_prev().map(|(k, _)| k)
     }
 }
@@ -220,7 +222,8 @@ impl<'a, T: 'a, A: Allocator> CursorMut<'a, T, A> {
     /// The lifetime of the returned `Cursor` is bound to that of the
     /// `CursorMut`, which means it cannot outlive the `CursorMut` and that
     /// the `CursorMut` is frozen for the lifetime of the `Cursor`.
-    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, T> {
+    #[must_use]
+    pub fn as_cursor(&self) -> Cursor<'_, T> {
         Cursor {
             cursor: self.cursor.as_cursor(),
         }
@@ -234,7 +237,8 @@ impl<'a, T: 'a, A: Allocator> CursorMut<'a, T, A> {
     /// The caller must ensure that the set stays in a sorted state after
     /// having modified a value through the returned cursor, and the new
     /// value(s) replaced by the cursor must be unique.
-    #[must_use] pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, T, A> {
+    #[must_use]
+    pub unsafe fn with_mutable_key(self) -> CursorMutKey<'a, T, A> {
         // SAFETY: precondition from the caller.
         CursorMutKey {
             cursor: unsafe { self.cursor.with_mutable_key() },
@@ -519,7 +523,8 @@ impl<'a, T: 'a, A: Allocator> CursorMutKey<'a, T, A> {
     /// Converts the mutable cursor into an immutable cursor.
     ///
     /// This is useful for looking ahead without modifying the cursor itself.
-    #[must_use] pub fn as_cursor(&self) -> Cursor<'_, T> {
+    #[must_use]
+    pub fn as_cursor(&self) -> Cursor<'_, T> {
         Cursor {
             cursor: self.cursor.as_cursor(),
         }

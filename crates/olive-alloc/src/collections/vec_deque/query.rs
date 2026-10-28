@@ -294,9 +294,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// If the elements do not wrap around the buffer, all of them will be in
     /// the first slice and the second slice will be empty.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// This method should not panic on any valid [`VecDeque`] instances.
     #[inline]
     pub fn as_slices(&self) -> (&[T], &[T]) {
@@ -314,9 +314,9 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// If the elements do not wrap around the buffer, all of them will be in
     /// the first slice and the second slice will be empty.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// This method should not panic on any valid [`VecDeque`] instances.
     #[inline]
     pub fn as_mut_slices(&mut self) -> (&mut [T], &mut [T]) {

@@ -26,7 +26,8 @@ impl<K: Ord, V> BTreeMap<K, V, Global> {
     /// This is a convenience wrapper around [`Self::new_in`] that uses
     /// [`Global`], mirroring std's `BTreeMap::new()`.
     #[inline]
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self::new_in(Global)
     }
 }

@@ -747,7 +747,10 @@ mod tests {
             // closure so it can be re-checked after extraction.
             let threshold = (rng.next_u64() % 97) as u32;
             let seed = rng.next_u64();
-            #[allow(clippy::cast_possible_truncation, reason = "deliberate: 32-bit fold of the 64-bit RNG word into the hash seed")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "deliberate: 32-bit fold of the 64-bit RNG word into the hash seed"
+            )]
             let seed32 = seed as u32;
             let pred = |k: u32| -> bool {
                 let h = k

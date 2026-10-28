@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn retain_scrambled_schedule_preserves_invariant() {
         const N: u32 = 120;
-        
+
         let mut set = BTreeSet::new();
         for i in 0..N {
             set.try_insert(i).unwrap();
