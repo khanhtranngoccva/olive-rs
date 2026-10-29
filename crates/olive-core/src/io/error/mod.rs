@@ -49,6 +49,7 @@ use self::custom::Custom;
 use self::os_functions::{decode_error_kind, format_os_error, is_interrupted, set_functions};
 use self::representation::Repr;
 use crate::alloc_errors::TryReserveError;
+use crate::try_traits::{TryCloneError, TryDefaultError};
 use core::fmt;
 use core::result;
 
@@ -744,6 +745,44 @@ impl From<TryReserveError> for Error {
     }
 }
 
+impl From<TryCloneError> for Error {
+    /// Converts a [`TryCloneError`] into an [`Error`].
+    ///
+    /// Allocation failures ([`TryCloneError::Reserve`] and
+    /// [`TryCloneError::Alloc`]) map to [`ErrorKind::OutOfMemory`], and
+    /// logic failures ([`TryCloneError::Other`]) map to
+    /// [`ErrorKind::Uncategorized`].
+    ///
+    /// The [`TryCloneError`] is not kept as the error's `source()`, since
+    /// that would require an allocation, which this core cannot perform.
+    fn from(err: TryCloneError) -> Error {
+        let kind = match err {
+            TryCloneError::Reserve(_) | TryCloneError::Alloc(_) => ErrorKind::OutOfMemory,
+            TryCloneError::Other(_) => ErrorKind::Uncategorized,
+        };
+        kind.into()
+    }
+}
+
+impl From<TryDefaultError> for Error {
+    /// Converts a [`TryDefaultError`] into an [`Error`].
+    ///
+    /// Allocation failures ([`TryDefaultError::Reserve`] and
+    /// [`TryDefaultError::Alloc`]) map to [`ErrorKind::OutOfMemory`], and
+    /// logic failures ([`TryDefaultError::Other`]) map to
+    /// [`ErrorKind::Uncategorized`].
+    ///
+    /// The [`TryCloneError`] is not kept as the error's `source()`, since
+    /// that would require an allocation, which this core cannot perform.
+    fn from(err: TryDefaultError) -> Error {
+        let kind = match err {
+            TryDefaultError::Reserve(_) | TryDefaultError::Alloc(_) => ErrorKind::OutOfMemory,
+            TryDefaultError::Other(_) => ErrorKind::Uncategorized,
+        };
+        kind.into()
+    }
+}
+
 /// Static I/O function vtable for testing.
 /// To avoid incorrect behavior while testing the core library,
 /// do not set the I/O function to anything other than this table.
@@ -766,7 +805,10 @@ pub(crate) static TEST_FUNCTIONS: OsFunctions = OsFunctions {
 mod tests {
     extern crate std;
 
+    use core::alloc::Layout;
+
     use super::*;
+    use crate::alloc::AllocError;
 
     #[test]
     fn kind_roundtrip_and_display() {
@@ -810,5 +852,43 @@ mod tests {
     fn try_reserve_error_maps_to_oom() {
         let error = Error::from(TryReserveError::new_capacity_overflow());
         assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+    }
+
+    #[test]
+    fn try_clone_error_maps_to_kinds() {
+        let error = Error::from(TryCloneError::Alloc(AllocError));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryCloneError::Reserve(
+            TryReserveError::new_capacity_overflow(),
+        ));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryCloneError::Reserve(TryReserveError::new_alloc(
+            Layout::new::<u64>(),
+        )));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryCloneError::Other("cannot clone an open file"));
+        assert_eq!(error.kind(), ErrorKind::Uncategorized);
+    }
+
+    #[test]
+    fn try_default_error_maps_to_kinds() {
+        let error = Error::from(TryDefaultError::Alloc(AllocError));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryDefaultError::Reserve(
+            TryReserveError::new_capacity_overflow(),
+        ));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryDefaultError::Reserve(TryReserveError::new_alloc(
+            Layout::new::<u64>(),
+        )));
+        assert_eq!(error.kind(), ErrorKind::OutOfMemory);
+
+        let error = Error::from(TryDefaultError::Other("cannot default a raw fd"));
+        assert_eq!(error.kind(), ErrorKind::Uncategorized);
     }
 }
