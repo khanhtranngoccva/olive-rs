@@ -23,6 +23,26 @@
 //! combined result maps to `cfg(unstable_features)`, emitted by the
 //! consuming build script.
 //!
+//! ## Atomic load/store probing
+//!
+//! The probe asks the compiler for the precise (unstable)
+//! `target_has_atomic_load_store` cfg family on the target, and
+//! the module's emit helpers forward the confirmed widths as cfg flags using an
+//! altered name (to avoid conflict) and register them with `cargo:rustc-check-cfg`.
+//!
+//! # Cargo build-script directives
+//!
+//! Directives (cfg emission, check-cfg registration, rerun triggers) are
+//! emitted with the `cargo_build` crate.
+//!
+//! # Re-run triggers
+//!
+//! Every check emits its own `cargo:rerun-if-env-changed` directives for
+//! the environment variables it reads. Build scripts therefore never need
+//! to emit rerun triggers by hand, and cached results cannot go stale when
+//! a variable changes. cargo treats repeated identical directives as a single
+//! trigger.
+//!
 //! # Rationales
 //!
 //! ## Running Miri with full provenance
@@ -33,97 +53,14 @@
 //!   (although it is sound otherwise).
 //!
 //! Consuming crates therefore refuse to build under a *genuine* Miri invocation
-//! unless `unstable_features` is active. This check lives in each crate's
-//! build script (using [`is_miri`] + [`can_use_unstable_features`]) rather than
-//! as a `compile_error!` in source, because rust-analyzer enables `cfg(miri)`
-//! by default during analysis while leaving `unstable_features` unset — a
-//! source-level guard would fire spuriously inside the IDE.
-
-/// Returns `true` if the current compiler is a nightly build.
-///
-/// Detection method: runs `rustc --version` and checks whether the output
-/// contains the substring `"nightly"` or `"-dev"`. This is the same heuristic
-/// used by most build scripts in the ecosystem.
-pub fn is_nightly() -> bool {
-    let Ok(output) = std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let version = String::from_utf8_lossy(&output.stdout);
-    version.contains("nightly") || version.contains("-dev")
-}
-
-/// Returns `true` if the `RUSTC_BOOTSTRAP` environment variable permits
-/// unstable features for the current crate.
-///
-/// `RUSTC_BOOTSTRAP` can take four forms:
-/// - `1`: applies to all crates.
-/// - A comma-separated list of crate names: applies only to the crates named
-///   in the list.
-/// - `-1`: explicitly disables bootstrap (acts as stable even on nightly).
-///
-/// The `crate_name` parameter should be the name of the crate whose build
-/// script is calling this function (available via `CARGO_PKG_NAME`).
-pub fn is_bootstrap(crate_name: &str) -> bool {
-    match std::env::var("RUSTC_BOOTSTRAP") {
-        Err(_) => false,
-        Ok(val) => match val.as_str() {
-            "" | "-1" => false,
-            "1" => true,
-            // rustc accepts either a single crate name or a comma-separated
-            // list of crate names; the current crate must be named among them.
-            names => names.split(',').any(|name| name == crate_name),
-        },
-    }
-}
-
-/// Returns `true` if unstable features (`#![feature(...)]`) are permitted
-/// under the current build configuration.
-///
-/// Normally this is `true` when either [`is_nightly`] or [`is_bootstrap`]
-/// holds. However, `RUSTC_BOOTSTRAP=-1` is a hard override: it tells rustc to
-/// reject `#![feature]` *even on nightly* (producing E0554), so it must
-/// disable unstable features regardless of channel. That check takes priority
-/// over both signals.
-pub fn can_use_unstable_features(crate_name: &str) -> bool {
-    // A `-1` bootstrap value forces stable semantics, overriding nightly.
-    if std::env::var("RUSTC_BOOTSTRAP").as_deref() == Ok("-1") {
-        return false;
-    }
-    is_nightly() || is_bootstrap(crate_name)
-}
-
-/// Returns `true` if this build script is running under a genuine
-/// `cargo miri` invocation (as opposed to rust-analyzer's analysis, which
-/// fakes `cfg(miri)` but never invokes the Miri driver).
-///
-/// Detection method: a real `cargo miri` run sets the `MIRI_SYSROOT`
-/// environment variable in the build-script environment (pointing at the
-/// Miri-built sysroot). rust-analyzer does not set this, so its presence is a
-/// reliable discriminator. As a secondary signal we also check whether the
-/// `RUSTC` binary path ends in `/miri`, which is the case when cargo-miri
-/// swaps the compiler driver.
-///
-/// # Rationale
-///
-/// Some code paths are provenance-unsound under Miri's strict model unless compiled with
-/// `unstable_features`. A `compile_error!` placed in crate source would fire
-/// spuriously inside rust-analyzer (which enables `cfg(miri)` by default while
-/// leaving `unstable_features` unset). By performing the check here — where we
-/// can tell a real Miri build from IDE analysis — we fail only when it truly
-/// matters.
-pub fn is_miri() -> bool {
-    std::env::var_os("MIRI_SYSROOT").is_some()
-        || std::env::var("RUSTC")
-            .map(|rustc| {
-                rustc.ends_with("/miri")
-                    || rustc.ends_with("\\miri.exe")
-                    || rustc.ends_with("miri.exe")
-            })
-            .unwrap_or(false)
-}
+//! unless `unstable_features` is active. The guard is
+//! [`miri::ensure_miri_on_unstable`], which returns an error for the build
+//! script to surface rather than exiting or panicking.
+//!
+//! ## Atomic pointer gating
+//!
+//! - Some targets do not fully support all atomic operations, but they support
+//!   some of them. This is necessary for gating items that require atomic pointers.
+pub mod miri;
+pub mod target_has_atomic_load_store;
+pub mod unstable_features;

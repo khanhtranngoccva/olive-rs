@@ -8,9 +8,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# This crate is consumed exclusively as a build-dependency. It must be
-# dependency-free so it compiles instantly under any toolchain.
+# This crate is consumed exclusively as a build-dependency. Its only
+# dependency is the tiny `cargo-build` directive-emitting library, so the
+# crate still compiles quickly under any toolchain.
 [dependencies]
+cargo-build = { workspace = true }
 
 [lints]
 workspace = true

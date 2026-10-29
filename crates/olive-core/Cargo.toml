@@ -1,6 +1,6 @@
 [package]
 name = "olive-core"
-description = "Fallible re-port of Rust's `core`: foundational traits, allocation errors, and panic machinery."
+description = "Fallible re-port of Rust's `core`: foundational traits and allocation errors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,11 @@ repository.workspace = true
 [dependencies]
 olive-macros = { workspace = true }
 allocator-api2 = { workspace = true }
+cfg-if = { workspace = true }
 
 [build-dependencies]
 olive-build = { workspace = true }
+cargo-build = { workspace = true }
 
 [features]
 # Exposes the test helper API for use in various tests.

@@ -1,33 +1,28 @@
 #![allow(missing_docs)]
 
-fn main() {
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
     let crate_name = env!("CARGO_PKG_NAME");
 
-    // Re-run if the bootstrap env var or Miri environment changes.
-    println!("cargo:rerun-if-env-changed=RUSTC_BOOTSTRAP");
-    println!("cargo:rerun-if-env-changed=MIRI_SYSROOT");
+    // The checks below each emit their own `cargo:rerun-if-env-changed`
+    // triggers for the environment variables they read.
 
-    let unstable = olive_build::can_use_unstable_features(crate_name);
+    let unstable = olive_build::unstable_features::can_use(crate_name);
+    olive_build::unstable_features::emit(unstable);
 
-    // Emit cfg(unstable_features) when nightly or bootstrap is active.
-    if unstable {
-        println!("cargo:rustc-cfg=unstable_features");
-    }
+    // Registered for `core::io::error::os_functions`: builds that pass
+    // `--cfg no_io_statics` select the fallback (non-atomic) vtable plumbing.
+    cargo_build::rustc_check_cfgs("no_io_statics");
 
-    // Declare our custom cfg so the compiler doesn't warn about it.
-    println!("cargo:rustc-check-cfg=cfg(unstable_features)");
+    // Registered unstable_target_has_atomic_load_store for io error vtable.
+    let widths = olive_build::target_has_atomic_load_store::probe();
+    olive_build::target_has_atomic_load_store::emit(&widths);
+    olive_build::target_has_atomic_load_store::emit_check_cfg();
 
     // Miri guard: Running this crate under a *genuine* Miri invocation requires
     // `unstable_features` to enable use of strict Miri implementations.
-    // We detect a real Miri run here (via MIRI_SYSROOT / the miri driver) rather
-    // than relying on cfg(miri), because rust-analyzer sets cfg(miri) by default
-    // during analysis while leaving unstable_features unset — a source-level
-    // compile_error! would therefore fire spuriously inside the IDE.
-    if olive_build::is_miri() && !unstable {
-        eprintln!(
-            "error: {crate_name} cannot be compiled under Miri without unstable features enabled. \
-             Re-run with nightly, or set RUSTC_BOOTSTRAP={crate_name}."
-        );
-        std::process::exit(1);
-    }
+    olive_build::miri::ensure_miri_on_unstable(crate_name, unstable)?;
+
+    Ok(())
 }

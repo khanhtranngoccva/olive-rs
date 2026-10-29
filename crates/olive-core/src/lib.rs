@@ -88,6 +88,8 @@ pub mod alloc;
 pub mod alloc_errors;
 /// Foundational-trait impls for [`core::cell::Cell`] and [`core::cell::RefCell`].
 pub mod cell;
+/// Fallible I/O foundational functions and types.
+pub mod io;
 /// Iterator adaptors layered on top of [`core::iter`], including
 /// [`DoubleEndedPeekable`](iter::DoubleEndedPeekable).
 pub mod iter;

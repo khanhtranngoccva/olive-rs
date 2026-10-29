@@ -59,6 +59,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-build"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc8383d61f13f3ba14c574132b1b7b0456ebab3d15a6895df5b0b8b787f2105c"
+
+[[package]]
+name = "cfg-if"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+
+[[package]]
 name = "clap"
 version = "4.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -140,12 +152,17 @@ dependencies = [
 [[package]]
 name = "olive-build"
 version = "0.1.0"
+dependencies = [
+ "cargo-build",
+]
 
 [[package]]
 name = "olive-core"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "cargo-build",
+ "cfg-if",
  "olive-build",
  "olive-macros",
 ]

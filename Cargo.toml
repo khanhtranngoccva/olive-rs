@@ -46,6 +46,10 @@ olive-test-helpers = { path = "crates/olive-test-helpers" }
 cfg-if = "1.0.4"
 allocator-api2 = { version = "0.4", default-features = false, features = ["fresh-rust", "alloc"] }
 
+# Build-script directive emission, shared so olive-build and any crate whose
+# build script emits directives directly use the same version.
+cargo-build = "0.1.0"
+
 # Procedural-macro toolchain. Pinned once so olive-macros (and any future macro
 # crate) share identical versions; these are host-side only and never linked
 # into no_std downstream targets.
