@@ -9,6 +9,7 @@
 //! - [`vec`] — fallible `Vec`, plus `try_vec!`.
 //! - [`string`] — fallible `String` / `str` extensions, plus `try_format!`.
 //! - [`collections`] — `BTreeMap`, `BTreeSet`, `LinkedList`, `BinaryHeap` and `VecDeque`.
+//! - [`io`] — the allocation-backed constructors of the I/O error type.
 //! - [`rc`] / [`sync::Arc`] — reference-counted pointers with fallible construction.
 //!
 //! TBA: these items are still being landed.
@@ -32,6 +33,7 @@ pub mod alloc;
 pub mod borrow;
 pub mod boxed;
 pub mod collections;
+pub mod io;
 mod raw_vec;
 pub mod rc;
 pub mod string;
