@@ -167,6 +167,47 @@ impl<'a> TryFrom<Cow<'a, CStr>> for CString {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion from borrowed references
+// ---------------------------------------------------------------------------
+
+impl<'a> TryFrom<&'a CStr> for CString {
+    type Error = TryReserveError;
+
+    /// Copies a borrowed [`CStr`] into an owned [`CString`] on the global
+    /// allocator.
+    ///
+    /// See [`CString::try_from_c_str_in`] for the allocator-generic variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if copying the bytes fails.
+    #[inline]
+    fn try_from(value: &'a CStr) -> Result<Self, Self::Error> {
+        Self::try_from_c_str(value)
+    }
+}
+
+impl<A: Allocator> TryFrom<&CString<A>> for CString {
+    type Error = TryReserveError;
+
+    /// Copies a reference to a [`CString`] into a new [`CString`] on the
+    /// global allocator, regardless of the source's allocator.
+    ///
+    /// To clone onto the source's own allocator instead, use
+    /// [`TryClone`](olive_core::try_traits::try_clone::TryClone), which keeps
+    /// the allocator handle, or [`CString::try_from_c_str_in`] with the
+    /// source's allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if copying the bytes fails.
+    #[inline]
+    fn try_from(value: &CString<A>) -> Result<Self, Self::Error> {
+        Self::try_from_c_str(value.as_c_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IntoStringError
 // ---------------------------------------------------------------------------
 
@@ -364,5 +405,29 @@ mod tests {
         let c_string: CString = CString::try_from(cow).expect("allocation cannot fail");
         assert_eq!(c_string.as_bytes_with_nul(), b"foo\0");
         assert_eq!(c_string.as_bytes(), b"foo");
+    }
+
+    #[test]
+    fn c_str_try_from_copies_the_bytes() {
+        let string = CString::try_from(c"foo").expect("allocation cannot fail");
+        assert_eq!(string.as_bytes_with_nul(), b"foo\0");
+
+        let empty = CString::try_from(c"").expect("allocation cannot fail");
+        assert_eq!(empty.as_bytes_with_nul(), b"\0");
+    }
+
+    #[test]
+    fn c_string_reference_try_from_copies_across_allocators() {
+        let alloc = CountingAllocator::new();
+        let source = CString::try_from_c_str_in(c"foo", &alloc)
+            .expect("allocation cannot fail for the counting allocator under test input");
+        let baseline = alloc.allocations();
+
+        let copy: CString = CString::try_from(&source).expect("allocation cannot fail");
+        assert_eq!(copy.as_bytes_with_nul(), b"foo\0");
+        // The copy never touched the source's allocator.
+        assert_eq!(alloc.allocations(), baseline);
+        // The source is untouched by the conversion.
+        assert_eq!(source.as_bytes_with_nul(), b"foo\0");
     }
 }
