@@ -173,6 +173,7 @@ mod tests {
     };
 
     #[test]
+    #[cfg_attr(miri, ignore = "cannot trigger a too-large-allocation failure on Miri without crashing")]
     fn budget_is_consumed_by_successful_allocations_only() {
         let alloc = BudgetedAlloc::new(1);
 
