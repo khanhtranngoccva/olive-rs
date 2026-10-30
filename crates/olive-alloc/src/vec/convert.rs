@@ -177,6 +177,7 @@ impl<T, A: Allocator> Vec<T, A> {
     where
         T: TryClone,
     {
+        // FIXME: specialize with buffer copying when possible
         let mut vec = Self::try_with_capacity_in(slice.len(), alloc)
             .map_err(TryVecWithCloneError::Reserve)?;
         for item in slice {

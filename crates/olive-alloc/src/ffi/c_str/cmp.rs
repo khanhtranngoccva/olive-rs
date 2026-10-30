@@ -67,6 +67,14 @@ impl_cmp!(('a), Cow<'a, CStr>, CStr, CStr);
 // Cow<CStr> <-> &CStr
 impl_cmp!(('a, 'ref_b), Cow<'a, CStr>, &'ref_b CStr, CStr);
 
+// CString<A> vs borrowed CStr targets.
+// CString<A> <-> CStr
+impl_cmp!((A: Allocator), CString<A>, CStr, CStr);
+// CString<A> <-> &CStr
+impl_cmp!(('ref_b, A: Allocator), CString<A>, &'ref_b CStr, CStr);
+// CString<A> <-> Cow<'a, CStr>
+impl_cmp!(('a, A: Allocator), CString<A>, Cow<'a, CStr>, CStr);
+
 // ---------------------------------------------------------------------------
 // Same-type comparisons
 // ---------------------------------------------------------------------------
@@ -199,13 +207,98 @@ mod tests {
 
     #[test]
     fn cow_owned_orders_against_the_c_str() {
-        let cow = cow_owned(b"foo\0");
+        let cow = cow_owned(b"bar\0");
         let first = c_str(b"bar\0");
-        let second = c_str(b"bar\0");
+        let second = c_str(b"foo\0");
         assert_eq!(cow.partial_cmp(first), Some(Ordering::Equal));
         assert_eq!(first.partial_cmp(&cow), Some(Ordering::Equal));
         assert_eq!(cow.partial_cmp(second), Some(Ordering::Less));
         assert_eq!(second.partial_cmp(&cow), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn cstring_equals_the_c_str() {
+        let source = c_str(b"foo\0");
+        let c_string = cstring(b"foo");
+        // Both directions.
+        assert!(c_string == *source);
+        assert!(*source == c_string);
+        // Unequal, both directions.
+        let other = c_str(b"bar\0");
+        assert!(c_string != *other);
+        assert!(*other != c_string);
+    }
+
+    #[test]
+    fn cstring_equals_the_c_str_reference() {
+        let source = c_str(b"foo\0");
+        let c_string = cstring(b"foo");
+        // Both directions.
+        assert!(c_string == source);
+        assert!(source == c_string);
+        // Unequal, both directions.
+        let other = c_str(b"bar\0");
+        assert!(c_string != other);
+        assert!(other != c_string);
+    }
+
+    #[test]
+    fn cstring_equals_the_cow() {
+        let c_string = cstring(b"foo");
+        let borrowed = cow_borrowed(b"foo\0");
+        let owned = cow_owned(b"foo\0");
+        // Both directions, both arms.
+        assert!(c_string == borrowed);
+        assert!(borrowed == c_string);
+        assert!(c_string == owned);
+        assert!(owned == c_string);
+        // Unequal, both directions.
+        let other = cow_owned(b"bar\0");
+        assert!(c_string != other);
+        assert!(other != c_string);
+    }
+
+    #[test]
+    fn cstring_orders_against_the_c_str() {
+        let c_string = cstring(b"bar");
+        let first = c_str(b"bar\0");
+        let second = c_str(b"foo\0");
+        assert_eq!(c_string.partial_cmp(first), Some(Ordering::Equal));
+        assert_eq!(c_string.partial_cmp(&first), Some(Ordering::Equal));
+        assert_eq!(first.partial_cmp(&c_string), Some(Ordering::Equal));
+        assert_eq!((&first).partial_cmp(&c_string), Some(Ordering::Equal));
+        assert_eq!(c_string.partial_cmp(second), Some(Ordering::Less));
+        assert_eq!(second.partial_cmp(&c_string), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn cstring_orders_against_the_cow() {
+        let c_string = cstring(b"bar");
+        let equal = cow_borrowed(b"bar\0");
+        let greater = cow_owned(b"foo\0");
+        assert_eq!(c_string.partial_cmp(&equal), Some(Ordering::Equal));
+        assert_eq!(equal.partial_cmp(&c_string), Some(Ordering::Equal));
+        assert_eq!(c_string.partial_cmp(&greater), Some(Ordering::Less));
+        assert_eq!(greater.partial_cmp(&c_string), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn cstring_compares_against_borrowed_targets_regardless_of_its_allocator() {
+        let alloc = CountingAllocator::new();
+        let c_string = cstring_in(b"a", &alloc);
+        let source = c_str(b"a\0");
+        let cow = cow_borrowed(b"a\0");
+
+        assert_eq!(c_string, *source);
+        assert_eq!(*source, c_string);
+        assert_eq!(c_string, cow);
+        assert_eq!(cow, c_string);
+        let longer = c_str(b"ab\0");
+        let cow_longer = cow_borrowed(b"ab\0");
+        assert!(c_string < *longer);
+        assert!(*longer > c_string);
+        assert!(c_string < *cow_longer);
+        assert!(*cow_longer > c_string);
     }
 
     #[test]

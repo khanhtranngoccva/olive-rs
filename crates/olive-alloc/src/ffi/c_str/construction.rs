@@ -167,6 +167,9 @@ impl<A: Allocator> CString<A> {
                 bytes.as_mut_ptr(),
                 capacity,
             );
+            // SAFETY: exactly `capacity` bytes were copied into the buffer above, so the length
+            // matches what was written, and the bytes come from a valid `CStr`.
+            bytes.set_len(capacity);
         }
         // SAFETY: the NUL has already been copied, there is no interior NUL byte in a CStr.
         unsafe { Self::try_from_vec_with_nul_unchecked(bytes) }
