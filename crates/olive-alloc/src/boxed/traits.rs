@@ -82,16 +82,18 @@ impl<T: Display + ?Sized, A: Allocator> Display for Box<T, A> {
 // PartialEq / Eq / PartialOrd / Ord / Hash
 // ---------------------------------------------------------------------------
 
-impl<T: PartialEq + ?Sized, A: Allocator> PartialEq for Box<T, A> {
-    fn eq(&self, other: &Self) -> bool {
+impl<T: PartialEq + ?Sized, A: Allocator, B: Allocator> PartialEq<Box<T, B>> for Box<T, A> {
+    /// Compares the pointed-to values, regardless of the allocators.
+    fn eq(&self, other: &Box<T, B>) -> bool {
         PartialEq::eq(&**self, &**other)
     }
 }
 
 impl<T: Eq + ?Sized, A: Allocator> Eq for Box<T, A> {}
 
-impl<T: PartialOrd + ?Sized, A: Allocator> PartialOrd for Box<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl<T: PartialOrd + ?Sized, A: Allocator, B: Allocator> PartialOrd<Box<T, B>> for Box<T, A> {
+    /// Compares the pointed-to values, regardless of the allocators.
+    fn partial_cmp(&self, other: &Box<T, B>) -> Option<Ordering> {
         PartialOrd::partial_cmp(&**self, &**other)
     }
 }
@@ -197,7 +199,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use crate::alloc::Global;
+    use crate::alloc::{CountingAllocator, Global};
     use olive_test_helpers::{CloneBudget, FlakyCloneAlloc};
     use std::collections::HashSet;
     use std::format;
@@ -270,6 +272,29 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(a);
         assert!(set.contains(&10i32));
+    }
+
+    #[test]
+    fn box_comparisons_ignore_the_allocators() {
+        let alloc = CountingAllocator::new();
+        let global = Box::try_new(42u32).unwrap();
+        let counting = Box::try_new_in(42u32, &alloc).unwrap();
+        let counting_greater = Box::try_new_in(43u32, &alloc).unwrap();
+
+        assert_eq!(global, counting);
+        assert_eq!(counting, global);
+        assert_ne!(global, counting_greater);
+        assert_ne!(counting_greater, global);
+        assert_eq!(counting.partial_cmp(&global), Some(Ordering::Equal));
+        assert_eq!(counting.partial_cmp(&counting_greater), Some(Ordering::Less));
+        assert_eq!(
+            counting_greater.partial_cmp(&counting),
+            Some(Ordering::Greater)
+        );
+        assert!(counting < counting_greater);
+        assert!(counting_greater > counting);
+        assert!(global < counting_greater);
+        assert!(counting_greater > global);
     }
 
     #[test]

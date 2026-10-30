@@ -16,13 +16,14 @@ use olive_core::try_traits::try_extend::{TryExtend, TryExtendFromSlice};
 
 // ── Equality ─────────────────────────────────────────────────────────────────
 
-impl<T: Ord, A: Allocator> PartialEq for BTreeSet<T, A> {
-    /// Reports whether two sets contain exactly the same elements.
+impl<T: Ord, A: Allocator, B: Allocator> PartialEq<BTreeSet<T, B>> for BTreeSet<T, A> {
+    /// Reports whether two sets contain exactly the same elements, regardless
+    /// of their allocators.
     ///
     /// Comparison is by membership only; insertion order and history are
     /// irrelevant. Sets of different lengths are unequal without inspecting
     /// any element.
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &BTreeSet<T, B>) -> bool {
         if self.len() != other.len() {
             return false;
         }
@@ -51,12 +52,12 @@ impl<T: Hash + Ord, A: Allocator> Hash for BTreeSet<T, A> {
 
 // ── Ordering ─────────────────────────────────────────────────────────────────
 
-impl<T: Ord, A: Allocator> PartialOrd for BTreeSet<T, A> {
-    /// Compares two sets lexicographically over their sorted sequences.
-    /// The first mismatched element decides; a shorter prefix sorts before its
-    /// longer extension.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+impl<T: Ord, A: Allocator, B: Allocator> PartialOrd<BTreeSet<T, B>> for BTreeSet<T, A> {
+    /// Compares two sets lexicographically over their sorted sequences,
+    /// regardless of their allocators. The first mismatched element decides; a
+    /// shorter prefix sorts before its longer extension.
+    fn partial_cmp(&self, other: &BTreeSet<T, B>) -> Option<Ordering> {
+        Some(self.iter().cmp(other.iter()))
     }
 }
 
@@ -429,7 +430,9 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::alloc::CountingAllocator;
     use crate::collections::btree::invariant::{check_ascending_keys, check_tree_invariant};
+    use core::cmp::Ordering;
     use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_test_helpers::BudgetedAlloc;
     use olive_test_helpers::FailAlloc;
@@ -573,6 +576,29 @@ mod tests {
         let hi = make_set(&[10, 11, 12]);
         assert!(lo < hi);
         assert!(hi > lo);
+    }
+
+    #[test]
+    fn compares_cross_allocator() {
+        let alloc = CountingAllocator::new();
+        let a = make_set(&[1, 2, 3]);
+        let mut b: BTreeSet<i32, _> = BTreeSet::new_in(&alloc);
+        for v in [3, 1, 2] {
+            b.try_insert(v).unwrap();
+        }
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+        let mut c: BTreeSet<i32, _> = BTreeSet::new_in(&alloc);
+        c.try_insert(1).unwrap();
+        c.try_insert(2).unwrap();
+        c.try_insert(4).unwrap();
+        assert_ne!(a, c);
+        assert_ne!(c, a);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+        assert_eq!(a.partial_cmp(&c), Some(Ordering::Less));
+        assert_eq!(c.partial_cmp(&a), Some(Ordering::Greater));
+        assert!(a < c);
+        assert!(c > a);
     }
 
     // --- TryFromIterator -------------------------------------------------------

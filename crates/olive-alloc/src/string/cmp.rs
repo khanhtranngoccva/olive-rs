@@ -13,19 +13,19 @@ use crate::boxed::Box;
 use core::{cmp::Ordering, ops::Deref};
 use olive_core::alloc::Allocator;
 
-impl<A: Allocator> PartialEq for String<A> {
+impl<A: Allocator, B: Allocator> PartialEq<String<B>> for String<A> {
     #[inline]
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &String<B>) -> bool {
         **self == **other
     }
 }
 
 impl<A: Allocator> Eq for String<A> {}
 
-impl<A: Allocator> PartialOrd for String<A> {
+impl<A: Allocator, B: Allocator> PartialOrd<String<B>> for String<A> {
     #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    fn partial_cmp(&self, other: &String<B>) -> Option<Ordering> {
+        Some((**self).cmp(&**other))
     }
 }
 
@@ -133,14 +133,22 @@ impl_cmp!(('a, B: Allocator), Cow<'a, str>, String<B>, str);
 #[cfg(test)]
 mod tests {
     extern crate std;
+
+    use crate::alloc::CountingAllocator;
     use crate::borrow::Cow;
     use crate::boxed::Box;
     use crate::string::String;
     use core::cmp::Ordering;
+    use olive_core::alloc::Allocator;
 
     /// Shorthand: build a `String<Global>` from a literal.
     fn mk(s: &str) -> String {
         String::try_from_str(s).unwrap()
+    }
+
+    /// Shorthand: build a `String` on a custom allocator from a literal.
+    fn mk_in<A: Allocator>(s: &str, alloc: A) -> String<A> {
+        String::try_from_str_in(s, alloc).unwrap()
     }
 
     /// Shorthand: build a `Box<str>` from a literal.
@@ -1193,5 +1201,26 @@ mod tests {
         assert_eq!(s, rb);
         assert_eq!(rb, s);
         assert_eq!(s.partial_cmp(rb), Some(Ordering::Equal));
+    }
+
+    /// Strings on different allocators compare by content only.
+    #[test]
+    fn strings_compare_regardless_of_their_allocators() {
+        // Combines 2-byte accent (é), 4-byte astral (😀), and ASCII.
+        let content = "héllo \u{1F600} foreign";
+        let counting = mk_in(content, CountingAllocator::new());
+        let global = mk(content);
+        let other = mk("héllo \u{1F601} foreign");
+
+        assert_eq!(counting, global);
+        assert_eq!(global, counting);
+        assert_ne!(counting, other);
+        assert_ne!(other, counting);
+        assert_eq!(counting.partial_cmp(&global), Some(Ordering::Equal));
+        assert_eq!(global.partial_cmp(&counting), Some(Ordering::Equal));
+        assert_eq!(counting.partial_cmp(&other), Some(Ordering::Less));
+        assert_eq!(other.partial_cmp(&counting), Some(Ordering::Greater));
+        assert!(counting < other);
+        assert!(other > counting);
     }
 }

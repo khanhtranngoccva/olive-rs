@@ -19,16 +19,18 @@ impl<T: Display + ?Sized, A: Allocator> Display for Arc<T, A> {
     }
 }
 
-impl<T: PartialEq + ?Sized, A: Allocator> PartialEq for Arc<T, A> {
-    fn eq(&self, other: &Self) -> bool {
+impl<T: PartialEq + ?Sized, A: Allocator, B: Allocator> PartialEq<Arc<T, B>> for Arc<T, A> {
+    /// Compares the pointed-to values, regardless of the allocators.
+    fn eq(&self, other: &Arc<T, B>) -> bool {
         PartialEq::eq(&**self, &**other)
     }
 }
 
 impl<T: Eq + ?Sized, A: Allocator> Eq for Arc<T, A> {}
 
-impl<T: PartialOrd + ?Sized, A: Allocator> PartialOrd for Arc<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl<T: PartialOrd + ?Sized, A: Allocator, B: Allocator> PartialOrd<Arc<T, B>> for Arc<T, A> {
+    /// Compares the pointed-to values, regardless of the allocators.
+    fn partial_cmp(&self, other: &Arc<T, B>) -> Option<Ordering> {
         PartialOrd::partial_cmp(&**self, &**other)
     }
 }
@@ -109,6 +111,28 @@ mod tests {
         // Compile-time check: Arc<u32> implements Eq because u32: Eq.
         fn assert_eq_bound<T: Eq>() {}
         assert_eq_bound::<Arc<u32>>();
+    }
+
+    #[test]
+    fn arc_comparisons_ignore_the_allocators() {
+        use crate::alloc::CountingAllocator;
+
+        let global = Arc::try_new(42u32).unwrap();
+        let counting = Arc::try_new_in(42u32, CountingAllocator::new()).unwrap();
+        // Equal values on different allocators, both directions.
+        assert_eq!(global, counting);
+        assert_eq!(counting, global);
+        // Unequal values, both directions.
+        let other = Arc::try_new(7u32).unwrap();
+        assert_ne!(global, other);
+        assert_ne!(other, global);
+        // Ordering, both directions.
+        assert_eq!(global.partial_cmp(&counting), Some(Ordering::Equal));
+        assert_eq!(counting.partial_cmp(&global), Some(Ordering::Equal));
+        assert_eq!(global.partial_cmp(&other), Some(Ordering::Greater));
+        assert_eq!(other.partial_cmp(&global), Some(Ordering::Less));
+        assert!(other < global);
+        assert!(global > other);
     }
 
     // -- PartialOrd / Ord ---------------------------------------------------

@@ -43,8 +43,8 @@ where
 // PartialEq / Eq
 // ---------------------------------------------------------------------------
 
-impl<T: PartialEq, A: Allocator> PartialEq for VecDeque<T, A> {
-    fn eq(&self, other: &Self) -> bool {
+impl<T: PartialEq, A: Allocator, B: Allocator> PartialEq<VecDeque<T, B>> for VecDeque<T, A> {
+    fn eq(&self, other: &VecDeque<T, B>) -> bool {
         if self.len != other.len {
             return false;
         }
@@ -105,8 +105,8 @@ __impl_slice_eq1! { [const N: usize] VecDeque<T, A>, &mut [U; N], }
 // PartialOrd / Ord
 // ---------------------------------------------------------------------------
 
-impl<T: PartialOrd, A: Allocator> PartialOrd for VecDeque<T, A> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+impl<T: PartialOrd, A: Allocator, B: Allocator> PartialOrd<VecDeque<T, B>> for VecDeque<T, A> {
+    fn partial_cmp(&self, other: &VecDeque<T, B>) -> Option<Ordering> {
         self.iter().partial_cmp(other.iter())
     }
 }
@@ -467,6 +467,7 @@ unsafe impl<T: Sync, A: Allocator + Sync> Sync for VecDeque<T, A> {}
 mod tests {
     extern crate std;
     use super::*;
+    use crate::alloc::CountingAllocator;
     use olive_test_helpers::{CloneBudget, FailAlloc, FlakyClone, FlakyCloneTrackedItem, Ledger};
     use std::format;
     use std::sync::Arc;
@@ -1281,6 +1282,36 @@ mod tests {
         assert_ne!(dq, make_vec(&[1, 2, 3]));
     }
 
+    #[test]
+    fn partial_eq_cross_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32, _> = VecDeque::try_with_capacity_in(4, &alloc).unwrap();
+        for v in [2, 3, 4] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        // Equal contents, different allocators: both directions, and across a
+        // wrapped layout on the counting allocator's deque.
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+
+        let wrapped = make_wrapped(&[2, 3, 4], 3, 1);
+        let mut same: VecDeque<i32, _> = VecDeque::try_with_capacity_in(4, &alloc).unwrap();
+        for v in [2, 3, 4] {
+            same.try_push_back(v).unwrap();
+        }
+        assert_eq!(wrapped, same);
+        assert_eq!(same, wrapped);
+
+        // Unequal contents, both directions.
+        let mut c: VecDeque<i32, _> = VecDeque::try_with_capacity_in(4, &alloc).unwrap();
+        c.try_push_back(2).unwrap();
+        c.try_push_back(5).unwrap();
+        assert_ne!(a, c);
+        assert_ne!(c, a);
+    }
+
     // --- PartialOrd / Ord ----------------------------------------------------
 
     #[test]
@@ -1337,6 +1368,27 @@ mod tests {
         let bigger = make_wrapped_two(3, 5);
         assert_eq!(bigger.cmp(&plain), Ordering::Greater);
         assert_eq!(plain.partial_cmp(&bigger), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn partial_ord_cross_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut a: VecDeque<i32> = VecDeque::new();
+        let mut b: VecDeque<i32, _> = VecDeque::try_with_capacity_in(4, &alloc).unwrap();
+        for v in [1, 2] {
+            a.try_push_back(v).unwrap();
+            b.try_push_back(v).unwrap();
+        }
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Equal));
+        let mut longer: VecDeque<i32, _> = VecDeque::try_with_capacity_in(4, &alloc).unwrap();
+        for v in [1, 2, 3] {
+            longer.try_push_back(v).unwrap();
+        }
+        assert_eq!(a.partial_cmp(&longer), Some(Ordering::Less));
+        assert_eq!(longer.partial_cmp(&a), Some(Ordering::Greater));
+        assert!(a < longer);
+        assert!(longer > a);
     }
 
     // --- Hash ----------------------------------------------------------------

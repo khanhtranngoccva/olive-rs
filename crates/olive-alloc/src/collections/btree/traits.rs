@@ -39,12 +39,15 @@ impl<K: fmt::Debug, V: fmt::Debug, A: Allocator> fmt::Debug for BTreeMap<K, V, A
 // PartialEq / Eq
 // ---------------------------------------------------------------------------
 
-impl<K: Ord + PartialEq, V: PartialEq, A: Allocator> PartialEq for BTreeMap<K, V, A> {
-    /// Reports whether two maps contain exactly the same key-value pairs.
+impl<K: Ord + PartialEq, V: PartialEq, A: Allocator, B: Allocator> PartialEq<BTreeMap<K, V, B>>
+    for BTreeMap<K, V, A>
+{
+    /// Reports whether two maps contain exactly the same key-value pairs,
+    /// regardless of their allocators.
     ///
     /// Maps of different lengths are unequal without inspecting any entry;
     /// otherwise entries are compared pairwise in ascending key order.
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(&self, other: &BTreeMap<K, V, B>) -> bool {
         if self.len() != other.len() {
             return false;
         }
@@ -62,10 +65,13 @@ impl<K: Ord + Eq, V: Eq, A: Allocator> Eq for BTreeMap<K, V, A> {}
 // PartialOrd / Ord
 // ---------------------------------------------------------------------------
 
-impl<K: Ord, V: PartialOrd, A: Allocator> PartialOrd for BTreeMap<K, V, A> {
+impl<K: Ord, V: PartialOrd, A: Allocator, B: Allocator> PartialOrd<BTreeMap<K, V, B>>
+    for BTreeMap<K, V, A>
+{
     /// Compares two maps lexicographically over their `(key, value)` pairs in
-    /// ascending key order. Returns `None` if any compared pair is unordered.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    /// ascending key order, regardless of their allocators. Returns `None` if
+    /// any compared pair is unordered.
+    fn partial_cmp(&self, other: &BTreeMap<K, V, B>) -> Option<Ordering> {
         // Lexicographic comparison of (key, value) pairs in ascending key order.
         self.iter().partial_cmp(other.iter())
     }
@@ -421,6 +427,7 @@ mod tests {
     use super::super::invariant::{check_ascending_keys, check_tree_invariant};
 
     use super::*;
+    use crate::alloc::CountingAllocator;
     use core::panic::{RefUnwindSafe, UnwindSafe};
     use olive_core::try_traits::try_from_iterator::TryFromIterator;
     use std::format;
@@ -510,6 +517,22 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    #[test]
+    fn partial_eq_cross_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        let mut b: BTreeMap<i32, i32, _> = BTreeMap::new_in(&alloc);
+        for i in 0..40i32 {
+            a.try_insert(i, i * 2).unwrap();
+            b.try_insert(i, i * 2).unwrap();
+        }
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+        b.try_insert(5, 999).unwrap();
+        assert_ne!(a, b);
+        assert_ne!(b, a);
+    }
+
     // --- PartialOrd / Ord ------------------------------------------------------
 
     #[test]
@@ -559,6 +582,24 @@ mod tests {
         // Modify one value to make them differ.
         b.try_insert(40, 9999).unwrap();
         assert_ne!(a.cmp(&b), Ordering::Equal);
+    }
+
+    #[test]
+    fn partial_ord_cross_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut a: BTreeMap<i32, i32> = BTreeMap::new_in(Global);
+        let mut b: BTreeMap<i32, i32, _> = BTreeMap::new_in(&alloc);
+        for i in 0..10i32 {
+            a.try_insert(i, i).unwrap();
+            b.try_insert(i, i).unwrap();
+        }
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Equal));
+        b.try_insert(10, 10).unwrap();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+        assert_eq!(b.partial_cmp(&a), Some(Ordering::Greater));
+        assert!(a < b);
+        assert!(b > a);
     }
 
     // --- Hash ------------------------------------------------------------------
