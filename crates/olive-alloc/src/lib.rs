@@ -33,6 +33,7 @@ pub mod alloc;
 pub mod borrow;
 pub mod boxed;
 pub mod collections;
+pub mod ffi;
 pub mod io;
 mod raw_vec;
 pub mod rc;
