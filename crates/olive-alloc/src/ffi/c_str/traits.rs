@@ -3,7 +3,6 @@
 use super::CString;
 use crate::alloc::{Allocator, AllocatorTryClone};
 use core::borrow::Borrow;
-use core::cmp::Ordering;
 use core::ffi::CStr;
 use core::fmt;
 use core::hash::{Hash, Hasher};
@@ -11,32 +10,8 @@ use core::ops::Deref;
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
 
 // ---------------------------------------------------------------------------
-// Comparison and hashing
+// Hashing
 // ---------------------------------------------------------------------------
-
-impl<A: Allocator, B: Allocator> PartialEq<CString<B>> for CString<A> {
-    /// Compares two strings by their full byte sequences, terminating NUL
-    /// included, regardless of their allocators.
-    fn eq(&self, other: &CString<B>) -> bool {
-        PartialEq::eq(&*self.inner, &*other.inner)
-    }
-}
-
-impl<A: Allocator> Eq for CString<A> {}
-
-impl<A: Allocator, B: Allocator> PartialOrd<CString<B>> for CString<A> {
-    /// Compares two strings lexicographically by their bytes, regardless of their
-    /// allocators.
-    fn partial_cmp(&self, other: &CString<B>) -> Option<Ordering> {
-        Some(Ord::cmp(&*self.inner, &*other.inner))
-    }
-}
-
-impl<A: Allocator> Ord for CString<A> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        Ord::cmp(&*self.inner, &*other.inner)
-    }
-}
 
 impl<A: Allocator> Hash for CString<A> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -116,34 +91,6 @@ mod tests {
             )
         }
         .expect("should allocate string, the input has no interior NUL byte")
-    }
-
-    #[test]
-    fn equal_strings_are_equal() {
-        assert_eq!(cstring(b"a"), cstring(b"a"));
-        assert_ne!(cstring(b"a"), cstring(b"b"));
-        assert_ne!(cstring(b"a"), cstring(b"ab"));
-    }
-
-    #[test]
-    fn strings_order_lexicographically() {
-        assert!(cstring(b"a") < cstring(b"ab"));
-        assert!(cstring(b"ab") > cstring(b"a"));
-        assert!(cstring(b"ab") < cstring(b"b"));
-        assert!(cstring(b"b") > cstring(b"ab"));
-        assert!(cstring(b"a") < cstring(b"a\x01"));
-    }
-
-    #[test]
-    fn strings_compare_regardless_of_their_allocators() {
-        let alloc = CountingAllocator::new();
-        let counting_cstring = cstring_in(b"a", &alloc);
-
-        assert_eq!(cstring(b"a"), counting_cstring);
-        assert_eq!(counting_cstring, cstring(b"a"));
-        assert_ne!(cstring(b"b"), counting_cstring);
-        assert!(counting_cstring < cstring(b"ab"));
-        assert!(cstring(b"") < counting_cstring);
     }
 
     #[test]

@@ -1,11 +1,13 @@
 //! Module that pertains to construction of [`CString`] structures.
 
-use olive_core::alloc_errors::TryReserveError;
+use olive_core::alloc_errors::{TryReserveError, TryReserveErrorKind};
 use olive_core::try_traits::{TryDefault, TryDefaultError};
 
 use super::{CString, CStringNulError, TryCStringFromVecWithNulError, TryCStringNewError};
-use crate::alloc::{Allocator, AllocatorTryDefault};
+use crate::alloc::{Allocator, AllocatorTryDefault, Global};
 use crate::vec::Vec;
+use core::ffi::CStr;
+use core::ptr;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Construction block
@@ -143,6 +145,33 @@ impl<A: Allocator> CString<A> {
         }
     }
 
+    /// Creates a C string by copying the bytes of a borrowed [`CStr`],
+    /// trailing NUL terminator included, on the given allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if reserving capacity for the copy fails.
+    #[inline]
+    pub fn try_from_c_str_in(src: &CStr, alloc: A) -> Result<Self, TryReserveError> {
+        // One extra byte for the terminating NUL.
+        let capacity = src
+            .count_bytes()
+            .checked_add(1)
+            .ok_or(TryReserveErrorKind::CapacityOverflow)?;
+        let mut bytes = Vec::<u8, _>::try_with_capacity_in(capacity, alloc)?;
+        // SAFETY: `capacity` reflects the payload length with a NUL terminator, and the destination
+        // covers enough bytes.
+        unsafe {
+            ptr::copy_nonoverlapping::<u8>(
+                src.to_bytes_with_nul().as_ptr(),
+                bytes.as_mut_ptr(),
+                capacity,
+            );
+        }
+        // SAFETY: the NUL has already been copied, there is no interior NUL byte in a CStr.
+        unsafe { Self::try_from_vec_with_nul_unchecked(bytes) }
+    }
+
     /// Creates a C string from a vector of bytes that already ends with
     /// exactly one NUL byte.
     ///
@@ -222,6 +251,25 @@ impl<A: Allocator> CString<A> {
 }
 
 // ---------------------------------------------------------------------------
+// Construction from a borrowed CStr — global allocator
+// ---------------------------------------------------------------------------
+
+impl CString<Global> {
+    /// Creates a C string by copying the bytes of a borrowed [`CStr`],
+    /// trailing NUL terminator included, using the global allocator.
+    ///
+    /// See [`CString::try_from_c_str_in`] for the allocator-generic variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if the allocation fails.
+    #[inline]
+    pub fn try_from_c_str(src: &CStr) -> Result<Self, TryReserveError> {
+        Self::try_from_c_str_in(src, Global)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Default / TryDefault
 // ---------------------------------------------------------------------------
 
@@ -246,7 +294,7 @@ mod tests {
     extern crate std;
 
     use super::{CString, TryCStringFromVecWithNulError, TryCStringNewError};
-    use crate::alloc::Global;
+    use crate::alloc::{CountingAllocator, Global};
     use crate::vec::Vec;
     use olive_core::alloc_errors::TryReserveErrorKind;
     use olive_core::try_traits::{TryDefault, TryDefaultError, TryExtendFromSlice};
@@ -254,6 +302,39 @@ mod tests {
 
     fn checked_vec(bytes: &[u8]) -> Vec<u8, Global> {
         Vec::try_from_slice_in(bytes, Global).expect("allocation cannot fail")
+    }
+
+    #[test]
+    fn try_from_c_str_copies_the_bytes() {
+        let string = CString::try_from_c_str(c"foo").expect("allocation cannot fail");
+        assert_eq!(string.as_bytes(), b"foo");
+        assert_eq!(string.as_bytes_with_nul(), b"foo\0");
+
+        let empty = CString::try_from_c_str(c"").expect("allocation cannot fail");
+        assert_eq!(empty.as_bytes(), b"");
+        assert_eq!(empty.as_bytes_with_nul(), b"\0");
+    }
+
+    #[test]
+    fn try_from_c_str_in_uses_the_given_allocator() {
+        let alloc = CountingAllocator::new();
+        let string = CString::try_from_c_str_in(c"foo", &alloc)
+            .expect("allocation cannot fail for the counting allocator under test input");
+        assert_eq!(string.as_bytes_with_nul(), b"foo\0");
+        assert_eq!(string.allocator().allocations(), 1);
+        drop(string);
+        assert_eq!(alloc.allocations(), alloc.deallocations());
+    }
+
+    #[test]
+    fn try_from_c_str_in_fails_when_the_allocator_is_exhausted() {
+        let alloc = BudgetedAlloc::new(0);
+        let error = CString::try_from_c_str_in(c"foo", &alloc)
+            .expect_err("the zero budget cannot allocate");
+        assert!(
+            matches!(error.kind(), TryReserveErrorKind::AllocError { .. }),
+            "expected an allocation error, got {error:?}"
+        );
     }
 
     #[test]

@@ -3,11 +3,13 @@
 
 use super::CString;
 use crate::alloc::Allocator;
+use crate::borrow::Cow;
 use crate::boxed::Box;
 use crate::string::String;
 use crate::vec::Vec;
 use core::ffi::CStr;
 use core::fmt::{self, Display, Formatter};
+use olive_core::alloc_errors::TryReserveError;
 
 // ---------------------------------------------------------------------------
 // Owned conversion block
@@ -124,6 +126,47 @@ impl<A: Allocator> From<CString<A>> for Box<CStr, A> {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion relevant to Cow
+// ---------------------------------------------------------------------------
+
+impl From<CString> for Cow<'_, CStr> {
+    /// Moves the owned [`CString`] into the owned arm of a [`Cow`], without
+    /// copying.
+    #[inline]
+    fn from(value: CString) -> Self {
+        Cow::Owned(value)
+    }
+}
+
+impl<'a> From<&'a CStr> for Cow<'a, CStr> {
+    /// Moves a [`CStr`] reference into the borrowed arm of a [`Cow`], without copying.
+    #[inline]
+    fn from(value: &'a CStr) -> Self {
+        Cow::Borrowed(value)
+    }
+}
+
+impl<'a> TryFrom<Cow<'a, CStr>> for CString {
+    type Error = TryReserveError;
+
+    /// Turns a [`Cow`] of a [`CStr`] into an owned [`CString`].
+    ///
+    /// The owned arm is moved through unchanged; the borrowed arm is copied
+    /// onto the global allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if copying the borrowed arm fails.
+    #[inline]
+    fn try_from(value: Cow<'a, CStr>) -> Result<Self, Self::Error> {
+        match value {
+            Cow::Borrowed(borrowed) => CString::try_from_c_str(borrowed),
+            Cow::Owned(owned) => Ok(owned),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IntoStringError
 // ---------------------------------------------------------------------------
 
@@ -166,6 +209,7 @@ mod tests {
 
     use super::CString;
     use crate::alloc::{CountingAllocator, Global};
+    use crate::borrow::Cow;
     use crate::boxed::Box;
     use crate::vec::Vec;
     use core::ffi::CStr;
@@ -177,6 +221,18 @@ mod tests {
                 .expect("allocation cannot fail for the global allocator under test input"),
         )
         .expect("the checked input is exactly one nul-terminated string")
+    }
+
+    fn borrowed_cow(bytes: &'static [u8]) -> Cow<'static, CStr> {
+        Cow::Borrowed(CStr::from_bytes_with_nul(bytes).expect("the test bytes end in one nul"))
+    }
+
+    fn owned_cow(bytes: &[u8]) -> Cow<'static, CStr> {
+        let c_str = CStr::from_bytes_with_nul(bytes).expect("the test bytes end in one nul");
+        Cow::Owned(
+            CString::try_from_c_str(c_str)
+                .expect("allocation cannot fail for the global allocator"),
+        )
     }
 
     #[test]
@@ -273,5 +329,40 @@ mod tests {
         drop(c_string.into_bytes());
         assert_eq!(alloc.allocations(), 1);
         assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn c_string_moves_into_the_owned_arm_of_a_cow() {
+        let source = cstring(b"foo\0");
+        let cow = Cow::<'static, CStr>::from(source);
+        match cow {
+            Cow::Owned(owned) => assert_eq!(owned.as_bytes_with_nul(), b"foo\0"),
+            Cow::Borrowed(_) => panic!("an owned CString must land in the owned arm"),
+        }
+    }
+
+    #[test]
+    fn c_str_borrows_into_the_borrowed_arm_of_a_cow() {
+        let source = c"foo";
+        let cow = Cow::from(source);
+        match cow {
+            Cow::Borrowed(borrowed) => assert!(core::ptr::eq(borrowed, source)),
+            Cow::Owned(_) => panic!("a borrowed CStr must land in the borrowed arm"),
+        }
+    }
+
+    #[test]
+    fn cow_try_from_moves_the_owned_arm_without_copying() {
+        let cow = owned_cow(b"foo\0");
+        let c_string: CString = CString::try_from(cow).expect("moving an owned arm cannot fail");
+        assert_eq!(c_string.as_bytes_with_nul(), b"foo\0");
+    }
+
+    #[test]
+    fn cow_try_from_copies_the_borrowed_arm() {
+        let cow = borrowed_cow(b"foo\0");
+        let c_string: CString = CString::try_from(cow).expect("allocation cannot fail");
+        assert_eq!(c_string.as_bytes_with_nul(), b"foo\0");
+        assert_eq!(c_string.as_bytes(), b"foo");
     }
 }

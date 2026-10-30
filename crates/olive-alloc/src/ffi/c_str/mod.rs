@@ -6,6 +6,7 @@
 //! - All allocation is fallible; constructors return a
 //!   [`Result`](core::result::Result) instead of panicking on OOM.
 
+mod cmp;
 mod construction;
 mod convert;
 mod query;

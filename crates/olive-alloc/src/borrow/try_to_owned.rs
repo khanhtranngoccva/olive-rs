@@ -3,9 +3,11 @@
 //! This modules declares the [`TryToOwned`] trait, which fallibly converts
 //! borrowed references to owned types.
 
+use crate::ffi::CString;
 use crate::string::String;
 use crate::vec::{TryVecWithCloneError, Vec};
 use core::borrow::Borrow;
+use core::ffi::CStr;
 use core::fmt;
 use olive_core::alloc_errors::{AllocError, TryReserveError};
 use olive_core::try_traits::try_clone::{TryClone, TryCloneError};
@@ -96,16 +98,32 @@ impl<T: TryClone> TryToOwned for T {
     }
 }
 
-/// Turns a borrowed `&str` into an owned [`String`](crate::string::String).
 impl TryToOwned for str {
     type Owned = String;
 
+    /// Turns a borrowed [`str`] into an owned [`String`], copying the bytes
+    /// and appending the trailing NUL terminator on the global allocator.
     /// # Errors
     ///
     /// Returns [`TryToOwnedError`] if allocating or copying the string bytes fails.
     #[inline]
     fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError> {
         Ok(String::try_from_str(self)?)
+    }
+}
+
+impl TryToOwned for CStr {
+    type Owned = CString;
+
+    /// Turns a borrowed [`CStr`] into an owned [`CString`], copying the bytes
+    /// and appending the trailing NUL terminator on the global allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryToOwnedError`] if allocating or copying the C string bytes fails.
+    #[inline]
+    fn try_to_owned(&self) -> Result<Self::Owned, TryToOwnedError> {
+        Ok(CString::try_from_c_str(self)?)
     }
 }
 
@@ -156,5 +174,21 @@ mod tests {
         v.try_push(3).unwrap();
         let owned: Vec<i32> = v.try_to_owned().unwrap();
         assert_eq!(owned.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn c_str_try_to_owned_copies_the_bytes() {
+        let borrowed: &CStr = c"foo";
+        let owned: CString = borrowed.try_to_owned().unwrap();
+        assert_eq!(owned.as_bytes(), borrowed.to_bytes());
+        assert_eq!(owned.as_bytes_with_nul(), b"foo\0");
+    }
+
+    #[test]
+    fn c_str_try_to_owned_handles_the_empty_string() {
+        let borrowed: &CStr = c"";
+        let owned: CString = borrowed.try_to_owned().unwrap();
+        assert_eq!(owned.as_bytes_with_nul(), b"\0");
+        assert_eq!(owned.as_bytes(), borrowed.to_bytes());
     }
 }
