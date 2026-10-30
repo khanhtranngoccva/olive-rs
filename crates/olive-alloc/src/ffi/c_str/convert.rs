@@ -9,6 +9,7 @@ use crate::string::String;
 use crate::vec::Vec;
 use core::ffi::CStr;
 use core::fmt::{self, Display, Formatter};
+use core::num::NonZero;
 use olive_core::alloc_errors::TryReserveError;
 
 // ---------------------------------------------------------------------------
@@ -208,6 +209,37 @@ impl<A: Allocator> TryFrom<&CString<A>> for CString {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion from non-zero bytes
+// ---------------------------------------------------------------------------
+
+impl<A: Allocator> TryFrom<Vec<NonZero<u8>, A>> for CString<A> {
+    type Error = TryReserveError;
+
+    /// Creates a C string from a vector of non-zero bytes, appending a
+    /// terminating NUL byte.
+    ///
+    /// The bytes are reinterpreted in place without copying: a [`NonZero`]
+    /// can never hold the value zero, so the vector is guaranteed to contain
+    /// no NUL byte at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TryReserveError`] if appending the terminating NUL byte or
+    /// shrinking the buffer into a boxed slice fails. On failure the vector
+    /// is discarded.
+    fn try_from(bytes: Vec<NonZero<u8>, A>) -> Result<Self, Self::Error> {
+        let (ptr, length, capacity, alloc) = bytes.into_raw_parts_with_allocator();
+        // SAFETY: `NonZero<u8>` is `#[repr(transparent)]` over `u8`, so the
+        // buffer may be reinterpreted as plain bytes with the same length,
+        // capacity and allocator.
+        let bytes = unsafe { Vec::from_raw_parts_in(ptr.cast::<u8>(), length, capacity, alloc) };
+        // SAFETY: a `NonZero<u8>` can never be a NUL byte, so the buffer
+        // contains no interior NUL byte.
+        unsafe { Self::try_from_vec_unchecked(bytes) }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IntoStringError
 // ---------------------------------------------------------------------------
 
@@ -254,6 +286,8 @@ mod tests {
     use crate::boxed::Box;
     use crate::vec::Vec;
     use core::ffi::CStr;
+    use core::num::NonZero;
+    use olive_core::alloc_errors::TryReserveErrorKind;
     use olive_test_helpers::BudgetedAlloc;
 
     fn cstring(bytes: &[u8]) -> CString {
@@ -429,5 +463,81 @@ mod tests {
         assert_eq!(alloc.allocations(), baseline);
         // The source is untouched by the conversion.
         assert_eq!(source.as_bytes_with_nul(), b"foo\0");
+    }
+
+    #[test]
+    fn non_zero_vec_try_from_appends_the_terminator() {
+        let mut bytes: Vec<NonZero<u8>> = Vec::new();
+        for byte in b"foo" {
+            bytes
+                .try_push(NonZero::new(*byte).expect("the byte is not zero"))
+                .expect("allocation cannot fail");
+        }
+
+        let string = CString::try_from(bytes).expect("allocation in test harness cannot fail");
+        assert_eq!(string.as_bytes_with_nul(), b"foo\0");
+
+        let string = CString::try_from(Vec::<NonZero<u8>>::new())
+            .expect("allocation in test harness cannot fail");
+        assert_eq!(string.as_bytes_with_nul(), b"\0");
+    }
+
+    #[test]
+    fn non_zero_vec_try_from_moves_the_source_allocator() {
+        let alloc = CountingAllocator::new();
+        let mut bytes: Vec<NonZero<u8>, &CountingAllocator> =
+            Vec::try_with_capacity_in(4, &alloc).expect("allocation cannot fail");
+        for byte in b"foo" {
+            bytes
+                .try_push(NonZero::new(*byte).expect("the byte is not zero"))
+                .expect("allocation cannot fail");
+        }
+        let baseline = alloc.allocations();
+
+        let string: CString<&CountingAllocator> =
+            CString::try_from(bytes).expect("allocation cannot fail");
+        assert_eq!(string.as_bytes_with_nul(), b"foo\0");
+        // The terminator exactly fills the vector's spare capacity, so the
+        // conversion neither grew nor shrank the buffer.
+        assert_eq!(alloc.allocations(), baseline);
+        drop(string);
+        assert_eq!(alloc.deallocations(), 1);
+    }
+
+    #[test]
+    fn non_zero_vec_try_from_fails_when_the_terminator_cannot_be_appended() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut bytes: Vec<NonZero<u8>, BudgetedAlloc> = Vec::new_in(alloc.clone());
+        bytes
+            .try_push(NonZero::new(b'f').expect("the byte is not zero"))
+            .expect("allocation cannot fail");
+        // The vector's own allocation consumed the budget, so appending the
+        // terminator cannot succeed.
+        alloc.drain();
+
+        let error = CString::try_from(bytes).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            TryReserveErrorKind::AllocError { .. }
+        ));
+    }
+
+    #[test]
+    fn non_zero_vec_try_from_fails_when_an_overreserved_vec_cannot_shrink() {
+        let alloc = BudgetedAlloc::new(1);
+        let mut bytes: Vec<NonZero<u8>, BudgetedAlloc> =
+            Vec::try_with_capacity_in(4, alloc.clone()).expect("allocation cannot fail");
+        for byte in b"fo" {
+            bytes
+                .try_push(NonZero::new(*byte).expect("the byte is not zero"))
+                .expect("allocation cannot fail");
+        }
+        // The terminator fits in the vector's spare capacity, so the only
+        // allocation the conversion still needs is the shrink from four
+        // slots down to three, which the exhausted budget cannot provide.
+        alloc.drain();
+
+        let error = CString::try_from(bytes).unwrap_err();
+        assert!(matches!(error.kind(), TryReserveErrorKind::AllocError { .. }));
     }
 }
